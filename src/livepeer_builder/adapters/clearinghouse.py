@@ -1,8 +1,8 @@
 """The payment ports of an engine that uses a payment clearinghouse: the remote adapters (D84, #168).
 
 An enterprise's engine keeps its own jobs and records and reaches the clearinghouse for payments only.
-Three of its five payment ports are here, each calling the clearinghouse's tenant routes with the tenant
-admin key (``adapters/clearinghouse_wire.py``):
+Three of its five payment ports are here, each calling the tenant's own routes at the clearinghouse with
+the tenant admin key, through ``TenantWire``, which sends nothing for or with the key of another tenant:
 
 - ``ClearinghouseAllocations`` is the ``AllocationManager``. The port names an allocation by its id and
   the routes name an actor, so the manager is asked for the one actor a command is about
@@ -32,7 +32,7 @@ from typing import NoReturn
 
 from pydantic import SecretStr
 
-from livepeer_builder.adapters.batteries import segment
+from livepeer_builder.adapters.clearinghouse_tenant import USAGE_PATH, TenantWire, allocation_path, own_tenant
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import (
     ActorAllocation,
@@ -57,14 +57,6 @@ from livepeer_builder.protocols import ActorRepo, AllocationManager, SecretStore
 _LISTS_EVERY_TENANT = "lists every tenant"  # what three members of the port would do, and may not
 
 
-def tenant_path(tenant_id: str, rest: str = "") -> str:
-    return f"/v1/clearinghouse/tenants/{segment(tenant_id)}{rest}"
-
-
-def allocation_path(tenant_id: str, actor_id: str, rest: str = "") -> str:
-    return tenant_path(tenant_id, f"/actors/{segment(actor_id)}/allocation{rest}")
-
-
 def _money(amount: Money) -> dict[str, str]:
     return {"amount": format(amount.amount, "f"), "currency": amount.currency}
 
@@ -75,8 +67,8 @@ class ClearinghouseAllocations:
     engine's own records and secret store, read only to finish a command from the key the engine already
     stored."""
 
-    def __init__(self, wire: ClearinghouseWire, actors: ActorRepo, secrets: SecretStore) -> None:
-        self._wire = wire
+    def __init__(self, wire: ClearinghouseWire | TenantWire, actors: ActorRepo, secrets: SecretStore) -> None:
+        self._wire = TenantWire.over(wire)
         self._actors = actors
         self._secrets = secrets
 
@@ -85,13 +77,18 @@ class ClearinghouseAllocations:
         ``operation_ref`` when it has one."""
         return _ActorAllocation(self._wire, self._actors, self._secrets, tenant_id, actor_id, operation_ref)
 
+    async def ready_for_commands(self) -> None:
+        """``ReadyBeforeCommands``: whose key the engine holds, read before a command's record begins."""
+        await self._wire.confirm()
+
     # -- the grant ----------------------------------------------------------------------------------
     # Every member below but ``read_grant`` is async by protocol and awaits nothing: it refuses, or has
     # nothing to do, before anything is sent. Each says so to SonarQube, as the provider fakes do.
 
     async def read_grant(self, grant_id: str) -> TenantGrant:
-        """The tenant's grant. Another tenant's id is the clearinghouse's 403."""
-        return await self._wire.read_as(TenantGrant, tenant_path(grant_id, "/grant"))
+        """The tenant's grant. Another tenant's is refused (403), asked for or answered by the key."""
+        own_tenant(self._wire, grant_id)
+        return await self._wire.grant()
 
     async def top_up_grant(  # NOSONAR - async by protocol (AllocationManager)
         self, grant_id: str, amount: Money, idempotency_key: str
@@ -183,20 +180,21 @@ class _ActorAllocation(ClearinghouseAllocations):
 
     def __init__(
         self,
-        wire: ClearinghouseWire,
+        wire: TenantWire,
         actors: ActorRepo,
         secrets: SecretStore,
         tenant_id: str,
         actor_id: str,
         operation_ref: str | None,
     ) -> None:
-        super().__init__(wire, actors, secrets)
+        super().__init__(wire.for_command(), actors, secrets)  # stopped by an answer for another tenant
         self._tenant_id = tenant_id
         self._actor_id = actor_id
         self._operation_ref = operation_ref
 
     def _path(self, rest: str = "") -> str:
-        return allocation_path(self._tenant_id, self._actor_id, rest)
+        own_tenant(self._wire, self._tenant_id)  # before any request about this actor
+        return allocation_path(self._actor_id, rest)
 
     async def create_key_for_grant(
         self, grant_id: str, name: str, amount: Money, idempotency_key: str
@@ -380,8 +378,8 @@ class ClearinghouseAllowances:
     """``AllowanceReader``. The allocation that pays for an actor is the engine's own record: it is the
     one whose payment key the engine holds. Its allowance is read at the clearinghouse."""
 
-    def __init__(self, wire: ClearinghouseWire, actors: ActorRepo) -> None:
-        self._wire = wire
+    def __init__(self, wire: ClearinghouseWire | TenantWire, actors: ActorRepo) -> None:
+        self._wire = TenantWire.over(wire)
         self._actors = actors
 
     async def allocation_for(self, tenant_id: str, actor_id: str) -> str | None:
@@ -401,40 +399,42 @@ class ClearinghouseAllowances:
 class ClearinghouseUsage:
     """``UsageSource``: the tenant's payment records, oldest first. The page is the port's own."""
 
-    def __init__(self, wire: ClearinghouseWire) -> None:
-        self._wire = wire
+    def __init__(self, wire: ClearinghouseWire | TenantWire) -> None:
+        self._wire = TenantWire.over(wire)
 
     async def page(self, cursor: str | None, limit: int = 1000) -> UsagePage:
         params = {"limit": str(limit)} | ({"cursor": cursor} if cursor else {})
-        return await self._wire.read_as(UsagePage, tenant_path(self._wire.tenant_id, "/usage"), params)
+        return await self._wire.read_as(UsagePage, USAGE_PATH, params)
 
 
 @dataclass(frozen=True)
 class ClearinghousePorts:
-    """The three remote adapters over one wire. ``allocations`` is also the engine's grants manager: it
-    reads the tenant's grant and refuses the rest."""
+    """The three remote adapters over one wire, ``tenant``, which whoever else sends the tenant admin key
+    asks whose key it is. ``allocations`` is the grants manager too: it reads the grant, and no more."""
 
     allocations: ClearinghouseAllocations
     allowances: ClearinghouseAllowances
     usage: ClearinghouseUsage
+    tenant: TenantWire
 
     @classmethod
     def over(cls, wire: ClearinghouseWire, actors: ActorRepo, secrets: SecretStore) -> "ClearinghousePorts":
+        own = TenantWire(wire)
         return cls(
-            ClearinghouseAllocations(wire, actors, secrets),
-            ClearinghouseAllowances(wire, actors),
-            ClearinghouseUsage(wire),
+            ClearinghouseAllocations(own, actors, secrets),
+            ClearinghouseAllowances(own, actors),
+            ClearinghouseUsage(own),
+            own,
         )
 
 
-async def read_allowance(
-    wire: ClearinghouseWire, tenant_id: str, actor_id: str, allocation_id: str
-) -> Allowance:
+async def read_allowance(wire: TenantWire, tenant_id: str, actor_id: str, allocation_id: str) -> Allowance:
     """The allowance of the allocation ``allocation_id``, which ``actor_id`` must hold now: read from the
-    actor's allocation route, which answers it with the record. The route names the tenant, so another
-    tenant's actor is the clearinghouse's 403. An allowance the clearinghouse could not read at its own
-    provider (``null``) is ``ProviderUnavailable``: unknown, and never read as zero."""
-    read = await wire.read_as(AllocationRead, allocation_path(tenant_id, actor_id))
+    actor's allocation route, which answers it with the record. Another tenant's actor is refused (403)
+    and never asked for. An allowance the clearinghouse could not read at its own provider (``null``) is
+    ``ProviderUnavailable``: unknown, and never read as zero."""
+    own_tenant(wire, tenant_id)
+    read = await wire.read_as(AllocationRead, allocation_path(actor_id))
     if read.allocation_id != allocation_id:
         raise _not_held(actor_id, allocation_id)
     if read.allowance is None:

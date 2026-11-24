@@ -145,7 +145,7 @@ async def arrangement(net: Net, tmp_path: Path) -> AsyncIterator[Arrangement]:
 
         # Tenant two allots its actor at the clearinghouse itself, on the public listener.
         body = {"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "allot-bob"}
-        bob = await outside.post(f"{TENANTS}/{two.id}/actors/bob/allocation", json=body, headers=two.admin)
+        bob = await outside.post(two.allocation("bob"), json=body, headers=two.admin)  # names no tenant
         assert bob.status_code == 201 and bob.json()["allocation_api_key"].startswith("lpg_"), bob.text
 
         # Tenant one's engine: the work role, from its settings and nothing else of payments.
@@ -255,7 +255,7 @@ async def test_an_allotment_hands_the_key_to_the_enterprises_engine_and_the_clea
         held = await house.house.store.get_actor(tenant.id, actor_id)
         assert held is not None and held.credential_custody == "work_engine", actor_id
     # and a read of the allocation hands nothing over, to anybody
-    read = await house.outside.get(f"{TENANTS}/{house.two.id}/actors/bob/allocation", headers=house.two.admin)
+    read = await house.outside.get(house.two.allocation("bob"), headers=house.two.admin)
     assert read.status_code == 200 and bob_key not in read.text and "allocation_api_key" not in read.json()
 
 
@@ -345,44 +345,49 @@ async def test_the_second_tenant_is_untouched_by_what_the_first_one_paid(
         headers.get("Authorization") for headers in house.net.signer_headers
     }
     # Tenant two's usage, read by its own admin on the public listener: nothing. Tenant one's: its row.
-    usage_two = await house.outside.get(f"{TENANTS}/{house.two.id}/usage", headers=house.two.admin)
-    usage_one = await house.outside.get(f"{TENANTS}/{house.one.id}/usage", headers=house.one.admin)
+    usage_two = await house.outside.get(house.two.path("/usage"), headers=house.two.admin)
+    usage_one = await house.outside.get(house.one.path("/usage"), headers=house.one.admin)
     assert (usage_two.status_code, usage_two.json()["items"]) == (200, [])
     assert [item["manifest_id"] for item in usage_one.json()["items"]] == ["m-1"]
     # Its allocation is as it was allotted, and its grant has spent nothing.
-    allocation = f"{TENANTS}/{house.two.id}/actors/bob/allocation"
-    bob = (await house.outside.get(allocation, headers=house.two.admin)).json()
+    bob = (await house.outside.get(house.two.allocation("bob"), headers=house.two.admin)).json()
     assert (bob["allowance"]["spent"]["amount"], bob["allowance"]["available"]["amount"]) == ("0", "5")
     tenants = (await house.private.get(TENANTS, headers=house.admin)).json()
     spent = {tenant["tenant_id"]: Decimal(tenant["spent"]["amount"]) for tenant in tenants}
     assert spent == {house.one.id: Decimal("0.25"), house.two.id: Decimal(0)}
-    # And the first tenant's engine asked for nothing of the second: with tenant one's admin key, every
-    # path that names a tenant names tenant one.
+    # And the first tenant's engine asked for nothing of the second: with tenant one's admin key, no path
+    # names a tenant at all. The clearinghouse took the tenant from the key (19 November 2026).
     as_one = [path for path, key in house.crossed() if key == house.one.admin["Authorization"]]
-    assert as_one and all(f"/tenants/{house.one.id}/" in path for path in as_one if "/tenants/" in path)
+    assert as_one and not [path for path in as_one if "/tenants" in path]
 
 
 async def test_the_first_tenants_admin_is_refused_on_every_route_of_the_second_tenant(
     arrangement: Arrangement,
 ) -> None:
-    """Every route of the public listener that names a tenant, with tenant two's id and tenant one's
-    admin key: 403 before the provider is asked, and nothing of tenant two changes."""
+    """Since 19 November 2026 no route of the public listener names a tenant: a tenant's own routes take
+    the tenant from the key. So every path that names tenant two is 404 there, and on the private
+    listener, where those paths are a clearinghouse admin's, tenant one's admin key is 403 on each. The
+    provider is not asked and nothing of tenant two changes. Tenant one's own routes answer tenant one."""
     house = arrangement
     params = {"tenant_id": house.two.id, "actor_id": "bob", "key_id": house.two.key_id}
-    named = {key: route for key, route in served(house.public_app).items() if "{tenant_id}" in key[1]}
+    private_app = create_app(house.house, manage_lifecycle=False, listener="private")
+    named = {key: route for key, route in served(private_app).items() if "{tenant_id}" in key[1]}
     assert len(named) >= 14, f"the sweep found too few tenant routes to be meaningful: {len(named)}"
+    assert not [path for _, path in served(house.public_app) if "{tenant_id}" in path]
     calls_before = list(house.provider.calls)
     wrong: list[str] = []
     for (method, path), route in sorted(named.items()):
-        answer = await house.outside.request(
-            method, filled(path, params), json=body_for(route), headers=house.one.admin
-        )
-        if answer.status_code != 403:
-            wrong.append(f"{method} {path}: {answer.status_code} {answer.text[:80]}")
+        url, body = filled(path, params), body_for(route)
+        public = await house.outside.request(method, url, json=body, headers=house.one.admin)
+        private = await house.private.request(method, url, json=body, headers=house.one.admin)
+        if (public.status_code, private.status_code) != (404, 403):
+            wrong.append(f"{method} {path}: {public.status_code} public, {private.status_code} private")
     assert not wrong, "tenant one's admin was answered on tenant two's routes:\n" + "\n".join(wrong)
     assert house.provider.calls == calls_before
-    own = await house.outside.get(f"{TENANTS}/{house.one.id}/grant", headers=house.one.admin)
+    own = await house.outside.get(house.one.path("/grant"), headers=house.one.admin)
     assert own.status_code == 200 and own.json()["tenant_id"] == house.one.id
+    bob = await house.outside.get(house.one.allocation("bob"), headers=house.one.admin)
+    assert bob.status_code == 404  # tenant one has no bob, and tenant two's is not reached
 
 
 async def test_each_side_serves_its_own_half_and_the_admin_routes_stay_private(
@@ -396,9 +401,8 @@ async def test_each_side_serves_its_own_half_and_the_admin_routes_stay_private(
     ).status_code == 404
     assert (await house.outside.get("/v1/offerings")).status_code == 404
     assert (await house.outside.post(TENANTS, json=body, headers=house.admin)).status_code == 404
-    assert (
-        await house.outside.get(f"{TENANTS}/{house.one.id}/grant", headers=house.admin)
-    ).status_code == 403
+    assert (await house.outside.get(house.one.path("/grant"), headers=house.admin)).status_code == 403
+    assert (await house.outside.get(house.one.named("/grant"), headers=house.admin)).status_code == 404
     assert (await house.outside.get("/readyz")).json()["role"] == "clearinghouse"
     # neither engine serves a signer path: the enterprise's engine signs at the signer itself
     for path in SIGNER_PATHS:
@@ -408,9 +412,9 @@ async def test_each_side_serves_its_own_half_and_the_admin_routes_stay_private(
     # the private listener: the wallet report, for the clearinghouse admin
     wallet = await house.private.get("/v1/clearinghouse/wallet", headers=house.admin)
     assert wallet.status_code == 200 and wallet.json()["signer"]["ready"] is True
-    # the enterprise's engine: no clearinghouse route, and its own catalog
-    grant = f"{TENANTS}/{house.one.id}/grant"
-    assert (await house.work.get(grant, headers=house.enterprise_admin)).status_code == 404
+    # the enterprise's engine: no clearinghouse route, in either form, and its own catalog
+    for grant in (house.one.named("/grant"), house.one.path("/grant")):
+        assert (await house.work.get(grant, headers=house.enterprise_admin)).status_code == 404
     assert (await house.work.get("/readyz")).json()["role"] == "work"
     assert {offering["app"] for offering in (await house.work.get("/v1/offerings")).json()} == {
         FIXED_APP,

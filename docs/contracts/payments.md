@@ -114,8 +114,15 @@ clearinghouse has one for each enterprise app.
 - **One grant, for life.** It is prepaid and topped up as needed. A tenant that must stop is paused. The
   engine never closes a grant.
 - **A tenant admin divides the grant and cannot enlarge it.** The kinds and what each may do are in
-  [access.md](access.md#defaultpolicy). Another tenant's id in a path is 403, before any lookup or
-  provider call.
+  [access.md](access.md#defaultpolicy).
+- **A tenant's routes come in two forms** (D87 point 3, as Mike amended it on 19 November 2026). Its
+  admin and auditor call them at paths that name no tenant: the tenant is the credential's, and a
+  clearinghouse admin, which has no tenant of its own, is 403 there. The clearinghouse admin calls the
+  same routes at paths that name the tenant, under `/v1/clearinghouse/tenants/{tenant_id}`, and a tenant
+  credential is 403 there, its own tenant's path included, before any lookup or provider call. Both
+  forms call the same service with the tenant they resolve, so their answers are the same. No route lets
+  one tenant's credential name another tenant: on its own routes another tenant's actor or key, named by
+  its id, is missing.
 
 | Route | Who may call | What it does |
 | --- | --- | --- |
@@ -124,19 +131,24 @@ clearinghouse has one for each enterprise app.
 | `POST /v1/clearinghouse/tenants/{tenant_id}/grant/top-up` | A clearinghouse admin | Adds to the tenant's grant. Body: `TopUpRequest` (`amount`, `operation_ref`). `204` |
 | `POST /v1/clearinghouse/tenants/{tenant_id}/status` | A clearinghouse admin | Pauses or resumes the tenant by pausing or resuming its grant. Body: `status` (`active` or `paused`; anything else is a 422) and `operation_ref`. `200` `{tenant_id, status}` |
 | `GET /v1/clearinghouse/wallet` | A clearinghouse admin | The wallet's deposit and reserve, the total of unspent grants and the signer's readiness ([the wallet report](#the-wallet-report)) |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/grant` | That tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated`, `spent` and `allocated_unspent` |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/actors` | That tenant's admin or auditor | The tenant's actors and their allocations ([access.md](access.md#answers)) |
-| `GET`, `POST .../actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | That tenant's admin (the read: its auditor too) | [Allotment](#allotment). Each answers the allocation (`ActorAllocation`). On a standalone clearinghouse, allotting (`201`) and rotating the payment key (`200`) also hand over the allocation's key, once (`allocation_api_key`, with `replayed` and `resumed`); on a self-hosted engine the engine stores the key and the answer has none ([payment keys](#payment-keys)) |
-| `GET`, `POST .../tenants/{tenant_id}/keys`, `GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate`, `/revoke` | That tenant's admin (the reads: its auditor too) | The tenant's access keys ([access.md](access.md#a-tenants-access-keys)) |
-| `GET /v1/clearinghouse/tenants/{tenant_id}/usage` | That tenant's admin or auditor | The tenant's payment records ([a tenant's usage](#a-tenants-usage)) |
+| `GET /v1/clearinghouse/grant` | The tenant's admin or auditor | `TenantGrant`: `tenant_id`, `name`, `status`, `total`, `unallocated`, `spent` and `allocated_unspent` |
+| `GET /v1/clearinghouse/actors` | The tenant's admin or auditor | The tenant's actors and their allocations ([access.md](access.md#answers)) |
+| `GET`, `POST /v1/clearinghouse/actors/{actor_id}/allocation`, and `POST .../allocation/top-up`, `/status`, `/revoke`, `/rotate-payment-key` | The tenant's admin (the read: its auditor too) | [Allotment](#allotment). Each answers the allocation (`ActorAllocation`). On a standalone clearinghouse, allotting (`201`) and rotating the payment key (`200`) also hand over the allocation's key, once (`allocation_api_key`, with `replayed` and `resumed`); on a self-hosted engine the engine stores the key and the answer has none ([payment keys](#payment-keys)) |
+| `GET`, `POST /v1/clearinghouse/keys`, `GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate`, `/revoke` | The tenant's admin (the reads: its auditor too) | The tenant's access keys ([access.md](access.md#a-tenants-access-keys)) |
+| `GET /v1/clearinghouse/usage` | The tenant's admin or auditor | The tenant's payment records ([a tenant's usage](#a-tenants-usage)) |
+| Each of the five rows above under `/v1/clearinghouse/tenants/{tenant_id}`: `.../grant`, `.../actors`, `.../actors/{actor_id}/allocation` and its commands, `.../keys` and its commands, `.../usage` | A clearinghouse admin | The same, for the tenant the path names. A `tenant_admin` key is issued here (`POST .../keys` with kind `tenant_admin`). On a standalone clearinghouse an allotment or a rotation here hands the allocation's key to the clearinghouse admin who called, once, to pass to the tenant: the clearinghouse stores none ([payment keys](#payment-keys)) |
 | `GET /v1/clearinghouse/discovery` | Any credential of a tenant: its admin's or its auditor's key | The clearinghouse's runner list, in livepeer/node's format ([discovery.md](discovery.md#the-clearinghouses-runner-list)) |
 
-A clearinghouse admin may call every route, for any tenant. The first five are what only a clearinghouse
-admin does; they are one group in `http/clearinghouse.py` (`mount_clearinghouse_admin_routes`). A
-deployment with a private listener (`LPB_HTTP_PRIVATE_PORT`, #167) serves that group there only: on the
-public listener those five are 404, and a clearinghouse admin credential is 403 on every route
+The first five rows are what only a clearinghouse admin does; they are one group in
+`http/clearinghouse.py` (`mount_clearinghouse_admin_routes`). A tenant's routes are two more groups, one
+for each form (`mount_tenant_routes`, which names no tenant, and `mount_named_tenant_routes`), and the
+runner list is a group of its own. A deployment with a private listener (`LPB_HTTP_PRIVATE_PORT`, #167)
+serves the clearinghouse admin's groups, the paths that name a tenant among them, there only: they are
+404 on the public listener, and a clearinghouse admin credential is 403 on every route there. A
+tenant's own routes are served on the public listener only. The runner list is served on both
 ([access.md](access.md#listeners)). With one listener, which is the default and what self-hosted
-payments runs, every route is served there and nothing is refused.
+payments runs, every route is served there, and each form of a tenant's routes takes the kinds it takes
+on two listeners.
 
 There is no payments route, and a clearinghouse serves no signer path: an enterprise's engine signs at
 the signer itself, with the allocation's key ([payment keys](#payment-keys)).
@@ -192,8 +204,9 @@ the payment provider"), from Batteries' own 404, and so are its grant read, top-
 
 ### A tenant's usage
 
-`GET /v1/clearinghouse/tenants/{tenant_id}/usage` returns the tenant's payment records, and none of
-another tenant's (#166). It is what an enterprise's engine reads in place of Batteries' usage feed (the
+`GET /v1/clearinghouse/usage` returns the tenant's payment records to its admin or auditor, the tenant
+being the credential's, and `GET /v1/clearinghouse/tenants/{tenant_id}/usage` returns them to a
+clearinghouse admin. Neither returns another tenant's (#166). It is what an enterprise's engine reads in place of Batteries' usage feed (the
 `UsageSource` port, #168), so it answers with that port's own page, `UsagePage`, and not a summary of it.
 
 | Field | What it holds |
@@ -235,9 +248,13 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
   two, so it cannot tell a cursor that comes back after other pages (A, B, A): each of those pages is
   served as Batteries answered it. The reader sees every cursor of its pass and finds the repeat, as
   cost sync does for the feed it reads.
-- **Who may call.** That tenant's admin or auditor, and a clearinghouse admin for any tenant. The tenant
-  is named to the access policy first, so another tenant's id is 403 before Batteries is asked. An actor
-  key is 403.
+- **Who may call.** The tenant's admin or auditor at `GET /v1/clearinghouse/usage`, for the tenant of
+  its credential, and a clearinghouse admin for any tenant at the path that names it. A tenant
+  credential at a path that names a tenant is 403, and a clearinghouse admin at the path that names
+  none, before Batteries is asked. The tenant is named to the access policy first. An actor key is 403.
+  A credential whose tenant id is no grant id is 403 here and at the grant read, as the path that names
+  a tenant refuses such an id with 422: the id goes into Batteries' URL path, and a key may carry one a
+  grant id may not.
 - **When Batteries fails.** Unreachable is 503. An error status, or an answer the engine cannot read, is
   502 (Batteries' own 400, 404, 409 or 422 keeps its status). Never an empty page.
 - **No orchestrator.** A Batteries usage row names no orchestrator at v0.0.3. Batteries keeps it on the
@@ -245,7 +262,7 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
   fetch it. An enterprise's engine has the orchestrator on its own attempt record, which cost sync joins
   the row to.
 - **Records from before a tenant's id was its grant's id** are the grant's: the route reads the grant
-  whose id the path names. A free-named tenant (`default`) is no grant, so its page is empty, and its
+  whose id the path, or the credential, names. A free-named tenant (`default`) is no grant, so its page is empty, and its
   allocations' records are read under the id of the grant they were allotted from
   ([below](#records-from-before-a-tenants-id-was-its-grants-id)).
 - **Optional.** The route is present with a usage source that reads one tenant's records
@@ -374,8 +391,10 @@ The same limit applies to every id, label and reference a request carries (`Stor
 because the 422 could not be sent.
 
 **A grant id is one segment of the provider's URL path (#113, C10).** A tenant's id is its grant's id,
-and the grant routes (`.../tenants/{tenant_id}/grant`, `.../grant/top-up`, `.../status`) place it in the
-provider's path. There the tenant id is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`,
+and the grant routes (`.../tenants/{tenant_id}/grant`, `.../grant/top-up`, `.../status`, and
+`.../tenants/{tenant_id}/usage`) place it in the provider's path. On a tenant's own routes
+(`GET /v1/clearinghouse/grant` and `/usage`) the tenant is the credential's, as its key holds it, and no
+path carries it. In a path the tenant id is a `GrantId`: stored text that also refuses `/`, `\`, `?`, `#`,
 `%`, control characters and the values `.` and `..`, which a client or server would read as another path.
 Whitespace around the id is removed before the check, so the value checked is the value the engine uses:
 `" .."` is refused as `..`, and `" grant_1"` is used as `grant_1`. It is a 422 over REST before the
@@ -473,7 +492,8 @@ checks stop that:
   answers with the revoked actor as stored, as a repeat does. If the actor was allotted again
   before it wrote, it writes nothing and answers with the allocation it revoked, `revoked`: the
   answer to a revoke is never an active actor, and the new allocation is read with
-  `GET /v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation`. Before, each of these commands saved the
+  the actor's allocation route (`GET /v1/clearinghouse/actors/{actor_id}/allocation`, or under
+  `/v1/clearinghouse/tenants/{tenant_id}` for a clearinghouse admin). Before, each of these commands saved the
   whole row it had read: a pause during a rotation put back the old key, which the rotation had just
   revoked, and any of them could put a revoked actor back to `active`.
 
@@ -1120,8 +1140,9 @@ The allowance is a cap that **can overshoot**: Batteries authorizes on a positiv
 not reserve funds, so accounting lag can take a balance slightly negative. Guaranteed hard limits are
 stretch scope.
 
-`GET /v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation` answers the same amounts for
-a tenant's admin or auditor, and for a clearinghouse admin (#168). Its answer is `AllocationRead`: every
+The actor's allocation route answers the same amounts: `GET /v1/clearinghouse/actors/{actor_id}/allocation`
+for the tenant's admin or auditor, and `GET /v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation`
+for a clearinghouse admin (#168). Its answer is `AllocationRead`: every
 field of the allocation's record, where it was, and `allowance`, which is what `GET /v1/allowance`
 answers for that actor (`allocation_id`, `status`, `granted`, `spent`, `available`). Both routes make
 the one read of the provider through the same `AllowanceReader` member, so an amount means the same on
@@ -1210,7 +1231,7 @@ selects the remote adapters (#169), and three settings, set together, say which 
 | --- | --- |
 | `LPB_CLEARINGHOUSE_URL` | The clearinghouse's public listener, as `http(s)://host[:port]` and nothing after it: a path, a query, a fragment or userinfo is refused at startup, and the refusal does not echo the value. The engine calls the clearinghouse's routes at the root of this address. A trailing slash alone is taken off |
 | `LPB_CLEARINGHOUSE_TOKEN` | The tenant admin key the clearinghouse admin handed over at onboarding. A secret: it is sent as a bearer to the clearinghouse and is in no log line, error text or `repr` |
-| `LPB_CLEARINGHOUSE_TENANT_ID` | The tenant's id there, which is its grant's id (D83) |
+| `LPB_CLEARINGHOUSE_TENANT_ID` | The tenant's id there, which is its grant's id (D83). No path carries it: the clearinghouse takes the tenant from the key. The engine refuses a command about any other tenant with it, and refuses every request when the key turns out to belong to another tenant ([who the engine is at the clearinghouse](#who-the-engine-is-at-the-clearinghouse)). Tech debt T38 |
 
 - **`LPB_SIGNER_URL` names the clearinghouse's signer.** It is set as on any engine that pays, and it is
   a second address: the clearinghouse's engine serves no signer path, and its address never stands in for
@@ -1230,7 +1251,10 @@ selects the remote adapters (#169), and three settings, set together, say which 
   allocation, sends the rotation, and reads which key the allocation takes. Every other command makes
   one or two, and none writes after its second call, so a read that is cut short leaves nothing in
   flight and the resume asks again. Three calls in the half is six timeouts in the window, where
-  Batteries' two calls make four. The defaults, 20 and 120, meet it exactly.
+  Batteries' two calls make four. The defaults, 20 and 120, meet it exactly. The read of the key's
+  grant, which the engine makes once in a process
+  ([who the engine is at the clearinghouse](#who-the-engine-is-at-the-clearinghouse)), is none of the
+  three: a command makes it before its record is begun, so it spends none of that half.
 - **`LPB_DISCOVERY_URL` defaults to the clearinghouse's runner list** (D87), and the reader carries the
   tenant admin key there and to no other address ([discovery.md](discovery.md#the-clearinghouses-runner-list)).
 - A caller who supplies a part through `EngineSupply` keeps it: a supplied part is never replaced.
@@ -1244,12 +1268,13 @@ engine's own in both configurations.
 | --- | --- | --- |
 | Signing, inside `RunnerTransport` | The engine's signer, at `LPB_SIGNER_URL`, with the actor's key | The clearinghouse's signer, directly, at `LPB_SIGNER_URL`, with the actor's key. Nothing of the clearinghouse's engine is in this path |
 | `CredentialResolver` | The engine's stored key (`PaymentsService`) | The same: the key the clearinghouse handed over at allotment or rotation, kept in this engine's `SecretStore` |
-| `AllocationManager` | Batteries' management API | `ClearinghouseAllocations`: the clearinghouse's tenant routes, with the tenant admin key. Allotment and rotation answer the actor's key, once |
+| `AllocationManager` | Batteries' management API | `ClearinghouseAllocations`: the tenant's own routes at the clearinghouse, with the tenant admin key. Allotment and rotation answer the actor's key, once |
 | `AllowanceReader` | Batteries | `ClearinghouseAllowances`: the actor's allocation at the clearinghouse |
 | `UsageSource` | Batteries' usage feed, for every tenant | `ClearinghouseUsage`: the usage route, for the caller's tenant only |
 
-Member by member: `{t}` is the tenant and `{a}` the actor, and every path begins
-`/v1/clearinghouse/tenants/{t}`.
+Member by member: `{a}` is the actor. Every path begins `/v1/clearinghouse`, and none names the tenant:
+they are the tenant's own routes, which act on the tenant of the key (D87 point 3, as Mike amended it on
+19 November 2026). The paths that name a tenant are the clearinghouse admin's, on its private listener.
 
 | Port and member | Route | The answer becomes |
 | --- | --- | --- |
@@ -1268,6 +1293,15 @@ Member by member: `{t}` is the tenant and `{a}` the actor, and every path begins
 | `CredentialResolver.credential` | None: the engine's own actor record and secret store | The actor's key |
 | Signing, inside `RunnerTransport` | None at the clearinghouse's engine. `POST /sign-orchestrator-info` and `POST /generate-live-payment` at `LPB_SIGNER_URL`, with the actor's key | The signer's own answer ([payment path](#payment-path)) |
 
+- **A command about another tenant is refused before it is sent.** The routes name no tenant, so the
+  clearinghouse would apply it to the key's own tenant. Each member that names an actor, and
+  `read_grant`, compares the tenant it is given with `LPB_CLEARINGHOUSE_TENANT_ID` first and refuses
+  another with a `ProviderError` 403, "resource belongs to another tenant": a refusal that applied
+  nothing, as the clearinghouse's own 403 was when the paths named the tenant.
+- **Nothing is sent with another tenant's key.** Every request of the three adapters goes through
+  `TenantWire` (`adapters/clearinghouse_tenant.py`), which reads the key's grant before the first
+  request of a process and reads the tenant every answer states
+  ([who the engine is at the clearinghouse](#who-the-engine-is-at-the-clearinghouse)).
 - **The port names an allocation and the routes name an actor.** `AllocationManager` was written for
   Batteries, which takes an allocation's id. A manager that needs the actor has the optional protocol
   `AllocationsByActor`: the engine calls `for_actor(tenant_id, actor_id, operation_ref)` and sends the
@@ -1414,8 +1448,88 @@ A tenant's id is its grant's id (D83), and the engine passes the tenant of an al
 as the grant. So every actor an enterprise's engine allots must be in the tenant the clearinghouse
 gave it: `LPB_CLEARINGHOUSE_TENANT_ID` is that id, and so is `LPB_JWT_TENANT_ID` or the value of the
 tenant claim, the `tenant_id` of the access keys the engine issues, and the `tenant_id` of the
-`ActorContext` an embedding app builds. Nothing is mapped. An actor in any other tenant is refused by
-the clearinghouse (403).
+`ActorContext` an embedding app builds. Nothing is mapped. An actor in any other tenant is refused by the
+engine, before anything is sent (403): the routes it calls name no tenant, and the clearinghouse acts on
+the tenant of the key.
+
+**The engine learns whose key it holds, and holds itself to that tenant** (#165). Nothing at the
+clearinghouse compares `LPB_CLEARINGHOUSE_TENANT_ID` with `LPB_CLEARINGHOUSE_TOKEN`: a key of another
+tenant is simply answered for that tenant. With such a key an engine would allot from that tenant's
+grant, be handed the keys of allocations there, read that tenant's usage as its own costs, and record
+all of it under its own tenant. So:
+
+- **Before the first request of a process** the engine reads the key's grant
+  (`GET /v1/clearinghouse/grant`), whose `tenant_id` says whose key it is. The read is made when the
+  first request is, not at start: an engine starts with its clearinghouse unreachable, as before. A read
+  that fails is that request's failure (`ProviderUnavailable`, or what the clearinghouse answered) and
+  says nothing about the key, so the next request reads again. Once one read has answered for the
+  engine's tenant, no other is made while every answer agrees with it: a process has one key. Requests
+  that arrive together before that share one read, since each read has the clearinghouse read the
+  grant's balances: those that waited for a read that failed fail with it, and the next request reads
+  again. An answer that states another tenant ends what the engine knew of its key, so the next
+  request reads the grant again before anything else: a usage page states no tenant, and is not taken
+  on a word the clearinghouse has since contradicted. Nor is what was already on its
+  way when that answer arrived: a read of the grant sent before it confirms nothing when it comes back,
+  and a usage page sent before it is refused (403) and none of its rows is stored, whatever a later
+  read of the grant has said by then. The error of an answer for another tenant holds no answer: it is
+  raised from a frame that never held one, so a handed key is not reachable from it.
+- **A command makes that read before its record is begun.** An allotment, a top-up and a payment key
+  rotation run on the operation ledger, inside half of `LPB_OPERATION_STALE_S`, which is sized for the
+  three calls the longest of them makes ([the remote adapters](#the-remote-adapters)). So the payments
+  service asks the allocation manager to be ready before it enters the ledger (the optional protocol
+  `ReadyBeforeCommands`, which the remote manager has and Batteries' client does not): the read spends
+  none of that budget, and inside it the command makes the calls it always made. A refusal or a failure
+  there leaves no operation record and the reference free, so the same request runs as new once the
+  clearinghouse answers, with no stale window to wait for. A status change and a revoke, which take no
+  reference, are made ready the same way. The repeat of a finished command is made ready too, before it
+  is answered from the record: in a process that has not yet read the grant it costs that one read, and
+  fails while the clearinghouse cannot be reached. A read that is not a command (the allowance, a usage
+  page) makes the read itself, and so does a manager that is called through the port alone, by a caller
+  that never asks it to be ready: that is as safe, and spends that caller's own time.
+- **A command that is under way stops when the key comes into question.** Made ready, a command goes by
+  what was known of the key then, and reads no grant between its calls. If the clearinghouse answers
+  any request of the engine for another tenant while the command runs, the command sends nothing more,
+  and a later read of the grant that names the engine's tenant again does not start it again: only a
+  new request does, which is made ready anew. The check is a comparison inside the engine and spends
+  none of the ledger's budget. What the command is answered with depends on what it had sent:
+  - **Nothing that could be applied** (it was stopped before its first write, as a top-up is between
+    the read of the allocation and the payment): a `ProviderError` 403, a refusal. The operation ledger
+    frees the reference, and the same request runs as new.
+  - **A write** (it was stopped after one, as a rotation is before the read that decides which key it
+    holds): `ProviderOutcomeUnknown` (503). The clearinghouse may have applied it, so the reference is
+    kept, and the repeat under the same `operation_ref` is answered from the clearinghouse's record.
+  - **A write that was already on its way** is answered as it always was: by the tenant its answer
+    states, or as an unknown outcome when no answer arrives.
+- **Another tenant than `LPB_CLEARINGHOUSE_TENANT_ID`** is a refusal of whatever was asked: a
+  `ProviderError` 403 that names both tenants and both settings, and says to set the key and the id of
+  one tenant and start the engine again. Nothing of the request is sent, so nothing is applied anywhere
+  and a command's reference is never claimed. The read is repeated at each request while the answer is
+  another tenant's: only a restart changes the key.
+- **This covers the answers that state no tenant.** A usage page is not read, so cost sync fails, stores
+  no row and moves no cursor, and a cursor kept from the engine's own tenant is not followed with the
+  other tenant's key. `GET /readyz` shows the failure as a code (`cost_sync_error`), the log has the
+  refusal's words, and a cost that was `pending` stays so.
+- **The clearinghouse's runner list is read with whatever key the engine has.** It is the same list for
+  every tenant, so the discovery reader sends the key, which the route needs, and does not ask whose it
+  is: a refresh reads no grant and spends none of its deadline on one.
+- **The check of the key is no switch that stops jobs.** A job calls no route of the clearinghouse: it
+  pays at the signer with the allocation key the engine stored when the actor was allotted, and it
+  never sends `LPB_CLEARINGHOUSE_TOKEN`. With another tenant's admin key the engine has a catalog, and
+  an actor that was allotted before still runs paid jobs, on its own allocation. What that key cannot
+  do is the tenant admin's traffic, which is all the check holds: allot, rotate, top up, change a
+  status, revoke, read an allowance or the grant, and sync usage. An engine that never held its own
+  tenant's key has allotted nobody, so it has no key to pay with.
+- **Every answer that states a tenant is read too:** each allocation answer and the grant. Another
+  tenant after a read is the same refusal. After a command, the clearinghouse has applied it at the
+  other tenant, so it is no refusal: a `ProviderError` with the answer's 2xx (502 over REST), as for a
+  command applied to [another allocation](#the-remote-adapters), and the reference stays held. No actor
+  is saved or changed, and a key the answer handed over is dropped with the answer: it is stored
+  nowhere, logged nowhere and in no error. The message says what was left at the other tenant and who
+  puts it right: after an allotment, that tenant's admin revokes the allocation at the clearinghouse,
+  which returns what it has not spent to its grant. With the first rule in force this needs a
+  clearinghouse that answers the grant read for one tenant and a command for another.
+- **`lpb payments check` says the same, without an engine:** the grant probe fails when the key's
+  grant is another tenant's than the setting names, and the usage probe with it.
 
 The key the engine holds is a tenant admin's. A clearinghouse admin's key does nothing on the public
 listener ([access.md](access.md#listeners)), so the engine can never onboard a tenant, top up a grant or
@@ -1469,8 +1583,8 @@ signer its tenants' engines sign at and reads its readiness there for the
 | Both | `signer` | `GET /sign-orchestrator-info` at the root of `LPB_SIGNER_URL`, with no credential | The answer is 405 |
 | Self-hosted | `batteries` | `GET /v1/usage?limit=1` with `LPB_BATTERIES_TOKEN` | A Batteries list is answered |
 | Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set, and always in the `clearinghouse` role | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered. A clearinghouse onboards its tenants with this credential, so without it the probe is `not_configured` and the check fails |
-| Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/tenants/{t}/grant` with the tenant admin key | The tenant's own grant is answered. It is printed as `tenant` |
-| Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/tenants/{t}/usage?limit=1` | A usage page is answered |
+| Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/grant` with the tenant admin key | The key's tenant's grant is answered, and its id is `LPB_CLEARINGHOUSE_TENANT_ID`. It is printed as `tenant`. Another id fails the probe as `unexpected`: the key in `LPB_CLEARINGHOUSE_TOKEN` belongs to another tenant, whose grant and id are not printed. A 403 means the key is not a tenant admin's or an auditor's, and names `LPB_CLEARINGHOUSE_TOKEN` |
+| Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/usage?limit=1` | A usage page is answered, and the grant probe did not find the key to be another tenant's: the page states no tenant, and another tenant's page is `unexpected` |
 | Clearinghouse | `clearinghouse_runner_list`, when it is the discovery address | `GET /v1/clearinghouse/discovery` | A list is answered |
 
 - **Exit codes:** 0 when every probe passed, 1 when one was refused or failed, 2 when the settings

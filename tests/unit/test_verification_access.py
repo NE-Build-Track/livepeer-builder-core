@@ -147,15 +147,14 @@ async def test_a_revoked_admin_or_auditor_key_is_401_on_admin_routes(
     client, engine = rest
     issued = await engine.keys.issue(admin, kind=kind, actor_id=f"{kind}-1", operation_ref=f"key-{kind}")  # type: ignore[arg-type]
     headers = {"Authorization": f"Bearer {issued.token}"}
-    reads = (
-        "/v1/keys",
-        "/v1/clearinghouse/tenants/default/actors",
-        "/v1/clearinghouse/tenants/default/actors/alice/allocation",
-    )
+    # A clearinghouse admin names the tenant; an auditor reads its own tenant's routes, which name none
+    # (D87 point 3, as amended on 19 November 2026).
+    tenant = "/v1/clearinghouse/tenants/default" if kind == "clearinghouse_admin" else "/v1/clearinghouse"
+    reads = ("/v1/keys", tenant + "/actors", tenant + "/actors/alice/allocation")
     assert [(await client.get(path, headers=headers)).status_code for path in reads] == [200, 200, 200]
     await engine.keys.revoke(admin, issued.key.key_id)
     assert [(await client.get(path, headers=headers)).status_code for path in reads] == [401, 401, 401]
-    status = "/v1/clearinghouse/tenants/default/actors/alice/allocation/status"
+    status = tenant + "/actors/alice/allocation/status"
     assert (await client.post(status, json={"status": "paused"}, headers=headers)).status_code == 401
 
 

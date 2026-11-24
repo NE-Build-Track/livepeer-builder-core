@@ -28,6 +28,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import BaseModel, SecretStr
 
 from livepeer_builder.adapters.clearinghouse import ClearinghouseAllocations
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
@@ -35,7 +36,7 @@ from livepeer_builder.adapters.sdk import HttpDiscoverySource
 from livepeer_builder.contracts import DeliveredAllocation, Money
 from livepeer_builder.errors import EngineError, ProviderError, ProviderOutcomeUnknown, ProviderUnavailable
 from livepeer_builder.testing import MemorySecretStore
-from tests.unit.test_clearinghouse_adapters import ALLOTTED, HANDED, KEY, NoActors
+from tests.unit.test_clearinghouse_adapters import ALLOTTED, HANDED, KEY, NoActors, saying_whose_key_it_is
 
 BASE = "https://clearinghouse.test"
 TOKEN = "lpk_tenant-admin-key-throwaway"
@@ -62,6 +63,12 @@ def held(value: object) -> str:
         seen += [repr(dict(value.headers)), value.content.decode(errors="replace")]
     if isinstance(value, dict | list | tuple):
         seen += [held(item) for item in (value.values() if isinstance(value, dict) else value)]
+    # An answer the engine parsed: its repr hides a key, and the object still holds it. A tracker that
+    # records a frame's locals has the object (John, #185 review).
+    if isinstance(value, SecretStr):
+        seen.append(value.get_secret_value())
+    if isinstance(value, BaseModel):
+        seen += [held(item) for item in dict(value).values()]
     return "\n".join(seen)
 
 
@@ -136,7 +143,10 @@ async def test_an_error_answer_that_echoes_a_key_leaves_neither_key_in_the_error
 # -- the adapter that reads the key out of the answer ------------------------------------------------------
 
 
-def manager_over(answers: ClearinghouseWire) -> Any:
+def manager_over(handle: Callable[[httpx.Request], httpx.Response]) -> Any:
+    """The manager for alice over a clearinghouse that answers as ``handle`` does, once it has said the
+    key is tenant ``grant_1``'s."""
+    answers = wire(httpx.MockTransport(saying_whose_key_it_is(handle)))
     return ClearinghouseAllocations(answers, NoActors(), MemorySecretStore()).for_actor("grant_1", "alice")  # type: ignore[arg-type]
 
 
@@ -154,8 +164,9 @@ async def test_no_error_of_an_allotment_whose_answer_holds_a_key_carries_the_ans
     body: dict[str, Any], error: type[Exception], caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.DEBUG)
+    handed = manager_over(lambda _: httpx.Response(201, json=body))
     with pytest.raises(error) as failed:
-        await manager_over(answering(201, body)).create_key_for_grant("grant_1", "grant_1/alice", FIVE, "k")
+        await handed.create_key_for_grant("grant_1", "grant_1/alice", FIVE, "k")
     assert clean(failed.value)
     logged = "\n".join(f"{record.getMessage()} {vars(record)}" for record in caplog.records)
     assert KEY not in logged and TOKEN not in logged
@@ -171,8 +182,34 @@ async def test_no_error_of_a_rotation_whose_answer_holds_a_key_carries_the_answe
         return httpx.Response(200, json=other if rotating else ALLOTTED)
 
     with pytest.raises(ProviderError) as refused:
-        await manager_over(wire(httpx.MockTransport(handle))).create_key("alloc_1", "n", "k")
+        await manager_over(handle).create_key("alloc_1", "n", "k")
     assert refused.value.status_code == 200 and clean(refused.value)
+
+
+@pytest.mark.parametrize("command", ["allot", "rotate"])
+async def test_no_error_of_a_command_answered_for_another_tenant_carries_the_answer_or_the_key(
+    command: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#165: the answer states another tenant than the engine's and hands a key over. The command is no
+    success, and the key goes with the answer: the error, its frames and the log hold neither."""
+    caplog.set_level(logging.DEBUG)
+    theirs = HANDED | {"tenant_id": "grant_2", "grant_id": "grant_2"}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=theirs if request.method == "POST" else ALLOTTED)
+
+    manager = manager_over(handle)
+    calls = {
+        "allot": lambda: manager.create_key_for_grant("grant_1", "grant_1/alice", FIVE, "k"),
+        "rotate": lambda: manager.create_key("alloc_1", "n", "k"),
+    }
+    with pytest.raises(ProviderError) as applied:
+        await calls[command]()
+
+    assert applied.value.status_code == 200 and "'grant_2'" in applied.value.message
+    assert "is not kept here" in applied.value.message and clean(applied.value)
+    logged = "\n".join(f"{record.getMessage()} {vars(record)}" for record in caplog.records)
+    assert KEY not in logged and TOKEN not in logged
 
 
 async def test_a_rotation_whose_answer_is_lost_carries_nothing_of_the_request() -> None:
@@ -182,7 +219,7 @@ async def test_a_rotation_whose_answer_is_lost_carries_nothing_of_the_request() 
         raise httpx.ReadError("the connection dropped", request=request)
 
     with pytest.raises(ProviderOutcomeUnknown) as unknown:
-        await manager_over(wire(httpx.MockTransport(handle))).create_key("alloc_1", "n", "k")
+        await manager_over(handle).create_key("alloc_1", "n", "k")
     assert clean(unknown.value)
 
 

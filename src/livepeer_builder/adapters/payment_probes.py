@@ -28,7 +28,12 @@ An engine that reaches Batteries itself, in its ``both`` or its ``clearinghouse`
 
 An engine in its ``work`` role probes the payment clearinghouse it uses instead, with its tenant admin
 key: its grant (who it is there), one page of its usage, and the runner list when that is its discovery
-address. Every one is a clearinghouse route: no work route is called. Its signer is the clearinghouse's
+address. The grant and the usage are the tenant's own routes, which name no tenant: the clearinghouse
+answers for the key's tenant, and the grant's id says whether that is ``LPB_CLEARINGHOUSE_TENANT_ID``.
+A key that belongs to another tenant fails the grant probe, plainly, and the usage probe with it: the
+page it read is that tenant's. An engine with such a key refuses every request to the clearinghouse
+(``adapters/clearinghouse_tenant.py``).
+Every one is a clearinghouse route: no work route is called. Its signer is the clearinghouse's
 published one, at ``LPB_SIGNER_URL``, and is asked there, never at the clearinghouse's address: a
 clearinghouse's engine serves no signer path (D85 point 1, as amended). With ``LPB_SIGNER_URL`` unset
 the probe is ``not_configured`` and the check fails: such an engine runs its jobs unpaid.
@@ -43,7 +48,8 @@ from urllib.parse import urlsplit
 import httpx
 from pydantic import ValidationError
 
-from livepeer_builder.adapters.batteries import TOKEN_HEADER, segment
+from livepeer_builder.adapters.batteries import TOKEN_HEADER
+from livepeer_builder.adapters.clearinghouse_tenant import GRANT_PATH, USAGE_PATH
 from livepeer_builder.config import CLEARINGHOUSE_RUNNER_LIST, EngineSettings
 from livepeer_builder.contracts import (
     PaymentCheck,
@@ -65,6 +71,12 @@ _NO_SIGNER: dict[Role, str] = {
     "clearinghouse": "LPB_SIGNER_URL is not set: the wallet report cannot say whether the signer answers. "
     "Set it to the address this engine reaches the signer at",
 }
+# The grant the clearinghouse answers with is the key's tenant's. The other tenant's id is not repeated.
+_ANOTHER = (
+    "the tenant admin key in LPB_CLEARINGHOUSE_TOKEN belongs to another tenant than "
+    "LPB_CLEARINGHOUSE_TENANT_ID: the clearinghouse answered with that tenant's grant. An engine with "
+    "these settings refuses every request to the clearinghouse. Set the key and the id of one tenant"
+)
 Answer = httpx.Response | None  # None: no answer came
 
 
@@ -204,26 +216,27 @@ async def _clearinghouse(settings: EngineSettings, client: httpx.AsyncClient) ->
     tenant_id = settings.clearinghouse_tenant_id or ""
     token = settings.clearinghouse_token.get_secret_value() if settings.clearinghouse_token else ""
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    tenant_path = f"/v1/clearinghouse/tenants/{segment(tenant_id)}"
 
-    grant_probe, grant = await _tenant_grant(client, base, tenant_path, tenant_id, headers)
+    grant_probe, grant = await _tenant_grant(client, base, tenant_id, headers)
+    own = grant is not None and grant_probe.outcome == "ok"  # the key's tenant is the engine's
     probes = [
         grant_probe,
-        await _tenant_usage(client, base, tenant_path, headers),
+        await _tenant_usage(client, base, headers, of_another_tenant=grant is not None and not own),
         await _signer(settings, client),  # the clearinghouse's signer, asked as an engine asks its own
     ]
     # the list is this engine's discovery address: the key goes to that address and no other
     if settings.discovery_url is not None and settings.clearinghouse_runner_list_token is not None:
         probes.append(await _runner_list(client, settings.discovery_url, headers))
-    return _checked(settings, "clearinghouse", probes, grant)
+    return _checked(settings, "clearinghouse", probes, grant if own else None)  # no other tenant's grant
 
 
 async def _tenant_grant(
-    client: httpx.AsyncClient, base: str, tenant_path: str, tenant_id: str, headers: Mapping[str, str]
+    client: httpx.AsyncClient, base: str, tenant_id: str, headers: Mapping[str, str]
 ) -> tuple[PaymentProbe, TenantGrant | None]:
-    """Who the engine is at the clearinghouse: its tenant's grant, when the read answered with it."""
-    name, request = "clearinghouse_grant", f"GET {tenant_path}/grant"
-    answer = _answered(name, request, await _get(client, base + tenant_path + "/grant", headers=headers))
+    """Who the engine is at the clearinghouse: the grant of the key's tenant, when the read answered with
+    it. The probe passes only when that tenant is the one ``LPB_CLEARINGHOUSE_TENANT_ID`` names."""
+    name, request = "clearinghouse_grant", "GET " + GRANT_PATH
+    answer = _answered(name, request, await _get(client, base + GRANT_PATH, headers=headers))
     if isinstance(answer, PaymentProbe):
         return answer, None
     try:
@@ -231,25 +244,29 @@ async def _tenant_grant(
     except ValidationError:
         return _unexpected(name, request, "the grant could not be read", answer), None
     if grant.tenant_id != tenant_id:
-        detail = "the clearinghouse answered with another tenant's grant"
-        return _unexpected(name, request, detail, answer), None
+        return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "unexpected", _ANOTHER, 200), grant
     detail = "the clearinghouse answered with this tenant's grant"
     return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "ok", detail, 200), grant
 
 
 async def _tenant_usage(
-    client: httpx.AsyncClient, base: str, tenant_path: str, headers: Mapping[str, str]
+    client: httpx.AsyncClient, base: str, headers: Mapping[str, str], *, of_another_tenant: bool
 ) -> PaymentProbe:
-    name, request = "clearinghouse_usage", f"GET {tenant_path}/usage"
-    url = base + tenant_path + "/usage"
+    """One page of the key's tenant's usage. The page states no tenant: the grant probe says whose it
+    is, and a page of another tenant than the engine's is no pass."""
+    name, request = "clearinghouse_usage", "GET " + USAGE_PATH
+    url = base + USAGE_PATH
     answer = _answered(name, request, await _get(client, url, params={"limit": "1"}, headers=headers))
     if isinstance(answer, PaymentProbe):
         return answer
     body = _json(answer)
     if not isinstance(body, dict) or not isinstance(body.get("items"), list):
         return _unexpected(name, request, "the usage page could not be read", answer)
-    detail = "the clearinghouse answered with a page of this tenant's payment records"
-    return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "ok", detail, 200)
+    if of_another_tenant:
+        detail = "the clearinghouse answered with a page of another tenant's payment records: " + _ANOTHER
+        return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "unexpected", detail, 200)
+    detail = "the clearinghouse answered with a page of the key's tenant's payment records"
+    return _probe(name, "LPB_CLEARINGHOUSE_TOKEN", request, "ok", detail, 200)
 
 
 async def _runner_list(client: httpx.AsyncClient, url: str, headers: Mapping[str, str]) -> PaymentProbe:
@@ -282,12 +299,12 @@ def _refused(name: str, request: str, answer: httpx.Response) -> PaymentProbe | 
         return _probe(name, "LPB_CLEARINGHOUSE_TOKEN", request, "refused", detail, status)
     if status == 403:
         detail = (
-            "the key is not an admin's or an auditor's of the tenant in LPB_CLEARINGHOUSE_TENANT_ID, or "
-            "it is a clearinghouse admin's, which the public listener refuses"
+            "the key in LPB_CLEARINGHOUSE_TOKEN is not a tenant admin's or an auditor's: a tenant's own "
+            "routes refuse any other, and the public listener refuses a clearinghouse admin's"
         )
-        return _probe(name, "LPB_CLEARINGHOUSE_TENANT_ID", request, "refused", detail, status)
+        return _probe(name, "LPB_CLEARINGHOUSE_TOKEN", request, "refused", detail, status)
     if status == 404:
-        detail = "HTTP 404: LPB_CLEARINGHOUSE_URL does not serve this route, or the tenant is not there"
+        detail = "HTTP 404: LPB_CLEARINGHOUSE_URL does not serve this route, or the key's tenant has no grant"
         return _probe(name, "LPB_CLEARINGHOUSE_URL", request, "refused", detail, status)
     if 300 <= status < 400:
         return _unexpected(

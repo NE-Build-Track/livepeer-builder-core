@@ -2,8 +2,12 @@
 
 A tenant is one enterprise app's account. Its id is the id of its grant at the payment provider, so no
 route or body takes a separate grant id. A tenant admin divides its tenant's grant and cannot enlarge it;
-only a clearinghouse admin onboards a tenant, tops up a grant or pauses a tenant. Another tenant's id in
-a path is 403 before any lookup or provider call.
+only a clearinghouse admin onboards a tenant, tops up a grant or pauses a tenant.
+
+Since 19 November 2026 (D87 point 3, as amended) a tenant's admin and auditor call its own routes, which
+name no tenant: the tenant is the credential's. A clearinghouse admin calls the same routes at paths that
+name the tenant, and a tenant credential is 403 on those, another tenant's or its own, before any lookup
+or provider call (tests/unit/test_tenant_from_credential.py sweeps every route).
 
 The first test is the guide's starter test
 (docs/design-docs/m4-guides/iss-31-payment-configurations.md, "Test plan").
@@ -28,7 +32,8 @@ from livepeer_builder.testing import FakeAllocationManager, FixedClock, Scripted
 from tests.conftest import EngineFactory, allot
 from tests.unit.test_assembly import HeaderAuthenticator
 
-TENANTS = "/v1/clearinghouse/tenants"
+OWN = "/v1/clearinghouse"  # a tenant's own routes: no tenant in the path
+TENANTS = OWN + "/tenants"
 USD_100 = {"amount": "100", "currency": "USD"}
 
 
@@ -38,17 +43,25 @@ def usd(amount: str) -> dict[str, str]:
 
 @dataclass
 class Tenant:
-    """One onboarded tenant: its id, which is its grant's id, and its admin's key."""
+    """One onboarded tenant: its id, which is its grant's id, and its admin's key. Its admin and auditor
+    call its own routes, which name no tenant (``path``); a clearinghouse admin calls the same routes at
+    the path that names the tenant (``named``)."""
 
     id: str
     admin: dict[str, str]
     key_id: str
 
     def path(self, rest: str = "") -> str:
-        return f"{TENANTS}/{self.id}{rest}"
+        return OWN + rest
 
     def allocation(self, actor_id: str, rest: str = "") -> str:
         return self.path(f"/actors/{actor_id}/allocation{rest}")
+
+    def named(self, rest: str = "") -> str:
+        return f"{TENANTS}/{self.id}{rest}"
+
+    def named_allocation(self, actor_id: str, rest: str = "") -> str:
+        return self.named(f"/actors/{actor_id}/allocation{rest}")
 
 
 @dataclass
@@ -96,19 +109,28 @@ async def allotted(house: House, tenant: Tenant, actor_id: str, amount: str = "5
 async def test_a_tenant_admin_is_403_on_a_route_that_names_another_tenant_with_no_provider_call(
     house: House, manager: FakeAllocationManager
 ) -> None:
+    """The guide's starter test. Since 19 November 2026 a path that names a tenant is a clearinghouse
+    admin's: a tenant admin is refused there for its kind, the other tenant's path and its own alike, and
+    its own routes name no tenant, so they reach no other."""
     await allotted(house, house.two, "bob")
     calls = list(manager.calls)
     body = {"amount": usd("1"), "operation_ref": "starter"}
-    refused = await house.client.post(house.two.allocation("mallory"), json=body, headers=house.one.admin)
-    assert refused.status_code == 403, refused.text
-    assert "another tenant" in refused.json()["error"]
-    top_up = await house.client.post(
-        house.two.allocation("bob", "/top-up"), json=body, headers=house.one.admin
+    refused = await house.client.post(
+        house.two.named_allocation("mallory"), json=body, headers=house.one.admin
     )
-    assert top_up.status_code == 403
-    assert manager.calls == calls  # Batteries heard of neither
+    assert refused.status_code == 403, refused.text
+    assert "clearinghouse admin's" in refused.json()["error"]
+    for tenant in (house.two, house.one):  # the other tenant's path, and its own
+        top_up = await house.client.post(
+            tenant.named_allocation("bob", "/top-up"), json=body, headers=house.one.admin
+        )
+        assert top_up.status_code == 403
+    assert manager.calls == calls  # Batteries heard of none of them
     assert await house.engine.store.get_actor(house.two.id, "mallory") is None
     assert await house.engine.store.get_operation(house.one.id, "tenant-admin", "starter") is None
+    # its own path for bob is its own tenant's, where there is no bob
+    mine = await house.client.post(house.one.allocation("bob", "/top-up"), json=body, headers=house.one.admin)
+    assert mine.status_code == 404 and manager.calls == calls
 
 
 # -- onboarding -----------------------------------------------------------------------------------------
@@ -138,7 +160,7 @@ async def test_onboarding_creates_one_grant_and_returns_the_tenant_id_and_one_te
             "chatlpt",
         )
         as_tenant = {"Authorization": f"Bearer {key['token']}"}
-        assert (await client.get(f"{TENANTS}/{tenant_id}/grant", headers=as_tenant)).status_code == 200
+        assert (await client.get(OWN + "/grant", headers=as_tenant)).json()["tenant_id"] == tenant_id
 
         again = await client.post(TENANTS, json=body, headers=admin)  # the answer was lost: a repeat
         assert again.status_code == 201 and again.headers["Idempotent-Replayed"] == "true"
@@ -263,9 +285,10 @@ async def test_a_tenant_admin_allots_tops_up_pauses_and_revokes_allocations_in_i
         one.id,
     )
     auditor = {"Authorization": f"Bearer {issued.json()['token']}"}
-    assert (await client.get(one.path("/grant"), headers=auditor)).status_code == 200
+    assert (await client.get(one.path("/grant"), headers=auditor)).json()["tenant_id"] == one.id
     assert (await client.get(one.path("/actors"), headers=auditor)).status_code == 200
-    assert (await client.get(house.two.path("/grant"), headers=auditor)).status_code == 403
+    assert (await client.get(house.two.named("/grant"), headers=auditor)).status_code == 403
+    assert (await client.get(one.named("/grant"), headers=auditor)).status_code == 403
     assert (await client.post(one.allocation("bob"), json=top_up, headers=auditor)).status_code == 403
 
 
@@ -277,8 +300,8 @@ async def test_a_tenant_admin_cannot_onboard_a_tenant_top_up_its_grant_or_issue_
     refusals = [
         ("POST", TENANTS, {"name": "mine", "amount": USD_100, "operation_ref": "r1"}),
         ("GET", TENANTS, None),
-        ("POST", one.path("/grant/top-up"), {"amount": USD_100, "operation_ref": "r2"}),
-        ("POST", one.path("/status"), {"status": "paused", "operation_ref": "r3"}),
+        ("POST", one.named("/grant/top-up"), {"amount": USD_100, "operation_ref": "r2"}),
+        ("POST", one.named("/status"), {"status": "paused", "operation_ref": "r3"}),
         ("POST", one.path("/keys"), {"kind": "tenant_admin", "actor_id": "second", "operation_ref": "r4"}),
         ("POST", "/v1/keys", {"kind": "tenant_admin", "actor_id": "x", "tenant_id": one.id, "operation_ref": "r5"}),
         ("POST", "/v1/keys", {"kind": "clearinghouse_admin", "actor_id": "x", "tenant_id": one.id, "operation_ref": "r6"}),
@@ -291,10 +314,12 @@ async def test_a_tenant_admin_cannot_onboard_a_tenant_top_up_its_grant_or_issue_
     assert await store.list_access_keys(None) == keys
     # a clearinghouse admin does each of them
     top_up = {"amount": USD_100, "operation_ref": "grow-one"}
-    assert (await client.post(one.path("/grant/top-up"), json=top_up, headers=house.admin)).status_code == 204
+    assert (
+        await client.post(one.named("/grant/top-up"), json=top_up, headers=house.admin)
+    ).status_code == 204
     assert manager.unallocated(one.id) == Decimal(200)
     second = {"kind": "tenant_admin", "actor_id": "second", "operation_ref": "second-admin"}
-    issued = await client.post(one.path("/keys"), json=second, headers=house.admin)
+    issued = await client.post(one.named("/keys"), json=second, headers=house.admin)
     assert (issued.status_code, issued.json()["key"]["kind"]) == (201, "tenant_admin")
     assert issued.json()["key"]["tenant_id"] == one.id
     assert [tenant["tenant_id"] for tenant in (await client.get(TENANTS, headers=house.admin)).json()] == [
@@ -345,7 +370,7 @@ async def test_pausing_a_tenant_pauses_its_grant_and_the_engine_enforces_nothing
     allocations (403) and still takes allotments and top-ups. The engine passes the status on."""
     client, one = house.client, house.one
     pause = {"status": "paused", "operation_ref": "pause-1"}
-    paused = await client.post(one.path("/status"), json=pause, headers=house.admin)
+    paused = await client.post(one.named("/status"), json=pause, headers=house.admin)
     assert (paused.status_code, paused.json()) == (200, {"tenant_id": one.id, "status": "paused"})
     assert (await client.get(one.path("/grant"), headers=one.admin)).json()["status"] == "paused"
     listed = {
@@ -355,17 +380,17 @@ async def test_pausing_a_tenant_pauses_its_grant_and_the_engine_enforces_nothing
     assert (listed[one.id], listed[house.two.id]) == ("paused", "active")
     await allotted(house, one, "alice")  # the provider still takes it, so the engine does
     resume = {"status": "active", "operation_ref": "resume-1"}
-    assert (await client.post(one.path("/status"), json=resume, headers=house.admin)).json()[
+    assert (await client.post(one.named("/status"), json=resume, headers=house.admin)).json()[
         "status"
     ] == "active"
     # a late repeat of the pause is answered from the ledger: the tenant is not paused again
-    late = await client.post(one.path("/status"), json=pause, headers=house.admin)
+    late = await client.post(one.named("/status"), json=pause, headers=house.admin)
     assert late.status_code == 200 and late.headers["Idempotent-Replayed"] == "true"
     assert (await client.get(one.path("/grant"), headers=one.admin)).json()["status"] == "active"
     assert manager.calls.count("set_grant_status") == 2
     for status in ("closed", "draft", "revoked"):  # a grant is never closed
         body = {"status": status, "operation_ref": f"never-{status}"}
-        assert (await client.post(one.path("/status"), json=body, headers=house.admin)).status_code == 422
+        assert (await client.post(one.named("/status"), json=body, headers=house.admin)).status_code == 422
     unknown = await client.post(
         f"{TENANTS}/no-such-tenant/status", json=pause | {"operation_ref": "p-2"}, headers=house.admin
     )
@@ -380,25 +405,28 @@ async def test_a_tenant_admin_key_never_acts_on_another_tenants_keys(house: Hous
     before = await store.list_access_keys(None)
     # issuing for another tenant, in a path or in a body
     for path, body in (
-        (two.path("/keys"), {"actor_id": "spy", "operation_ref": "k1"}),
+        (two.named("/keys"), {"actor_id": "spy", "operation_ref": "k1"}),
         ("/v1/keys", {"kind": "auditor", "actor_id": "spy", "tenant_id": two.id, "operation_ref": "k2"}),
     ):
         assert (await client.post(path, json=body, headers=one.admin)).status_code == 403, path
     # a body that names no tenant was put in "default", another tenant's: now it is refused as it is read
     unnamed = {"kind": "actor", "actor_id": "spy", "operation_ref": "k3"}
     assert (await client.post("/v1/keys", json=unnamed, headers=one.admin)).status_code == 422
-    # reading another tenant's keys
-    assert (await client.get(two.path("/keys"), headers=one.admin)).status_code == 403
+    # reading another tenant's keys: no path of its own names another tenant, and one that does is 403
+    assert (await client.get(two.named("/keys"), headers=one.admin)).status_code == 403
+    assert {key["tenant_id"] for key in (await client.get(one.path("/keys"), headers=one.admin)).json()} == {
+        one.id
+    }
     assert (await client.get(f"/v1/keys?tenant_id={two.id}", headers=one.admin)).status_code == 403
     assert [key["tenant_id"] for key in (await client.get("/v1/keys", headers=one.admin)).json()] == [one.id]
-    # another tenant's key, named by its id: missing, through its own tenant's path and the engine's
+    # another tenant's key, named by its id: missing, through its own routes and the engine's
     rotate = {"operation_ref": "k4"}
     assert (await client.get(one.path(f"/keys/{two.key_id}"), headers=one.admin)).status_code == 404
     assert (await client.get(f"/v1/keys/{two.key_id}", headers=one.admin)).status_code == 404
     for path in (one.path(f"/keys/{two.key_id}"), f"/v1/keys/{two.key_id}"):
         assert (await client.post(path + "/rotate", json=rotate, headers=one.admin)).status_code == 400, path
         assert (await client.post(path + "/revoke", headers=one.admin)).status_code == 400, path
-    assert (await client.post(two.path(f"/keys/{two.key_id}/revoke"), headers=one.admin)).status_code == 403
+    assert (await client.post(two.named(f"/keys/{two.key_id}/revoke"), headers=one.admin)).status_code == 403
     assert await store.list_access_keys(None) == before
     assert (await client.get(two.path("/grant"), headers=two.admin)).status_code == 200  # still two's key
 
@@ -408,7 +436,7 @@ async def test_a_tenant_admin_changes_no_admin_key_and_manages_its_tenants_other
 ) -> None:
     client, one = house.client, house.one
     second = await client.post(
-        one.path("/keys"),
+        one.named("/keys"),
         json={"kind": "tenant_admin", "actor_id": "second", "operation_ref": "second"},
         headers=house.admin,
     )
@@ -438,14 +466,16 @@ async def test_a_tenant_admin_changes_no_admin_key_and_manages_its_tenants_other
     assert (await client.post("/v1/keys", json=actor, headers=one.admin)).status_code == 201
     # the clearinghouse admin revokes a tenant admin key
     assert (
-        await client.post(one.path(f"/keys/{other_admin}/revoke"), headers=house.admin)
+        await client.post(one.named(f"/keys/{other_admin}/revoke"), headers=house.admin)
     ).status_code == 204
-    # only the two kinds a tenant holds at a clearinghouse are issued under the tenant's path
+    # only the two kinds a tenant holds at a clearinghouse are issued under the tenant's routes
     for kind in ("actor", "service", "clearinghouse_admin"):
         body = {"kind": kind, "actor_id": "x", "operation_ref": f"kind-{kind}"}
-        assert (await client.post(one.path("/keys"), json=body, headers=house.admin)).status_code == 422
+        assert (await client.post(one.named("/keys"), json=body, headers=house.admin)).status_code == 422
+        assert (await client.post(one.path("/keys"), json=body, headers=one.admin)).status_code == 422
     named = {"actor_id": "x", "tenant_id": house.two.id, "operation_ref": "body-tenant"}
-    assert (await client.post(one.path("/keys"), json=named, headers=house.admin)).status_code == 422
+    assert (await client.post(one.named("/keys"), json=named, headers=house.admin)).status_code == 422
+    assert (await client.post(one.path("/keys"), json=named, headers=one.admin)).status_code == 422
 
 
 async def test_a_key_rotation_repeated_under_another_tenants_path_is_400_and_shows_no_key(
@@ -453,18 +483,19 @@ async def test_a_key_rotation_repeated_under_another_tenants_path_is_400_and_sho
 ) -> None:
     """The repeat of a rotation is answered from its record. Under another tenant's path it reads as
     missing, as the first run there would have (#165 review): a clearinghouse admin may name any tenant,
-    so only the key's own tenant stops it."""
+    so only the key's own tenant stops it. A tenant credential names no tenant in a path since #185, so
+    the paths that name one, the clearinghouse admin's, are where this can be asked."""
     client, one, two = house.client, house.one, house.two
     issued = await client.post(
         one.path("/keys"), json={"actor_id": "dashboard", "operation_ref": "aud"}, headers=one.admin
     )
     auditor = issued.json()["key"]["key_id"]
     rotate = {"operation_ref": "rotate-aud"}
-    first = await client.post(one.path(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
+    first = await client.post(one.named(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
     assert first.status_code == 201 and first.json()["token"]
-    elsewhere = await client.post(two.path(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
+    elsewhere = await client.post(two.named(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
     assert elsewhere.status_code == 400 and first.json()["key"]["key_id"] not in elsewhere.text
-    again = await client.post(one.path(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
+    again = await client.post(one.named(f"/keys/{auditor}/rotate"), json=rotate, headers=house.admin)
     assert again.headers["Idempotent-Replayed"] == "true"
     assert (again.json()["key"], again.json()["token"]) == (first.json()["key"], None)
     assert (

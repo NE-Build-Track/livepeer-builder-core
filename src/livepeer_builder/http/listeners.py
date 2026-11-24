@@ -16,15 +16,21 @@ tops up grants, so a leaked clearinghouse admin key could spend the wallet. A de
 engine:
 
 - the **public listener** (``LPB_HTTP_HOST``, ``LPB_HTTP_PORT``) serves the groups of ``EVERY_LISTENER``
-  and no route of ``PRIVATE_ONLY``: those are 404 there, as any path the engine does not know, before a
-  credential is read. It refuses a clearinghouse admin credential with 403;
-- the **private listener** (``LPB_HTTP_PRIVATE_HOST``, ``LPB_HTTP_PRIVATE_PORT``) serves every group,
-  to a clearinghouse admin only: any other credential is 403 there.
+  and of ``PUBLIC_ONLY``, and no route of ``PRIVATE_ONLY``: those are 404 there, as any path the engine
+  does not know, before a credential is read. It refuses a clearinghouse admin credential with 403;
+- the **private listener** (``LPB_HTTP_PRIVATE_HOST``, ``LPB_HTTP_PRIVATE_PORT``) serves the groups of
+  ``EVERY_LISTENER`` and of ``PRIVATE_ONLY``, and no route of ``PUBLIC_ONLY``, to a clearinghouse admin
+  only: any other credential is 403 there.
+
+``PUBLIC_ONLY`` is a tenant's own routes, which name no tenant and take a tenant admin or auditor
+credential; ``PRIVATE_ONLY`` holds the same routes at paths that name the tenant, which take a
+clearinghouse admin only (D87 point 3, as amended on 19 November 2026). Each listener serves the form
+the credentials it takes can call.
 
 Without ``LPB_HTTP_PRIVATE_PORT`` the engine has **one listener**, which serves every group of its role
-to every kind of credential, as it did before #167. An engine in its ``clearinghouse`` role always has
-two: its settings refuse to load without the private port, and ``mount_listener_routes`` refuses to
-build it the app of one listener.
+to every kind of credential the group takes, as it did before #167. An engine in its ``clearinghouse``
+role always has two: its settings refuse to load without the private port, and ``mount_listener_routes``
+refuses to build it the app of one listener.
 
 **Who keeps each allocation's key** follows the role too (D85 point 1, D87 point 1), and
 ``delivers_allocation_keys`` is the one place that says so. An engine that runs jobs, in its ``both``
@@ -33,12 +39,18 @@ standalone clearinghouse, the ``clearinghouse`` role, hands each key to the call
 and at rotation, and stores none (``True``): the enterprise's engine keeps it and signs at the
 clearinghouse's published signer itself. An engine in its ``work`` role mounts no route that allots.
 ``create_app`` asks that function and passes the answer to ``mount_listener_routes``, for the app of one
-listener and for each app of two. No listener serves a signer path: no engine signs for another.
+listener and for each app of two. It is one answer for both forms of a tenant's routes: on the public
+listener the caller handed the key is the tenant admin whose credential names the tenant, and on the
+private listener it is the clearinghouse admin who named the tenant in the path, who passes it on. A
+clearinghouse stores no key, so an allotment answered without it would leave the key with nobody. No
+listener serves a signer path: no engine signs for another.
 
-To serve a new group of routes, add a ``RouteGroup`` to ``ROUTE_GROUPS`` with its half, and
-``private=True`` when only a clearinghouse admin calls it. A group that is not in the table is served by
-no role and on no listener (tests/unit/test_listeners.py). ``mount_clearinghouse_routes`` still adds the
-clearinghouse half's whole set to an app a caller builds for itself; no listener's app is built from it.
+To serve a new group of routes, add a ``RouteGroup`` to ``ROUTE_GROUPS`` with its half,
+``served_on="private"`` when only a clearinghouse admin calls it or ``served_on="public"`` when only a
+tenant's own credentials do, and ``allots=True`` when it allots or rotates. A group that is not in the
+table is served by no role and on no listener (tests/unit/test_listeners.py).
+``mount_clearinghouse_routes`` still adds the clearinghouse half's whole set to an app a caller builds
+for itself; no listener's app is built from it.
 
 The credential rule is applied where every route authenticates (``http/auth.py``), from the listener
 this module puts on ``app.state``, so a route added later is covered without a check of its own.
@@ -54,13 +66,19 @@ from fastapi.routing import APIRoute
 from livepeer_builder.api import EngineApi
 from livepeer_builder.contracts import ActorContext, Role
 from livepeer_builder.errors import AccessDenied
-from livepeer_builder.http.clearinghouse import mount_clearinghouse_admin_routes, mount_tenant_routes
+from livepeer_builder.http.clearinghouse import (
+    mount_clearinghouse_admin_routes,
+    mount_named_tenant_routes,
+    mount_runner_list_routes,
+    mount_tenant_routes,
+)
 from livepeer_builder.http.work import mount_work_routes
 
 ListenerName = Literal["only", "public", "private"]
+ServedOn = Literal["every", "public", "private"]  # of two listeners, which serves a group
 Half = Literal["work", "clearinghouse"]
 # A group's mount function: each takes the app and the engine, typed against its own half of the facade
-# (api.py, tests/structure/test_two_halves.py). ``mount_tenant_routes`` also takes
+# (api.py, tests/structure/test_two_halves.py). A group that allots also takes
 # ``deliver_allocation_keys``, which ``mount_listener_routes`` passes.
 Mount = Callable[..., None]
 WORK_HALF: Half = "work"
@@ -69,21 +87,30 @@ CLEARINGHOUSE_HALF: Half = "clearinghouse"
 
 @dataclass(frozen=True)
 class RouteGroup:
-    """One group of routes: the function that mounts it, the half of the engine it belongs to, and
-    whether it is served on the private listener alone."""
+    """One group of routes: the function that mounts it, the half of the engine it belongs to, which of
+    two listeners serves it (one listener serves every group), and whether it allots and rotates, so
+    that its mount function takes ``deliver_allocation_keys``."""
 
     mount: Mount
     half: Half
-    private: bool = False
+    served_on: ServedOn = "every"
+    allots: bool = False
+
+    def served_by(self, listener: ListenerName) -> bool:
+        return listener == "only" or self.served_on in ("every", listener)
 
 
 ROUTE_GROUPS: tuple[RouteGroup, ...] = (
     # the work half: jobs, the catalog, runners, costs, the allowance read and the engine's own keys
     RouteGroup(mount_work_routes, WORK_HALF),
-    # what a tenant's own admin or auditor calls, and the runner list a clearinghouse publishes
-    RouteGroup(mount_tenant_routes, CLEARINGHOUSE_HALF),
+    # a tenant's own routes, which name no tenant: a tenant admin's or an auditor's, never on the private one
+    RouteGroup(mount_tenant_routes, CLEARINGHOUSE_HALF, served_on="public", allots=True),
+    # the same routes with the tenant in the path: a clearinghouse admin's, never on the public one
+    RouteGroup(mount_named_tenant_routes, CLEARINGHOUSE_HALF, served_on="private", allots=True),
+    # the runner list a clearinghouse publishes, which any credential of a tenant reads (#166)
+    RouteGroup(mount_runner_list_routes, CLEARINGHOUSE_HALF),
     # what only a clearinghouse admin does: never served on the public listener
-    RouteGroup(mount_clearinghouse_admin_routes, CLEARINGHOUSE_HALF, private=True),
+    RouteGroup(mount_clearinghouse_admin_routes, CLEARINGHOUSE_HALF, served_on="private"),
 )
 # The halves each role serves (D84): the guide's table, "The engine's two halves".
 ROLE_HALVES: dict[Role, frozenset[Half]] = {
@@ -91,9 +118,10 @@ ROLE_HALVES: dict[Role, frozenset[Half]] = {
     "work": frozenset({WORK_HALF}),
     "clearinghouse": frozenset({CLEARINGHOUSE_HALF}),
 }
-# Read from the table: served on every listener, and never served on the public one.
-EVERY_LISTENER: tuple[Mount, ...] = tuple(group.mount for group in ROUTE_GROUPS if not group.private)
-PRIVATE_ONLY: tuple[Mount, ...] = tuple(group.mount for group in ROUTE_GROUPS if group.private)
+# Read from the table: served on every listener, never on the private one, and never on the public one.
+EVERY_LISTENER: tuple[Mount, ...] = tuple(g.mount for g in ROUTE_GROUPS if g.served_on == "every")
+PUBLIC_ONLY: tuple[Mount, ...] = tuple(g.mount for g in ROUTE_GROUPS if g.served_on == "public")
+PRIVATE_ONLY: tuple[Mount, ...] = tuple(g.mount for g in ROUTE_GROUPS if g.served_on == "private")
 
 
 def delivers_allocation_keys(role: Role) -> bool:
@@ -108,6 +136,9 @@ def delivers_allocation_keys(role: Role) -> bool:
 
 PRIVATE_TAG = "private listener"
 """The OpenAPI tag on every route of ``PRIVATE_ONLY``, so a published schema says where it is served."""
+PUBLIC_TAG = "public listener"
+"""The OpenAPI tag on every route of ``PUBLIC_ONLY``."""
+SIDE_TAGS: dict[ServedOn, str] = {"public": PUBLIC_TAG, "private": PRIVATE_TAG}
 HALF_TAGS: dict[Half, str] = {WORK_HALF: "work half", CLEARINGHOUSE_HALF: "clearinghouse half"}
 """The OpenAPI tag on every route of a half, so a published schema says which roles serve it."""
 _TAGS = [
@@ -123,6 +154,13 @@ _TAGS = [
         "and is not one.",
     },
     {
+        "name": PUBLIC_TAG,
+        "description": "Served on the public listener only, when the deployment has a private one "
+        "(`LPB_HTTP_PRIVATE_PORT`): these routes are 404 on the private listener. A deployment with one "
+        "listener serves them there. They are a tenant's own routes: they name no tenant, act on the "
+        "tenant of the credential, and take a tenant admin or auditor credential only.",
+    },
+    {
         "name": PRIVATE_TAG,
         "description": "Served on the private listener only, when the deployment has one "
         "(`LPB_HTTP_PRIVATE_PORT`): these routes are 404 on the public listener. A deployment with one "
@@ -134,10 +172,9 @@ _TAGS = [
 
 @dataclass(frozen=True)
 class Listener:
-    """One listener's rules: whether it serves the private group, and the credentials it takes."""
+    """One listener's rule about the credentials it takes."""
 
     name: ListenerName
-    serves_private_routes: bool
 
     def check(self, actor: ActorContext) -> None:
         """Refuse a credential this listener does not take: ``AccessDenied``, which is 403."""
@@ -149,9 +186,9 @@ class Listener:
 
 
 LISTENERS: dict[ListenerName, Listener] = {
-    "only": Listener("only", serves_private_routes=True),
-    "public": Listener("public", serves_private_routes=False),
-    "private": Listener("private", serves_private_routes=True),
+    "only": Listener("only"),
+    "public": Listener("public"),
+    "private": Listener("private"),
 }
 
 
@@ -161,18 +198,17 @@ def mount_listener_routes(
     """Add to ``app`` the groups of routes the engine's role serves on the listener ``name``, and put the
     listener on ``app.state.listener``, where authentication reads the credentials it takes.
 
-    ``deliver_allocation_keys`` is required, as for ``mount_tenant_routes``, which is handed it: whoever
+    ``deliver_allocation_keys`` is required, as for each group that allots, which is handed it: whoever
     mounts the routes says who keeps the keys. ``delivers_allocation_keys(engine.role)`` is the answer,
     ``create_app`` passes it, and any other value raises ``ValueError``: an engine that runs jobs would
     hand each key over and leave that actor's jobs ``not_provisioned``, and a clearinghouse would keep
     keys its tenants' engines sign with."""
     halves = ROLE_HALVES[engine.role]
     _require_the_app_of_the_role(engine.role, name, deliver_allocation_keys)
-    listener = LISTENERS[name]
-    app.state.listener = listener
+    app.state.listener = LISTENERS[name]
     tagged: set[str] = set()
     for group in ROUTE_GROUPS:
-        if group.half in halves and (listener.serves_private_routes or not group.private):
+        if group.half in halves and group.served_by(name):
             tagged.update(_mounted(app, engine, group, deliver_allocation_keys))
     app.openapi_tags = [*(app.openapi_tags or []), *(tag for tag in _TAGS if tag["name"] in tagged)]
 
@@ -195,15 +231,17 @@ def _require_the_app_of_the_role(role: Role, name: ListenerName, deliver_allocat
 
 
 def _mounted(app: FastAPI, engine: EngineApi, group: RouteGroup, deliver_allocation_keys: bool) -> list[str]:
-    """Mount one group on ``app`` and tag its routes with its half, and with the private tag when it is
-    private. The tags given, or none when the group added no route."""
+    """Mount one group on ``app`` and tag its routes with its half, and with the tag of the one listener
+    that serves it when it is not served on every listener. The tags given, or none when the group
+    added no route."""
     before = len(app.routes)
-    if group.mount is mount_tenant_routes:  # the one group that allots and rotates
-        mount_tenant_routes(app, engine, deliver_allocation_keys=deliver_allocation_keys)
+    if group.allots:  # a tenant's routes, in either form: the same answer for both
+        group.mount(app, engine, deliver_allocation_keys=deliver_allocation_keys)
     else:
         group.mount(app, engine)
     # Tagged here, from the table, and not on each route: a route added to a group is tagged too.
-    tags = [HALF_TAGS[group.half], *([PRIVATE_TAG] if group.private else [])]
+    side = SIDE_TAGS.get(group.served_on)
+    tags = [HALF_TAGS[group.half], *([side] if side else [])]
     added = [route for route in app.routes[before:] if isinstance(route, APIRoute)]
     for route in added:
         route.tags = [*route.tags, *tags]

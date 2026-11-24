@@ -213,8 +213,9 @@ async def default_parts(
 
 def _discovery_source(settings: EngineSettings, stack: contextlib.AsyncExitStack) -> DiscoverySource:
     """Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. It
-    carries the tenant admin key only when the address is the clearinghouse's runner list (D87). Without
-    the address there is nothing to read: the engine is built, and ``start()`` refuses it (#154)."""
+    carries the tenant admin key only when the address is the clearinghouse's runner list (D87). It
+    does not ask whose key that is: the list is the same for every tenant (#165). Without the address
+    there is nothing to read: the engine is built, and ``start()`` refuses it (#154)."""
     from livepeer_builder.adapters.sdk import HttpDiscoverySource  # here: see default_parts
 
     if settings.discovery_url is None:

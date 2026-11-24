@@ -6,9 +6,15 @@ spend the wallet. A deployment that sets ``LPB_HTTP_PRIVATE_PORT`` serves two li
 - the **public listener** serves no route of the private group (404, as for any path the engine does
   not know, with a credential or without one), and refuses a clearinghouse admin credential with 403 on
   every route that takes a credential;
-- the **private listener** serves every route, to a clearinghouse admin only.
+- the **private listener** serves every route but a tenant's own routes, to a clearinghouse admin only.
 
-With one listener, which is the default, nothing changes: every route, and every kind of credential.
+Since 19 November 2026 (D87 point 3, as amended) a tenant's routes come in two forms: its own, which
+name no tenant and take a tenant admin or auditor credential, on the public listener; and the same
+routes naming the tenant, which take a clearinghouse admin credential, on the private listener. The
+private group holds the second form.
+
+With one listener, which is the default, every route is served, and each takes the kinds it takes on
+two: a tenant's own routes a tenant credential, and the paths that name a tenant a clearinghouse admin.
 
 The routes are read from each app, so a route added later is swept without editing this file: a new
 route of the private group must be 404 on the public listener, and a new route of any group must refuse
@@ -36,8 +42,10 @@ from livepeer_builder.http.work import mount_work_routes
 from livepeer_builder.testing import FakeAllocationManager
 from tests.conftest import EngineFactory, allot
 from tests.unit.test_admin_route_sweep import SAMPLE_BODIES, everything_stored, filled
+from tests.unit.test_tenant_from_credential import SHORT_PATHS
 
-TENANTS = "/v1/clearinghouse/tenants"
+OWN = "/v1/clearinghouse"  # a tenant's own routes: no tenant in the path
+TENANTS = OWN + "/tenants"
 TENANT = TENANTS + "/{tenant_id}"
 # The guide's private table (docs/design-docs/m4-guides/iss-31-payment-configurations.md, "Routes").
 PRIVATE = {
@@ -219,11 +227,14 @@ async def test_the_routes_that_take_no_credential_are_the_ones_named_here(
 async def test_the_private_listener_serves_every_route_to_a_clearinghouse_admin(
     clearinghouse: Clearinghouse,
 ) -> None:
-    """Every public route is also served on the private listener, for any tenant, and the private group
-    with them: one listener for everything a clearinghouse admin does."""
+    """Every route of one listener is served on the private listener, for any tenant, but a tenant's own
+    routes, which name no tenant and take a tenant admin's or an auditor's credential: one listener for
+    everything a clearinghouse admin does."""
     house = clearinghouse
-    assert served(house.private).keys() == served(create_app(house.engine, manage_lifecycle=False)).keys()
-    assert served(house.private).keys() > served(house.public).keys()
+    only = served(create_app(house.engine, manage_lifecycle=False)).keys()
+    public_only = served(house.public).keys() - served(house.private).keys()
+    assert public_only == SHORT_PATHS
+    assert served(house.private).keys() == only - SHORT_PATHS
     admin = house.clearinghouse_admin
     body = {"name": "acme", "amount": {"amount": "5", "currency": "USD"}, "operation_ref": "onboard-acme"}
     async with client_of(house.private) as client:
@@ -264,20 +275,26 @@ async def test_the_private_listener_refuses_every_credential_but_a_clearinghouse
         assert (await client.get(f"{TENANTS}/default/actors")).status_code == 401
 
 
-async def test_one_listener_serves_every_route_to_every_kind_of_credential(
+async def test_one_listener_serves_every_route_and_each_form_of_a_tenants_routes_to_its_own_kinds(
     clearinghouse: Clearinghouse,
 ) -> None:
-    """The default, and what self-hosted payments runs: no private listener, so nothing is refused that
-    was accepted before #167. The clearinghouse admin key does everything it did."""
+    """The default, and what self-hosted payments runs: no private listener, so every route is served.
+    The clearinghouse admin key does everything it did, at the paths that name a tenant; since 19
+    November 2026 a tenant's admin and auditor call their own routes, which name none."""
     house = clearinghouse
     only = create_app(house.engine, manage_lifecycle=False)
-    assert served(only).keys() >= PRIVATE
+    assert served(only).keys() >= PRIVATE | SHORT_PATHS
     async with client_of(only) as client:
         assert (await client.get(TENANTS, headers=house.clearinghouse_admin)).status_code == 200
         assert (await client.get("/v1/keys", headers=house.clearinghouse_admin)).status_code == 200
-        assert (await client.get(f"{TENANTS}/default/grant", headers=house.tenant_admin)).status_code == 200
-        assert (await client.get(f"{TENANTS}/default/actors", headers=house.auditor)).status_code == 200
+        named = f"{TENANTS}/default/grant"
+        assert (await client.get(named, headers=house.clearinghouse_admin)).status_code == 200
+        assert (await client.get(OWN + "/grant", headers=house.tenant_admin)).status_code == 200
+        assert (await client.get(OWN + "/actors", headers=house.auditor)).status_code == 200
         assert (await client.get("/v1/jobs", headers=house.actor)).status_code == 200
+        # and each form refuses the other's kinds
+        assert (await client.get(named, headers=house.tenant_admin)).status_code == 403
+        assert (await client.get(OWN + "/grant", headers=house.clearinghouse_admin)).status_code == 403
 
 
 async def test_a_route_an_extension_adds_takes_the_credentials_its_listener_takes(
@@ -318,13 +335,14 @@ def test_every_group_of_routes_is_given_to_a_listener() -> None:
         for name, value in vars(importlib.import_module(f"{package.__name__}.{module.name}")).items()
         if name.startswith("mount_") and callable(value) and value.__module__.endswith(module.name)
     }
-    given = {mount.__name__ for mount in (*listeners.EVERY_LISTENER, *listeners.PRIVATE_ONLY)}
-    assert not set(listeners.EVERY_LISTENER) & set(listeners.PRIVATE_ONLY)
+    sides = (listeners.EVERY_LISTENER, listeners.PUBLIC_ONLY, listeners.PRIVATE_ONLY)
+    given = {mount.__name__ for side in sides for mount in side}
+    assert sum(len(side) for side in sides) == len(given), "a group is given to two sides"
     assert groups - COMPOSERS == given, (
         f"not given to a listener: {sorted(groups - COMPOSERS - given)}. Add the group as a RouteGroup "
         "to ROUTE_GROUPS in src/livepeer_builder/http/listeners.py, with the half of the engine it "
-        "belongs to, and private=True when only a clearinghouse admin calls it, so it is never served "
-        "on the public listener."
+        'belongs to, and served_on="private" when only a clearinghouse admin calls it, so it is never '
+        'served on the public listener, or served_on="public" when only a tenant\'s own credentials do.'
     )
 
 
@@ -335,7 +353,7 @@ def test_every_group_of_routes_belongs_to_one_half_and_so_to_a_role() -> None:
     above fails for it."""
     mounts = [group.mount for group in listeners.ROUTE_GROUPS]
     assert len(mounts) == len(set(mounts)), "a group is in ROUTE_GROUPS twice"
-    assert set(mounts) == {*listeners.EVERY_LISTENER, *listeners.PRIVATE_ONLY}
+    assert set(mounts) == {*listeners.EVERY_LISTENER, *listeners.PUBLIC_ONLY, *listeners.PRIVATE_ONLY}
     halves = {"work", "clearinghouse"}
     assert {group.half for group in listeners.ROUTE_GROUPS} == halves  # neither half is empty
     roles = listeners.ROLE_HALVES
@@ -344,17 +362,27 @@ def test_every_group_of_routes_belongs_to_one_half_and_so_to_a_role() -> None:
     for group in listeners.ROUTE_GROUPS:
         serving = sorted(role for role, served_halves in roles.items() if group.half in served_halves)
         assert serving == sorted(["both", group.half]), group.mount.__name__
-    # what only a clearinghouse admin does is the clearinghouse half's: the work half has no private group
-    assert {group.half for group in listeners.ROUTE_GROUPS if group.private} == {"clearinghouse"}
+    # what only a clearinghouse admin does, and a tenant's own routes, are the clearinghouse half's: the
+    # work half serves every listener alike
+    assert {group.half for group in listeners.ROUTE_GROUPS if group.served_on != "every"} == {"clearinghouse"}
+    # one listener serves every group, and each of two serves its own side and what every listener serves
+    for group in listeners.ROUTE_GROUPS:
+        assert group.served_by("only"), group.mount.__name__
+        sides = {name for name in ("public", "private") if group.served_by(name)}
+        expected = {"public", "private"} if group.served_on == "every" else {group.served_on}
+        assert sides == expected, group.mount.__name__
 
 
 async def test_the_listeners_serve_what_the_two_sets_of_routes_mount(clearinghouse: Clearinghouse) -> None:
     """``mount_work_routes`` and ``mount_clearinghouse_routes`` are the two halves' sets. A group one of
-    them gains is on a listener, or this fails: the table in ``http/listeners.py`` names every group."""
+    them gains is on a listener, or this fails: the table in ``http/listeners.py`` names every group. One
+    listener serves them all, and the public and the private listener serve them between them."""
     sets = shared_app(clearinghouse.engine, manage_lifecycle=False)
     mount_work_routes(sets, clearinghouse.engine)
     mount_clearinghouse_routes(sets, clearinghouse.engine, deliver_allocation_keys=False)
-    assert served(clearinghouse.private).keys() == served(sets).keys()
+    only = create_app(clearinghouse.engine, manage_lifecycle=False)
+    assert served(only).keys() == served(sets).keys()
+    assert served(clearinghouse.public).keys() | served(clearinghouse.private).keys() == served(sets).keys()
 
 
 async def test_the_published_schema_says_which_routes_are_private(clearinghouse: Clearinghouse) -> None:
@@ -372,11 +400,18 @@ async def test_the_published_schema_says_which_routes_are_private(clearinghouse:
             if tag is None or tag in operation.get("tags", [])
         }
 
+    public_only = served(house.public).keys() - served(house.private).keys()
     for app in (house.private, create_app(house.engine, manage_lifecycle=False)):
         assert operations(app, listeners.PRIVATE_TAG) == private_only
         assert listeners.PRIVATE_TAG in {tag["name"] for tag in app.openapi()["tags"]}
     assert not operations(house.public, listeners.PRIVATE_TAG)
     assert not operations(house.public) & private_only
+    # and the other way round: a tenant's own routes are tagged as the public listener's alone
+    for app in (house.public, create_app(house.engine, manage_lifecycle=False)):
+        assert operations(app, listeners.PUBLIC_TAG) == public_only == SHORT_PATHS
+        assert listeners.PUBLIC_TAG in {tag["name"] for tag in app.openapi()["tags"]}
+    assert not operations(house.private, listeners.PUBLIC_TAG)
+    assert not operations(house.private) & public_only
     async with client_of(house.public) as client:  # as served: /openapi.json and the docs page read it
         assert "/v1/clearinghouse/tenants" not in (await client.get("/openapi.json")).json()["paths"]
 
@@ -421,21 +456,34 @@ class KindFromHeader:
 
 async def test_the_rule_is_by_the_kind_of_credential_whatever_verified_it(make_engine: EngineFactory) -> None:
     """A token an identity provider issued with the admin scope is a clearinghouse admin credential too
-    (``LPB_JWT_ADMIN_SCOPE``), and so is one a deployment's own authenticator makes. The listener asks
-    the kind, not where the credential came from."""
+    (``LPB_JWT_ADMIN_SCOPE``), and so is one a deployment's own authenticator makes. The listener, and
+    each form of a tenant's routes, ask the kind, not where the credential came from. A form a listener
+    does not serve is 404 there, whoever asks."""
     engine = await make_engine(supply=EngineSupply(api_keys=None, authenticators=(KindFromHeader(),)))
-    actors = f"{TENANTS}/default/actors"
+    own, named = OWN + "/actors", f"{TENANTS}/default/actors"
     expected = {
-        "public": {"clearinghouse_admin": 403, "tenant_admin": 200, "auditor": 200},
-        "private": {"clearinghouse_admin": 200, "tenant_admin": 403, "auditor": 403},
-        "only": {"clearinghouse_admin": 200, "tenant_admin": 200, "auditor": 200},
+        "public": {
+            own: {"clearinghouse_admin": 403, "tenant_admin": 200, "auditor": 200},
+            named: {"clearinghouse_admin": 404, "tenant_admin": 404, "auditor": 404},
+        },
+        "private": {
+            own: {"clearinghouse_admin": 404, "tenant_admin": 404, "auditor": 404},
+            named: {"clearinghouse_admin": 200, "tenant_admin": 403, "auditor": 403},
+        },
+        "only": {
+            own: {"clearinghouse_admin": 403, "tenant_admin": 200, "auditor": 200},
+            named: {"clearinghouse_admin": 200, "tenant_admin": 403, "auditor": 403},
+        },
     }
-    for listener, answers in expected.items():
+    for listener, paths in expected.items():
         app = create_app(engine, manage_lifecycle=False, listener=listener)  # type: ignore[arg-type]
         async with client_of(app) as client:
-            got = {kind: (await client.get(actors, headers={"x-kind": kind})).status_code for kind in answers}
-            assert got == answers, listener
-            assert (await client.get(actors)).status_code == 401
+            for path, answers in paths.items():
+                got = {
+                    kind: (await client.get(path, headers={"x-kind": kind})).status_code for kind in answers
+                }
+                assert got == answers, (listener, path)
+                assert (await client.get(path)).status_code in (401, 404)
 
 
 async def test_no_listener_hands_an_allocations_key_to_the_caller_or_serves_a_signer_path(
@@ -443,24 +491,30 @@ async def test_no_listener_hands_an_allocations_key_to_the_caller_or_serves_a_si
 ) -> None:
     """Every listener's app keeps each allocation's key with the engine (``deliver_allocation_keys`` is
     false in ``http/listeners.py``): the engine behind a listener runs jobs. So allotment and payment key
-    rotation answer the allocation alone, on the public listener, on the private one and with one
-    listener. Handing keys to the caller is the clearinghouse role's (#169). And a clearinghouse serves
-    no signer path, so no listener has one."""
+    rotation answer the allocation alone, in both forms of a tenant's routes: a tenant admin's own, on
+    the public listener and with one listener, and the ones a clearinghouse admin names the tenant in,
+    on the private listener and with one listener. Handing keys to the caller is the clearinghouse
+    role's (#169). And a clearinghouse serves no signer path, so no listener has one."""
     house = clearinghouse
+    only = create_app(house.engine, manage_lifecycle=False)
+    own, named = OWN + "/actors/{}/allocation", TENANTS + "/default/actors/{}/allocation"
     callers = {
-        "only": (create_app(house.engine, manage_lifecycle=False), house.clearinghouse_admin),
-        "public": (house.public, house.tenant_admin),
-        "private": (house.private, house.clearinghouse_admin),
+        "only-own": (only, house.tenant_admin, own),
+        "only-named": (only, house.clearinghouse_admin, named),
+        "public": (house.public, house.tenant_admin, own),
+        "private": (house.private, house.clearinghouse_admin, named),
     }
-    for name, (app, headers) in callers.items():
-        allocation = f"{TENANTS}/default/actors/on-{name}/allocation"
+    for name, (app, headers, path) in callers.items():
+        allocation = path.format(f"on-{name}")
         allot = {"amount": {"amount": "1", "currency": "USD"}, "operation_ref": f"allot-on-{name}"}
         rotate = {"operation_ref": f"rotate-on-{name}"}
         async with client_of(app) as client:
             allotted = await client.post(allocation, json=allot, headers=headers)
             rotated = await client.post(f"{allocation}/rotate-payment-key", json=rotate, headers=headers)
-            for path in ("/sign-orchestrator-info", "/generate-live-payment"):
-                assert (await client.post(path, content=b"{}", headers=headers)).status_code == 404, name
+            for signer_path in ("/sign-orchestrator-info", "/generate-live-payment"):
+                assert (await client.post(signer_path, content=b"{}", headers=headers)).status_code == 404, (
+                    name
+                )
         assert (allotted.status_code, rotated.status_code) == (201, 200), (name, allotted.text, rotated.text)
         for answer in (allotted.json(), rotated.json()):
             assert "allocation_api_key" not in answer, name

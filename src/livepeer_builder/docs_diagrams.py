@@ -74,6 +74,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "AllocationManager": (BatteriesClient, ClearinghouseAllocations),
     "AllocationsByActor": (ClearinghouseAllocations,),
     "OneKeyPerAllocation": (ClearinghouseAllocations,),
+    "ReadyBeforeCommands": (ClearinghouseAllocations,),
     "UsageSource": (BatteriesUsageSource, ClearinghouseUsage),
     "TenantUsageSource": (BatteriesUsageSource,),
     "EscrowSource": (BatteriesClient,),

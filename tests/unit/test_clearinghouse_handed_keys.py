@@ -305,8 +305,9 @@ async def test_a_lost_allotment_is_put_right_by_revoking_it_at_the_clearinghouse
     with pytest.raises(ProviderOutcomeUnknown):
         await allot(ports)
     lost_allocation = next(iter(ports.provider.allocations))
-    client = ports.manager._wire._client  # type: ignore[attr-defined]
-    revoke = f"http://clearinghouse.test/v1/clearinghouse/tenants/{ports.tenant_id}{ALLOCATION}/revoke"
+    assert ports.wire is not None
+    client = ports.wire._client
+    revoke = f"http://clearinghouse.test/v1/clearinghouse{ALLOCATION}/revoke"  # the tenant's own route
     answer = await client.post(revoke, headers={"Authorization": f"Bearer {ports.token}"})
     assert answer.status_code == 200 and answer.json()["status"] == "revoked"
     assert ports.provider.unallocated(ports.tenant_id) == 100  # what was allotted is back in the grant

@@ -16,7 +16,11 @@
   [the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md) says which still
   stand. The proofs through a clearinghouse were run again on 23 November 2026, on the direct-signer
   path, from the runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook):
-  [the evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md).
+  [the evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md). The amendment
+  of D87 point 3 of 19 November (a tenant's routes from the credential) is built and in review
+  ([#185](https://github.com/NE-Build-Track/livepeer-builder-core/pull/185)), on top of P8. Those proofs
+  ran before it, on the paths that name a tenant: the runbook's commands are rewritten for the two
+  forms of a tenant's routes and have not been run in that form.
 
 ## Goal
 
@@ -67,6 +71,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
   [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it. Built and in
   review: [#183](https://github.com/NE-Build-Track/livepeer-builder-core/pull/183).
+- [ ] **A tenant's routes from the credential (#165, #166; D87 point 3 as amended on 19 November 2026).**
+  Built and in review: [#185](https://github.com/NE-Build-Track/livepeer-builder-core/pull/185).
 
 Each pull request ticks its own line here in the same change.
 
@@ -146,6 +152,24 @@ Each pull request ticks its own line here in the same change.
   listener without the guide's proxy (T43), and the enterprise project allots through the embedded
   API, because an engine server in its `work` role serves no route that allots (T41). Source: D84, D87
   and the guide's table of roles; the rest for Mike's review.
+- **19 November 2026, a tenant's routes from the credential.** Mike accepted the reviewer's comment on
+  #175 and amended D87 point 3: on the public listener a tenant's routes name no tenant and take it from
+  a tenant admin's or an auditor's credential; the clearinghouse admin names the tenant, at the paths
+  under `/v1/clearinghouse/tenants/{tenant_id}`, on the private listener; one listener serves both. One
+  rule holds on every listener, so the policy's check of a tenant in a path has nothing left to refuse
+  at the routes; it still guards the embedded API and a body under `/v1/keys`. Both forms call the same
+  service, and no service rule changed. The remote adapters and `lpb payments check` call the paths that
+  name no tenant, with the tenant admin key, and `LPB_CLEARINGHOUSE_TENANT_ID` stays (T38). Built where
+  the decision is silent: an actor or a service credential is refused on both forms, as the policy
+  refused it before; an auditor still reads the tenant's keys; the runner list is a group of its own,
+  served on every listener as before; the adapters refuse a command about another tenant than
+  `LPB_CLEARINGHOUSE_TENANT_ID` before anything is sent, with the `ProviderError` 403 the
+  clearinghouse's own refusal was; `lpb payments check` names `LPB_CLEARINGHOUSE_TOKEN` for a 403, and
+  `LPB_CLEARINGHOUSE_TENANT_ID` when the key's grant is another tenant's; two of the new paths had been
+  retired, `/v1/clearinghouse/keys` (an engine's own keys until #164) and `GET /v1/clearinghouse/actors`
+  (the actor list with the tenant in its query until #165), and now serve a tenant's own; the
+  published schema tags a tenant's own routes `public listener`. Source: Mike (the decision, as dated
+  notes on #165 and #166); the rest for his review.
 - **23 November 2026, D87 point 1.** A resumed allotment or rotation hands the key over whenever
   Batteries returns it again: Batteries replays the original success, the secret included, for a
   matching idempotency key, and never expires it. A repeat of a finished command answers without the key
@@ -220,3 +244,59 @@ Each pull request ticks its own line here in the same change.
   project had rebuilt the shared image; the helper now runs with `--no-deps`. The proof of the `both`
   role was not run again.
   [The evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md).
+- **23 November 2026, a tenant's routes from the credential, carried forward.** The direct-signer
+  design and the roles are merged into this change's branch, and the two forms of a tenant's routes
+  follow them. An allotment and a rotation hand the allocation's key over in both forms on an engine in
+  its `clearinghouse` role: to the tenant's admin at the path that names no tenant, and to the
+  clearinghouse admin at the path that names the tenant, since that engine stores no key and an answer
+  without it would leave the key with nobody. In the `both` role both forms store the key and answer
+  none. The listener table says which groups allot (`allots`), and each of them is handed
+  `deliver_allocation_keys`. The `clearinghouse` role's published schema is its two listeners' put
+  together, because neither serves every route of the role now. The signer's two paths are no group of
+  the table. D87 point 3 is one text for both of Mike's amendments of 19 November. Source: Mike's
+  amendments (D85 point 1, D87 points 1 and 3); what the decisions are silent on is for his review.
+- **23 November 2026, a tenant's routes from the credential: whose key the engine holds.** The four
+  review threads of #185 are one finding. With no tenant in a path the clearinghouse no longer compares
+  the tenant an engine means with the key it sends, and the engine compared only the id a caller passes
+  with `LPB_CLEARINGHOUSE_TENANT_ID`. A key of another tenant was answered for that tenant: the engine
+  allotted from its grant, stored the keys of its allocations, answered a revoke of its own actor as
+  done without revoking anything, and synced its usage as its own costs. Built: every request of the remote
+  adapters goes through `TenantWire`. It reads the key's grant before the first request of a process,
+  and another tenant than the setting's is a refusal (403) of whatever was asked, with nothing sent; it
+  reads the tenant every answer states, and another tenant after a command is a `ProviderError` with
+  the answer's 2xx, as #182 chose for a command applied to another allocation, with nothing saved and a
+  handed key dropped. The discovery reader asked the same question before it read the clearinghouse's
+  runner list, until 24 November (below). The read is made at the first request and not at start, so an engine still starts with
+  its clearinghouse unreachable. `lpb payments check` fails the grant probe and the usage probe for
+  such a key. Source: the review of #185; the choices are for Mike's review.
+- **24 November 2026, a tenant's routes from the credential: the runner list and a command under way.**
+  Two points of John's review of `7bde160`, both accepted by Mike. (1) The discovery reader no longer
+  asks whose key it carries: the runner list is the same for every tenant, so a wrong key withheld
+  nothing but the catalog, and each first refresh spent a grant read inside its deadline. The reader
+  sends the key and reads no grant. (2) A command confirmed the key before each of its calls, so one
+  that was under way when another request was answered for another tenant went on as soon as a third
+  request had read the grant again: a top-up sent its payment. A command now goes by a count of such
+  answers taken when it was made ready, compares it before each call, and stops for good when it has
+  moved: a refusal (403, the reference freed) before it sent a write, an unknown outcome
+  (`ProviderOutcomeUnknown`, the reference kept) after one. It reads no grant inside its record's
+  budget. Source: the review of #185.
+- **23 November 2026, a tenant's routes from the credential: the tenant read and the ledger's budget.**
+  The second review of #185 found that the read of the key's grant, made inside the first command of a
+  process, was a fourth clearinghouse call in a budget sized for three: a first top-up wrote at its
+  third call, and an overtaken first rotation was cut short at the read that decides which key the
+  engine keeps. Built: the payments service asks the allocation manager to be ready before it begins a
+  command's record (the optional protocol `ReadyBeforeCommands`, which the remote manager has and
+  Batteries' client does not), so the read is made before the ledger's clock starts and before the
+  reference is claimed. A wrong tenant or an unreachable clearinghouse there leaves no record. The
+  six-timeouts rule, its three-call argument and the 20-second default stand as Mike confirmed them;
+  `config.py` is not touched. Built where the finding is silent: the repeat of a finished command is
+  made ready too, so in a process that has not yet read the grant it costs one read and fails while the
+  clearinghouse is unreachable; a manager called through the port alone still reads the grant itself.
+  Source: the review of #185; the choices are for Mike's review.
+- **23 November 2026, a tenant's routes from the credential, the runbook.** The paid proofs of 23
+  November were run on P8's branch, where a tenant's admin called the paths that name its tenant on the
+  public listener, and the evidence records those paths. Here every command of the runbook uses the
+  form its listener serves: a tenant's own routes on the public listener, and the paths that name a
+  tenant on the private one, with `--no-deps` on the private listener's curl as before. The rewritten
+  commands follow the routes the unit tests pin and have not been run against a stack. Whether the
+  proofs are run once more on these paths is for Mike.

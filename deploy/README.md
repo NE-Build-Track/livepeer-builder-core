@@ -62,8 +62,8 @@ copy from, not a service: see [Limits](#limits).
   Batteries' Kafka and webhook listen on that namespace's loopback. Putting that namespace on the edge
   network would publish Batteries' management API too. So `signer-relay`, a TCP relay, forwards one port
   to the signer, `8937`, and is the only thing of that pair on the edge network.
-- **What crosses the edge network.** To the engine: the tenant's routes (allotment, the allowance,
-  usage) and the runner list. To the signer: the two signing calls. A prompt or a result crosses to
+- **What crosses the edge network.** To the engine: the tenant's own routes (allotment, the allowance,
+  usage), which name no tenant, and the runner list. To the signer: the two signing calls. A prompt or a result crosses to
   neither: the enterprise's engine sends each job straight to an orchestrator.
 - **The private listener is on the clearinghouse engine's own loopback.** No network reaches it, the
   enterprise project included. The clearinghouse admin reaches it with the `private` service, a curl
@@ -125,10 +125,14 @@ published signer itself:
 - **(c)** an engine in its `both` role still runs a paid job by itself.
 
 Proofs (a) and (b) were run from this runbook on 23 November 2026:
-[the evidence](../docs/references/evidence/2026-11-23-payment-clearinghouse-proofs.md). An earlier run,
-on 19 November, used a design that was withdrawn the same day, in which the clearinghouse's engine
-signed for the enterprise's. Proof (c) did not use that path and stands as it was run then. What of that
-run stands is at the top of
+[the evidence](../docs/references/evidence/2026-11-23-payment-clearinghouse-proofs.md). That run was
+made before a tenant's routes took the tenant from the credential (#165): a tenant's admin then called
+the paths that name its tenant on the public listener, and the evidence records those paths. The
+commands below are rewritten for the routes as they are now, a tenant's own routes on the public
+listener and the paths that name a tenant on the private one, and have not been run in this form. An
+earlier run, on 19 November, used a design that was withdrawn the same day, in which the clearinghouse's
+engine signed for the enterprise's. Proof (c) did not use that path and stands as it was run then. What
+of that run stands is at the top of
 [its record](../docs/references/evidence/2026-11-19-payment-clearinghouse-proofs.md).
 
 **Money.** Only a job moves money: each paid job sends the orchestrator payment tickets from the
@@ -173,7 +177,8 @@ ch()  { docker compose -f "$D/clearinghouse/compose.yaml" "$@"; }   # the cleari
 ent() { docker compose -f "$D/enterprise/compose.yaml" "$@"; }      # the enterprise project
 CS=$D/clearinghouse/secrets ES=$D/enterprise/secrets
 PUBLIC=http://127.0.0.1:8180 SIGNER=http://127.0.0.1:8137 WORK=http://127.0.0.1:8280
-TENANTS=/v1/clearinghouse/tenants
+OWN=/v1/clearinghouse                 # a tenant's own routes, on the public listener: they name no tenant
+TENANTS=/v1/clearinghouse/tenants     # the clearinghouse admin's, on the private listener: they name one
 
 # curl on the private listener. --no-deps: it never starts or recreates the engine it is run beside
 private() { ch --progress quiet run --rm --no-deps -T private "$@"; }
@@ -271,15 +276,16 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat $CS/ad
 Costs nothing. Check: two tenants, each with `total` and `unallocated` of `GRANT` and `spent` of 0. In a
 new shell, set `ONE` and `TWO` again with the line above.
 
-Tenant two allots its actor itself, on the public listener, with its own admin key. The answer hands
-the allocation's key to the caller, once. This proof does not use that key, so the command reads the
-answer and drops the key:
+Tenant two allots its actor itself, on the public listener, with its own admin key. Its routes there
+name no tenant: the clearinghouse takes the tenant from the key. The answer hands the allocation's key
+to the caller, once. This proof does not use that key, so the command reads the answer and drops the
+key:
 
 ```sh
 allot_bob() {
   tenant two -H 'Content-Type: application/json' \
     -d "{\"amount\":{\"amount\":\"$ALLOT\",\"currency\":\"USD\"},\"operation_ref\":\"proof-allot-bob\"}" \
-    $PUBLIC$TENANTS/$TWO/actors/bob/allocation \
+    $PUBLIC$OWN/actors/bob/allocation \
     | jq '{allocation_id, status, credential_custody, handed_a_key: (.allocation_api_key != null), replayed}'
 }
 allot_bob            # "active", "work_engine", handed_a_key true, replayed false
@@ -301,7 +307,7 @@ ent up -d --build
 ent exec -T engine lpb payments check                       # role work; exit 0
 curl -s $WORK/readyz | jq '{role, ready}'                   # "work", true
 curl -s $WORK/v1/offerings | jq 'map({app, rate_low, rate_high, stale})'   # the clearinghouse's runner list
-curl -s -o /dev/null -w '%{http_code}\n' $WORK$TENANTS/$ONE/grant           # 404: no clearinghouse route
+curl -s -o /dev/null -w '%{http_code}\n' $WORK$OWN/grant                    # 404: no clearinghouse route
 
 mkdir -p $ES
 ent exec -T engine lpb bootstrap-admin | jq -r '.token // empty' | keep $ES/admin-key
@@ -314,7 +320,7 @@ issue alice
 ent exec -T engine python /opt/enterprise/allot.py alice $ALLOT proof-allot-alice
 stored ent           # secrets stored: 1, and [('alice', 'secret_store')]
 stored ch            # secrets stored: 0, and [('alice', 'work_engine'), ('bob', 'work_engine')]
-tenant one $PUBLIC$TENANTS/$ONE/actors/alice/allocation | jq '{status, credential_custody, allowance}'
+tenant one $PUBLIC$OWN/actors/alice/allocation | jq '{status, credential_custody, allowance}'
 ```
 
 Costs nothing. Check:
@@ -350,19 +356,26 @@ actor alice $WORK/v1/jobs/$JOB | jq '{state, failure, attempts: [.attempts[] | {
 curl -sS -X POST -H "Authorization: Bearer $(cat $ES/admin-key)" $WORK/v1/costs/sync | jq
 actor alice $WORK/v1/jobs/$JOB/cost | jq '{status, fees, billable}'           # observed, with the fee
 actor alice $WORK/v1/allowance | jq                                           # spent is the fee
-tenant one $PUBLIC$TENANTS/$ONE/usage | jq '.items | length'                  # 1: tenant one's payment
-tenant two $PUBLIC$TENANTS/$TWO/usage | jq '.items | length'                  # 0: tenant two is untouched
-tenant two $PUBLIC$TENANTS/$TWO/actors/bob/allocation | jq .allowance         # spent 0
+tenant one $PUBLIC$OWN/usage | jq '.items | length'                           # 1: tenant one's payment
+tenant two $PUBLIC$OWN/usage | jq '.items | length'                           # 0: tenant two is untouched
+tenant two $PUBLIC$OWN/actors/bob/allocation | jq .allowance                  # spent 0
 admin http://127.0.0.1:8081$TENANTS | jq 'map({name, spent})'                 # one: the fee; two: 0
+admin http://127.0.0.1:8081$TENANTS/$TWO/actors/bob/allocation | jq .allowance   # the admin names the tenant
 admin http://127.0.0.1:8081/v1/clearinghouse/wallet | jq                     # the wallet after the job
 
-# tenant one's admin on tenant two: 403 on each
+# tenant one's key reads tenant one, and has no bob: its routes name no tenant, so they reach no other
+tenant one $PUBLIC$OWN/grant | jq -r .tenant_id                               # tenant one's id
+tenant one -o /dev/null -w '%{http_code}\n' $PUBLIC$OWN/actors/bob/allocation   # 404
+# no path that names a tenant is on the public listener: 404 on each, tenant two's or tenant one's own
 for path in grant actors usage actors/bob/allocation keys; do
   tenant one -o /dev/null -w "$path %{http_code}\n" $PUBLIC$TENANTS/$TWO/$path
 done
+# on the private listener those paths are the clearinghouse admin's: tenant one's key is 403 there
+private -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat $CS/tenant-one-key)" \
+  http://127.0.0.1:8081$TENANTS/$TWO/grant
 # and the clearinghouse admin's key does nothing on the public listener: 403
 curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat $CS/admin-key)" \
-  $PUBLIC$TENANTS/$ONE/grant
+  $PUBLIC$OWN/grant
 ```
 
 Costs nothing more. **What shows the payment was signed at the published signer by the enterprise's
@@ -400,7 +413,7 @@ actor carol -D $ES/empty-headers -o $ES/empty-result -w '%{http_code}\n' \
   -H 'Content-Type: application/json' -d "$FIXED_JOB" $WORK/v1/jobs              # 402
 JOB=$(grep -i '^livepeer-job-id:' $ES/empty-headers | tr -d '\r' | cut -d' ' -f2)
 actor carol $WORK/v1/jobs/$JOB | jq '{state, failure: (.failure | {kind, reason, status_code, payment_sent})}'
-tenant one $PUBLIC$TENANTS/$ONE/usage | jq '.items | length'                    # as after step 5
+tenant one $PUBLIC$OWN/usage | jq '.items | length'                             # as after step 5
 ```
 
 **Costs nothing:** the signer signs nothing, so no ticket is sent. Check: the answer is `402`; the job is

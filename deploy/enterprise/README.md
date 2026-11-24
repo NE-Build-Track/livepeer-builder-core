@@ -65,8 +65,13 @@ curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json'
 ```
 
 - **Every actor is in the tenant.** The `tenant_id` of each access key this engine issues is the
-  tenant's id at the clearinghouse (`LPB_CLEARINGHOUSE_TENANT_ID`): an actor in another tenant is
-  refused there ([payments.md](../../docs/contracts/payments.md#who-the-engine-is-at-the-clearinghouse)).
+  tenant's id at the clearinghouse (`LPB_CLEARINGHOUSE_TENANT_ID`). The routes this engine calls there
+  name no tenant: the clearinghouse takes it from the tenant admin key. So an actor in another tenant is
+  refused by this engine, before anything is sent
+  ([payments.md](../../docs/contracts/payments.md#who-the-engine-is-at-the-clearinghouse)). The key
+  and the id must be one tenant's: the engine reads whose key it holds before its first request and
+  refuses every request to the clearinghouse when it is another tenant's, and `lpb payments check`
+  fails and says so.
 - **Allotting is `allot.py`.** An engine in its `work` role serves no route that allots: the allocation
   routes are the clearinghouse half's. `allot.py` calls `engine.payments.allot` in the engine's own
   container, which takes the amount from the tenant's grant at the clearinghouse and stores the key the

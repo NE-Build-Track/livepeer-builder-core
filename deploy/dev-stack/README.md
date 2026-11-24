@@ -71,7 +71,9 @@ curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json'
 
 A tenant's id is its grant's id, so the allotment names no grant: it is allotted from the grant of the
 tenant in the path ([payments.md](../../docs/contracts/payments.md#tenants)). Onboarding answers with the
-tenant's first admin key too, shown once: the tenant's own admin allots with it, for that tenant only.
+tenant's first admin key too, shown once: the tenant's own admin allots with it, for that tenant only, at
+`/v1/clearinghouse/actors/alice/allocation`, which names no tenant: the tenant is the key's. The path
+that names the tenant is the clearinghouse admin's, and refuses the tenant's key.
 `GET /v1/clearinghouse/tenants` lists the tenants with each grant's balance. A grant created with the
 Batteries CLI (`grant create`) is a tenant as well: its id is the tenant's id.
 

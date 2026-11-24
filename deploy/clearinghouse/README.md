@@ -10,7 +10,7 @@ livepeer/clearinghouse-batteries, whose own binary and config keys say `clearing
 
 | Service | What it is | Reached by |
 | --- | --- | --- |
-| `engine` | This repository, served with `lpb serve`, with `LPB_ROLE=clearinghouse`. Its **public listener** (`:8080`) serves a tenant's own routes and the runner list. Its **private listener** (`127.0.0.1:8081` in its own container) also serves what only a clearinghouse admin does: onboarding, the tenant list, a grant's top-up, a tenant's status and the wallet report. It serves no job route, runs no job, signs nothing and stores no allocation's key: allotment and rotation hand each key to the caller once | The host, at `127.0.0.1:8180` (the public listener). An enterprise project, at `http://clearinghouse:8080` on the network `lpb-clearinghouse-edge` |
+| `engine` | This repository, served with `lpb serve`, with `LPB_ROLE=clearinghouse`. Its **public listener** (`:8080`) serves a tenant's own routes, which name no tenant and take it from the tenant admin or auditor key, and the runner list. Its **private listener** (`127.0.0.1:8081` in its own container) serves what a clearinghouse admin does: the same tenant's routes at paths that name the tenant (`/v1/clearinghouse/tenants/{tenant_id}/...`), onboarding, the tenant list, a grant's top-up, a tenant's status and the wallet report, with the runner list. It serves no job route, runs no job, signs nothing and stores no allocation's key: allotment and rotation hand each key to the caller once | The host, at `127.0.0.1:8180` (the public listener). An enterprise project, at `http://clearinghouse:8080` on the network `lpb-clearinghouse-edge` |
 | `batteries` | Clearinghouse Batteries v0.0.3 (`03bc9fb`): the authorization webhook, the management API, embedded Kafka, accounting, and its on-chain listener (`--enable-onchain-listener`), which reports the wallet's deposit and reserve | The engine, on the `inside` network, and the signer, on its loopback. Published nowhere |
 | `signer` | livepeer/node `eee09c4` remote signer (v1.0.7), in the `batteries` network namespace. It signs with the wallet's key, and asks Batteries' authorization webhook before every payment | Enterprise engines, through `signer-relay`. The engine, at `http://batteries:8937`, for the wallet report only. Its metrics and readiness port (`8938`) is on loopback |
 | `signer-relay` | `alpine/socat`, named by its digest: a TCP relay of the signer's port `8937`, and of nothing else. It runs as an unprivileged user with a read-only file system | The host, at `127.0.0.1:8137`. An enterprise project, at `http://signer:8937` on the network `lpb-clearinghouse-edge` |
@@ -87,12 +87,15 @@ private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse
 private -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"name":"Acme","amount":{"amount":"5","currency":"USD"},"operation_ref":"onboard-acme"}' \
   http://127.0.0.1:8081/v1/clearinghouse/tenants            # onboards a tenant: its id and its admin key
+private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse/tenants/$TENANT/actors
+                                                            # one tenant's actors: the path names it
 curl -s http://127.0.0.1:8180/readyz                        # the public listener; "role": "clearinghouse"
 ```
 
 - **A clearinghouse admin key does nothing on the public listener** (403), and the routes above are 404
   there ([access.md](../../docs/contracts/access.md#listeners)). A tenant's admin and its engine use the
-  public listener, and are refused on the private one.
+  public listener, at paths that name no tenant (`/v1/clearinghouse/grant`, `/v1/clearinghouse/usage`,
+  `/v1/clearinghouse/actors/...`, `/v1/clearinghouse/keys/...`), and are refused on the private one.
 - **Hand a tenant four things:** the public listener's address, the signer's address, the tenant's id
   and its tenant admin key (`LPB_CLEARINGHOUSE_URL`, `LPB_SIGNER_URL`, `LPB_CLEARINGHOUSE_TENANT_ID` and
   `LPB_CLEARINGHOUSE_TOKEN` in its engine). Its engine holds nothing else of this project until it

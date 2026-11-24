@@ -87,10 +87,12 @@ See [contracts/access.md](contracts/access.md#boundaries).
   admin only, on the private listener ([access.md](contracts/access.md#listeners)). An engine that uses
   a clearinghouse refuses a command about another tenant than its own before it sends anything, since
   the clearinghouse would apply it to the key's tenant. It also reads whose key it holds before its
-  first request, and refuses every payment request when `LPB_CLEARINGHOUSE_TOKEN` belongs to another
-  tenant than `LPB_CLEARINGHOUSE_TENANT_ID`: no allotment, no stored key and no usage row comes from
-  the wrong tenant, and a command that is under way when the key comes into question sends nothing
-  more. The runner list, which is the same for every tenant, is read with whatever key the engine has
+  first request, and refuses every request it would send with `LPB_CLEARINGHOUSE_TOKEN` when that key
+  belongs to another tenant than `LPB_CLEARINGHOUSE_TENANT_ID`: no allotment, no stored key and no
+  usage row comes from the wrong tenant, and a command that is under way when the key comes into
+  question sends nothing more. The runner list, which is the same for every tenant, is read with
+  whatever key the engine has. This check stops no job: a job sends that key nowhere, and pays at the
+  signer with the allocation key stored when its actor was allotted
   ([payments.md](contracts/payments.md#who-the-engine-is-at-the-clearinghouse)).
 - **The private listener (D84, #167):** a clearinghouse admin key can onboard tenants and top up grants,
   so a leaked one could spend the wallet. A deployment that sets `LPB_HTTP_PRIVATE_PORT` serves what

@@ -1511,9 +1511,14 @@ all of it under its own tenant. So:
   refusal's words, and a cost that was `pending` stays so.
 - **The clearinghouse's runner list is read with whatever key the engine has.** It is the same list for
   every tenant, so the discovery reader sends the key, which the route needs, and does not ask whose it
-  is: a refresh reads no grant and spends none of its deadline on one. An engine with another tenant's
-  key therefore has a catalog, and every paid job fails where it pays: its actors' allocations cannot
-  be read or allotted.
+  is: a refresh reads no grant and spends none of its deadline on one.
+- **The check of the key is no switch that stops jobs.** A job calls no route of the clearinghouse: it
+  pays at the signer with the allocation key the engine stored when the actor was allotted, and it
+  never sends `LPB_CLEARINGHOUSE_TOKEN`. With another tenant's admin key the engine has a catalog, and
+  an actor that was allotted before still runs paid jobs, on its own allocation. What that key cannot
+  do is the tenant admin's traffic, which is all the check holds: allot, rotate, top up, change a
+  status, revoke, read an allowance or the grant, and sync usage. An engine that never held its own
+  tenant's key has allotted nobody, so it has no key to pay with.
 - **Every answer that states a tenant is read too:** each allocation answer and the grant. Another
   tenant after a read is the same refusal. After a command, the clearinghouse has applied it at the
   other tenant, so it is no refusal: a `ProviderError` with the answer's 2xx (502 over REST), as for a

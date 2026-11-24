@@ -8,6 +8,7 @@ the same thing against the engine.
 import asyncio
 import hashlib
 import json
+import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
@@ -42,6 +43,7 @@ from livepeer_builder.testing import (
     make_engine,
     runner,
 )
+from livepeer_builder.utils import utc
 
 APP, OTHER, NONE = "example/echo", "example/other", "example/nobody"  # no runner serves NONE
 ALICE = ActorContext(
@@ -294,6 +296,48 @@ async def test_a_default_summary_window_reads_an_end_whose_tzinfo_names_no_offse
         with pytest.raises(InvalidRequest, match="end: must be 0001-01-31T00:00:00Z or later"):
             await engine.costs.summary(ALICE, None, datetime(1, 1, 15, tzinfo=NoOffset()))
     assert late.end - late.start == timedelta(days=30)
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="changing the process timezone requires Unix tzset")
+@pytest.mark.parametrize("given", ["end alone", "start and end"])
+async def test_a_window_whose_tzinfo_names_no_offset_is_utc_on_a_host_in_another_zone(
+    side: Side, monkeypatch: pytest.MonkeyPatch, given: str
+) -> None:
+    """A datetime whose ``tzinfo`` names no offset is naive to Python, and a time with no offset is UTC
+    here (T25). Told apart by ``tzinfo is None``, such a bound was read in the host's own zone: five hours
+    behind UTC, a window meant to end an hour before a job reached four hours past it, and the job's cost
+    was in the summary (John, #187 review). Both bounds are checked, by a job on each side of each."""
+    monkeypatch.setenv("TZ", "EST5")  # five hours behind UTC, all year
+    time.tzset()
+    try:
+        async with side() as engine:
+            ran = await engine.jobs.run(ALICE, JobRequest(app=APP))
+            created = utc(ran.job.created_at)
+
+            def wall(instant: datetime) -> datetime:
+                """``instant``'s UTC wall time, carried by a ``tzinfo`` that names no offset."""
+                return instant.replace(tzinfo=NoOffset())
+
+            early = None if given == "end alone" else wall(created - timedelta(hours=2))
+            ends_before = await engine.costs.summary(ALICE, early, wall(created - timedelta(hours=1)))
+            ends_after = await engine.costs.summary(ALICE, early, wall(created + timedelta(hours=1)))
+            starts_after = await engine.costs.summary(
+                ALICE, wall(created + timedelta(minutes=1)), wall(created + timedelta(hours=1))
+            )
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+    assert ends_before.jobs_pending == 0, "a window that ended before the job holds it"
+    assert ends_after.jobs_pending == 1
+    assert starts_after.jobs_pending == 0, "a window that started after the job holds it"
+    if given == "end alone":
+        assert utc(ends_after.end) - utc(ends_after.start) == timedelta(days=30)
+
+
+def test_a_time_with_no_offset_is_utc_whatever_tzinfo_it_carries() -> None:
+    noon = datetime(2026, 11, 23, 12)
+    assert utc(noon) == utc(noon.replace(tzinfo=NoOffset())) == datetime(2026, 11, 23, 12, tzinfo=UTC)
+    assert utc(noon.replace(tzinfo=timezone(timedelta(hours=-5)))) == datetime(2026, 11, 23, 17, tzinfo=UTC)
 
 
 async def test_the_summary_counts_the_jobs_run_by_class_and_by_app(side: Side) -> None:

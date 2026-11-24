@@ -37,7 +37,9 @@ services:
     volumes:
       - paid-state:/data
       - ./config/batteries.toml:/etc/batteries.toml:ro
-      - ./secrets:/run/secrets:ro
+      # Of secrets/, only the two files Batteries reads: its credential registry and its RPC address.
+      - {type: bind, source: ./secrets/batteries.toml, target: /run/secrets/batteries.toml, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./secrets/rpc-url, target: /run/secrets/rpc-url, read_only: true, bind: {create_host_path: false}}
     networks: [inside]
     healthcheck:
       test: [CMD, curl, -fsS, http://127.0.0.1:8081/readyz]
@@ -65,7 +67,14 @@ services:
     volumes:
       - paid-state:/data
       - ./config/signer.toml:/etc/signer.toml:ro
-      - ./secrets:/run/secrets:ro
+      # Of secrets/, only the five files config/signer.toml names. The signer answers the internet
+      # through the relay: it is given no Batteries credential and none of the keys the runbook keeps
+      # in that folder (the clearinghouse admin's and each tenant admin's).
+      - {type: bind, source: ./secrets/rpc-url, target: /run/secrets/rpc-url, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./secrets/webhook-url, target: /run/secrets/webhook-url, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./secrets/webhook-headers, target: /run/secrets/webhook-headers, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./secrets/kafka-username, target: /run/secrets/kafka-username, read_only: true, bind: {create_host_path: false}}
+      - {type: bind, source: ./secrets/kafka-password, target: /run/secrets/kafka-password, read_only: true, bind: {create_host_path: false}}
       # The wallet's key folder, read-only, from wherever it is kept: nothing is copied into this project.
       - type: bind
         source: ${WALLET_KEY_DIR:?set WALLET_KEY_DIR in .env to the folder that holds the wallet key and its password file}

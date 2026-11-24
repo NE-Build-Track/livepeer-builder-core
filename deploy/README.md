@@ -80,6 +80,12 @@ copy from, not a service: see [Limits](#limits).
 Nothing real is committed. Each project's `.env`, the clearinghouse's `secrets/` and its
 `config/discovery.toml` are git-ignored, and they are kept out of the engine image's build context.
 
+No container is given `clearinghouse/secrets/` as a folder. Each service is given the files its own
+configuration names, each mounted by itself and read-only: Batteries its credential registry and the RPC
+address, the signer the RPC address and its webhook and Kafka files. The signer answers the internet
+through the relay, and it is given no Batteries credential. The keys the runbook saves in that folder,
+the clearinghouse admin's and each tenant admin's, reach no container at all.
+
 | What | Where it comes from | Committed stand-in |
 | --- | --- | --- |
 | The wallet's key file and its password file | The folder `WALLET_KEY_DIR` names, mounted read-only into the signer; the two file names are `WALLET_KEYSTORE_FILE` and `WALLET_PASSWORD_FILE`. Nothing is copied: the signer reads the password from its own memory, without the newline a password file usually ends in | Placeholders in `clearinghouse/.env.example` |
@@ -87,6 +93,7 @@ Nothing real is committed. Each project's `.env`, the clearinghouse's `secrets/`
 | The RPC address | `clearinghouse/secrets/rpc-url` (mode 0600, no trailing newline). The signer and Batteries' on-chain listener read it | None |
 | The orchestrators' addresses | `clearinghouse/config/discovery.toml` | `config/discovery.example.toml`, which names `orchestrator.example` |
 | Batteries' credentials and the engine's two tokens | `clearinghouse/config/init-secrets.py` generates them into `secrets/` and `.env` | Placeholders |
+| The clearinghouse admin's key, and each tenant's id and admin key | The runbook saves them in `clearinghouse/secrets/` as they are issued, through `keep`: each is shown once, so a repeat of the command that issued one leaves the saved file as it is | None |
 | The tenant admin key, the tenant's id, the enterprise's `LPB_SECRET_KEY` | `enterprise/.env`: the first two are the answer to onboarding | Placeholders |
 | The published signer's address | `LPB_SIGNER_URL` in `enterprise/.env`: `http://signer:8937` on one host | That address |
 | The key of each actor's allocation | The enterprise engine's own secret store, encrypted under its `LPB_SECRET_KEY`. Written by the engine when it allots or rotates | None |
@@ -175,6 +182,14 @@ TENANTS=/v1/clearinghouse/tenants     # the clearinghouse admin's, on the privat
 
 # curl on the private listener. --no-deps: it never starts or recreates the engine it is run beside
 private() { ch --progress quiet run --rm --no-deps -T private "$@"; }
+keep() {  # keep FILE: save the token on stdin as FILE. With no token, a key FILE already holds stays
+  local token; token=$(cat)
+  case "$token" in
+    ''|null) [ -s "$1" ] && echo "no token came back: $1 is left as it is" >&2 && return 0
+             echo "no token came back, and $1 holds none" >&2; return 1 ;;
+  esac
+  (umask 077; printf '%s\n' "$token" > "$1")
+}
 admin()   { private -H "Authorization: Bearer $(cat $CS/admin-key)" "$@"; }       # the clearinghouse admin
 tenant()  { curl -sS -H "Authorization: Bearer $(cat $CS/tenant-$1-key)" "${@:2}"; }   # tenant one|two ...
 actor()   { curl -sS -H "Authorization: Bearer $(cat $ES/$1-key)" "${@:2}"; }     # actor alice|carol ...
@@ -225,7 +240,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST $PUBLIC/v1/jobs                
 curl -s -o /dev/null -w '%{http_code}\n' -X POST $PUBLIC/sign-orchestrator-info   # 404: the engine signs for nobody
 curl -s -o /dev/null -w '%{http_code}\n' $SIGNER/sign-orchestrator-info           # 405: the published signer
 
-ch exec -T engine lpb bootstrap-admin | jq -r .token > $CS/admin-key
+ch exec -T engine lpb bootstrap-admin | jq -r '.token // empty' | keep $CS/admin-key
 admin http://127.0.0.1:8081/v1/clearinghouse/wallet | jq   # the deposit and reserve, and signer.ready
 ```
 
@@ -245,12 +260,11 @@ Costs nothing. Check before going on:
 
 ```sh
 onboard() {  # onboard NAME: the tenant's id and its first tenant admin key, kept in secrets/
-  admin -H 'Content-Type: application/json' http://127.0.0.1:8081$TENANTS \
-    -d "{\"name\":\"$1\",\"amount\":{\"amount\":\"$GRANT\",\"currency\":\"USD\"},\"operation_ref\":\"proof-onboard-$1\"}" \
-    > $CS/tenant-$1.json
-  jq -r .tenant_id $CS/tenant-$1.json > $CS/tenant-$1-id
-  jq -r .admin_key.token $CS/tenant-$1.json > $CS/tenant-$1-key
-  rm $CS/tenant-$1.json
+  local answer
+  answer=$(admin -H 'Content-Type: application/json' http://127.0.0.1:8081$TENANTS \
+    -d "{\"name\":\"$1\",\"amount\":{\"amount\":\"$GRANT\",\"currency\":\"USD\"},\"operation_ref\":\"proof-onboard-$1\"}")
+  jq -r '.tenant_id // empty' <<<"$answer" | keep $CS/tenant-$1-id &&
+    jq -r '.admin_key.token // empty' <<<"$answer" | keep $CS/tenant-$1-key  # the answer is in no file
 }
 onboard one && onboard two
 ONE=$(cat $CS/tenant-one-id) TWO=$(cat $CS/tenant-two-id)
@@ -296,11 +310,11 @@ curl -s $WORK/v1/offerings | jq 'map({app, rate_low, rate_high, stale})'   # the
 curl -s -o /dev/null -w '%{http_code}\n' $WORK$OWN/grant                    # 404: no clearinghouse route
 
 mkdir -p $ES
-ent exec -T engine lpb bootstrap-admin | jq -r .token > $ES/admin-key
+ent exec -T engine lpb bootstrap-admin | jq -r '.token // empty' | keep $ES/admin-key
 issue() {  # issue ACTOR: an access key for an actor of tenant one, at the enterprise's engine
   curl -sS -H "Authorization: Bearer $(cat $ES/admin-key)" -H 'Content-Type: application/json' \
     -d "{\"kind\":\"actor\",\"actor_id\":\"$1\",\"tenant_id\":\"$ONE\",\"operation_ref\":\"proof-key-$1\"}" \
-    $WORK/v1/keys | jq -r .token > $ES/$1-key
+    $WORK/v1/keys | jq -r '.token // empty' | keep $ES/$1-key
 }
 issue alice
 ent exec -T engine python /opt/enterprise/allot.py alice $ALLOT proof-allot-alice

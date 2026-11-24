@@ -321,10 +321,31 @@ def test_every_group_of_routes_is_given_to_a_listener() -> None:
     given = {mount.__name__ for mount in (*listeners.EVERY_LISTENER, *listeners.PRIVATE_ONLY)}
     assert not set(listeners.EVERY_LISTENER) & set(listeners.PRIVATE_ONLY)
     assert groups - COMPOSERS == given, (
-        f"not given to a listener: {sorted(groups - COMPOSERS - given)}. Add the group's mount function "
-        "to EVERY_LISTENER or to PRIVATE_ONLY in src/livepeer_builder/http/listeners.py: PRIVATE_ONLY "
-        "when only a clearinghouse admin calls it, so it is never served on the public listener."
+        f"not given to a listener: {sorted(groups - COMPOSERS - given)}. Add the group as a RouteGroup "
+        "to ROUTE_GROUPS in src/livepeer_builder/http/listeners.py, with the half of the engine it "
+        "belongs to, and private=True when only a clearinghouse admin calls it, so it is never served "
+        "on the public listener."
     )
+
+
+def test_every_group_of_routes_belongs_to_one_half_and_so_to_a_role() -> None:
+    """Since #169 the same table says which role serves a group. Each group is in it once, with one
+    half; ``both`` serves the two halves, and each other role exactly one. So a group is served by
+    ``both`` and by one other role, and a group left out of the table is served by no role: the test
+    above fails for it."""
+    mounts = [group.mount for group in listeners.ROUTE_GROUPS]
+    assert len(mounts) == len(set(mounts)), "a group is in ROUTE_GROUPS twice"
+    assert set(mounts) == {*listeners.EVERY_LISTENER, *listeners.PRIVATE_ONLY}
+    halves = {"work", "clearinghouse"}
+    assert {group.half for group in listeners.ROUTE_GROUPS} == halves  # neither half is empty
+    roles = listeners.ROLE_HALVES
+    assert (roles["both"], roles["work"], roles["clearinghouse"]) == (halves, {"work"}, {"clearinghouse"})
+    assert len(roles) == 3
+    for group in listeners.ROUTE_GROUPS:
+        serving = sorted(role for role, served_halves in roles.items() if group.half in served_halves)
+        assert serving == sorted(["both", group.half]), group.mount.__name__
+    # what only a clearinghouse admin does is the clearinghouse half's: the work half has no private group
+    assert {group.half for group in listeners.ROUTE_GROUPS if group.private} == {"clearinghouse"}
 
 
 async def test_the_listeners_serve_what_the_two_sets_of_routes_mount(clearinghouse: Clearinghouse) -> None:
@@ -358,6 +379,30 @@ async def test_the_published_schema_says_which_routes_are_private(clearinghouse:
     assert not operations(house.public) & private_only
     async with client_of(house.public) as client:  # as served: /openapi.json and the docs page read it
         assert "/v1/clearinghouse/tenants" not in (await client.get("/openapi.json")).json()["paths"]
+
+
+async def test_the_published_schema_says_which_half_and_so_which_role_serves_a_route(
+    clearinghouse: Clearinghouse,
+) -> None:
+    """Since #169 every route but health carries the tag of its half, applied from the table: the
+    work half's routes are served by the ``both`` and the ``work`` role, the clearinghouse half's by
+    ``both`` and ``clearinghouse``. One committed schema, generated from an engine in its ``both``
+    role with one listener, therefore documents all three roles."""
+    only = create_app(clearinghouse.engine, manage_lifecycle=False)
+    work_tag, clearinghouse_tag = listeners.HALF_TAGS["work"], listeners.HALF_TAGS["clearinghouse"]
+    described = {tag["name"]: tag["description"] for tag in only.openapi()["tags"]}
+    assert "`work` role" in described[work_tag] and "`clearinghouse` role" in described[clearinghouse_tag]
+    untagged: list[str] = []
+    for path, methods in only.openapi()["paths"].items():
+        for method, operation in methods.items():
+            tags = set(operation.get("tags", []))
+            if path == "/readyz":
+                assert not tags  # health is what the halves share
+                continue
+            expected = clearinghouse_tag if path.startswith("/v1/clearinghouse/") else work_tag
+            if tags & {work_tag, clearinghouse_tag} != {expected}:
+                untagged.append(f"{method.upper()} {path}: {sorted(tags)}, expected {expected}")
+    assert not untagged, "\n".join(untagged)
 
 
 class KindFromHeader:

@@ -12,7 +12,10 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 | [persistence.md](persistence.md): store, migrations, retention, backup | ISS-06 | Implemented |
 | [discovery.md](discovery.md): livepeer/node's `/discovery` contract | ISS-09, #45, D63 | `HttpDiscoverySource` reads `LPB_DISCOVERY_URL`. This repository ships no discovery process; a clearinghouse's engine serves the document it read (#166) |
 
-The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).
+The REST surface is generated into [../generated/openapi.json](../generated/openapi.json): every route
+of an engine in its `both` role, each tagged with its half. The routes of an engine in its
+`clearinghouse` role, whose allotment and rotation answer the allocation with its key, are generated
+into [../generated/openapi-clearinghouse.json](../generated/openapi-clearinghouse.json) (#169).
 
 ## Upgrading to the M4 hardening (#112 to #115)
 
@@ -270,9 +273,10 @@ field, `TenantGrant`. There is no migration.
 - **An entrypoint that calls `build_app`** keeps `LPB_HTTP_PRIVATE_PORT` unset, or builds each app with
   `create_app(engine, listener=...)` over an engine it starts itself.
 
-**What a later release changes.** The `clearinghouse` role of ISS-31 (#169) will require the private
-listener, and it is that role which hands each allocation's key to the caller. Until then two listeners
-are a deployment's choice.
+**What a later release changed.** An engine in its `clearinghouse` role requires the private listener,
+and it is that role which hands each allocation's key to the caller
+([the engine's role setting](#upgrading-to-the-engines-role-setting)). In its other two roles two
+listeners are a deployment's choice.
 
 ## Upgrading to an engine that uses a payment clearinghouse
 
@@ -308,10 +312,11 @@ at the clearinghouse's signer itself ([payments.md](payments.md#the-remote-adapt
   `LPB_SIGNER_URL` to the clearinghouse's published signer, keep `LPB_SECRET_KEY`, and unset every
   Batteries setting. The clearinghouse's address is a scheme, a host and an optional port: a path is
   refused. Run `lpb payments check`.
-- **The clearinghouse must hand keys over.** Its tenant routes are mounted with
-  `deliver_allocation_keys=True` ([payments.md](payments.md#payment-keys)). The app `lpb serve` runs
-  keeps each key with its own engine and hands none over until the role setting (#169): an enterprise's
-  engine pointed at it allots there and cannot use the answer, which carries no key.
+- **The clearinghouse must hand keys over.** It is an engine in its `clearinghouse` role
+  ([the engine's role setting](#upgrading-to-the-engines-role-setting),
+  [payments.md](payments.md#payment-keys)). An engine in its `both` role keeps each key with itself and
+  hands none over: an enterprise's engine pointed at one allots there and cannot use the answer, which
+  carries no key.
 - **A caller's own implementation of `PaymentsAdminApi`** states `get_allocation`.
 - **A reader of the allocation route** that refuses a field it does not know meets `allowance`.
 - **Put every actor in the tenant.** `LPB_JWT_TENANT_ID` or the tenant claim, the `tenant_id` of the
@@ -322,3 +327,50 @@ at the clearinghouse's signer itself ([payments.md](payments.md#the-remote-adapt
   know. Nothing is rewritten (T30): its commands are refused, and its jobs present the old key to the
   clearinghouse's signer, which refuses it.
 - **A caller's own allocation manager** changes nothing.
+
+## Upgrading to the engine's role setting
+
+The engine has a role setting, and two Compose projects run a payment clearinghouse and an enterprise
+that uses it (D84, D87, #169). A deployment that sets nothing new is in its `both` role and serves,
+wires and starts what it did: self-hosted payments, as one deployment. There is no migration of its
+own. Two things changed for deployments that had set something new: an engine that names a
+clearinghouse now needs `LPB_ROLE=work`, and it no longer serves clearinghouse routes of its own.
+
+| What | Before | Now |
+| --- | --- | --- |
+| Settings | | `LPB_ROLE`: `both` (the default), `work` or `clearinghouse` ([RELIABILITY.md](../RELIABILITY.md#roles)) |
+| `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`, `LPB_CLEARINGHOUSE_TENANT_ID` | Set together, they selected the remote adapters (#168) | They need `LPB_ROLE=work`, and `LPB_ROLE=work` needs them. With `LPB_ROLE` unset, `both` or `clearinghouse` they are refused at startup |
+| The routes of an engine that names a clearinghouse | Every route. What only a clearinghouse admin does answered 403 | The work routes alone. Every `/v1/clearinghouse` route is 404 |
+| That engine's embedded API | `engine.runner_list` served its discovery document | `engine.runner_list` is `None`, as `payments.wallet` is: it is nobody's clearinghouse. `engine.payments.allot` and the other commands are unchanged |
+| A payment clearinghouse | An engine with one listener or two, serving every route, which stored each allocation's key and answered none | `LPB_ROLE=clearinghouse`: the clearinghouse routes alone, on two listeners. Every work route is 404, `GET /v1/offerings` and `/v1/keys` included. Allotment and rotation hand the allocation's key to the caller once (`allocation_api_key`, `replayed`, `resumed`), and nothing stores it |
+| What a `clearinghouse` engine needs | | `LPB_HTTP_PRIVATE_PORT`, Batteries (`LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`) and the grants credential (`LPB_BATTERIES_GRANTS_TOKEN`), or the parts supplied in their place. Without one it does not start. It needs no `LPB_SECRET_KEY`, and it starts without `LPB_SIGNER_URL`: its wallet report then says the signer is `not_configured` |
+| A `clearinghouse` engine's runner transport | | `IdentityOnlyTransport` (`livepeer_builder.adapters.sdk`): it asks the signer's identity for the wallet report and cannot pay. `engine.jobs.streaming` is `None` |
+| What a `clearinghouse` engine starts | | Discovery alone. No interrupted job is resolved, and no cost sync or retention purge runs. `jobs.run` raises `InvalidRequest` before the job's reference is claimed, and `jobs.streaming` is `None` with the role's default transport |
+| `GET /readyz`, `EngineHealth` | | and `role` |
+| `lpb payments check`, `PaymentCheck` | `configuration`, `ok`, `probes`, `tenant` | and `role`. In the `clearinghouse` role the `batteries_grants` probe is always made, and is `not_configured` without the credential. A `signer` probe that is `not_configured` says what follows in that role |
+| `lpb smoke` | An engine with the environment's settings | The same, in the role the environment names, and its output has `role` |
+| `create_app(engine, ...)` | Mounted every group of routes, with `deliver_allocation_keys=False` | Mounts the groups of `engine.role`, and hands allocation keys over in the `clearinghouse` role alone. For an engine in its `clearinghouse` role, `listener="only"` raises `ValueError` |
+| The facade | `EngineApi` | `EngineApi.role`, which a caller's own implementation of the whole-engine facade must state |
+| `http/listeners.py` | `EVERY_LISTENER` and `PRIVATE_ONLY`, written by hand. `mount_listener_routes(app, engine, name)` | `ROUTE_GROUPS` (each group of routes, its half, and whether it is private) and `ROLE_HALVES`. The two tuples are read from the table. `delivers_allocation_keys(role)`, and `mount_listener_routes(app, engine, name, *, deliver_allocation_keys)`: the keyword is required, and a value that disagrees with the engine's role raises `ValueError` |
+| The published schema | The private group's routes carry the tag `private listener` | and every route but health carries `work half` or `clearinghouse half`. `docs/generated/openapi-clearinghouse.json` is the `clearinghouse` role's own schema |
+| `AdmissionLimiter` | `AdmissionLimiter(max_concurrent, max_per_app)` | and `runs_jobs` (true unless said) |
+| Contracts | | `Role` (`livepeer_builder.contracts`) |
+| The log line `engine.started` | | and `role` |
+| Compose projects | `deploy/dev-stack` | and `deploy/clearinghouse` and `deploy/enterprise` ([deploy/README.md](../../deploy/README.md)) |
+
+**Before you start the new release:**
+
+- **Nothing, for self-hosted payments.** Leave `LPB_ROLE` unset.
+- **An engine that uses a clearinghouse** sets `LPB_ROLE=work`. Whatever called that engine's own
+  `/v1/clearinghouse` routes stops: an embedding app allots through `engine.payments.allot`, as before,
+  and an engine server has no route for it (tech debt T41). Run `lpb payments check`.
+- **A payment clearinghouse** sets `LPB_ROLE=clearinghouse` and `LPB_HTTP_PRIVATE_PORT`, publishes the
+  public listener and its signer and nothing else, and moves every use of its admin key to the private
+  address. The signer keeps its Batteries authorization webhook: enterprise engines sign there
+  themselves, and it is the only check at signing. Nothing may call a work route there: its admin's own
+  key is managed under `/v1/clearinghouse/tenants/default/keys` (tech debt T42).
+- **A caller of a clearinghouse's allotment or rotation** reads the key from the answer and keeps it:
+  it is shown once. An enterprise's engine in its `work` role does this itself.
+- **A caller's own implementation of `EngineApi`** states `role`.
+- **An entrypoint that calls `create_app` for a clearinghouse** builds two apps, `listener="public"` and
+  `listener="private"`, or calls `serve`.

@@ -11,7 +11,7 @@ import logging
 from importlib.metadata import PackageNotFoundError, version
 
 from livepeer_builder.config import EngineSettings
-from livepeer_builder.contracts import EngineHealth, PurgeReport
+from livepeer_builder.contracts import EngineHealth, PurgeReport, Role
 from livepeer_builder.runtime.assembly import Decorate, EngineServices, EngineSupply, build
 from livepeer_builder.utils import run_shielded
 
@@ -37,6 +37,7 @@ class BuilderEngine:
         Use ``BuilderEngine.create`` rather than calling this directly.
         """
         self.settings = settings
+        self.role: Role = settings.role  # which half of the engine this deployment runs (D84, #169)
         self.store = services.store
         self.clock = services.clock
         self.policy = services.policy
@@ -76,6 +77,10 @@ class BuilderEngine:
         """Check the schema, resolve jobs a restart interrupted, take one discovery snapshot, then start
         background loops.
 
+        An engine in its ``clearinghouse`` role (#169) starts none of the work half's machinery: it
+        resolves no interrupted job, and runs no cost sync and no retention purge, because it holds no
+        job. It still reads discovery, for the runner list it publishes.
+
         If starting fails (a schema that does not match, a store error, or a cancellation), the engine stops:
         what ``create`` opened is closed before the error reaches the caller, and a new engine is needed.
         A second ``start()`` is refused, and the running engine carries on (#113, C27).
@@ -88,23 +93,27 @@ class BuilderEngine:
                 "To serve an engine you start yourself, pass create_app(engine, manage_lifecycle=False)"
             )
         self._started = True
+        runs_jobs = self.settings.runs_jobs
         try:
             await self._require_current_schema()
-            await self.jobs.recover_interrupted()
+            if runs_jobs:
+                await self.jobs.recover_interrupted()
             await self.discovery.refresh()
         except BaseException:
             await run_shielded(self.stop())  # __aexit__ and a lifespan's finally never run after this
             raise
         self._stop.clear()
-        self._tasks = [
-            asyncio.create_task(self.discovery.run(self._stop), name="lpb-discovery"),
-            asyncio.create_task(self.costs.run(self._stop), name="lpb-cost-sync"),
-            asyncio.create_task(self._retention_loop(), name="lpb-retention"),
-        ]
+        self._tasks = [asyncio.create_task(self.discovery.run(self._stop), name="lpb-discovery")]
+        if runs_jobs:
+            self._tasks += [
+                asyncio.create_task(self.costs.run(self._stop), name="lpb-cost-sync"),
+                asyncio.create_task(self._retention_loop(), name="lpb-retention"),
+            ]
         _LOG.info(
             "engine started",
             extra={
                 "event": "engine.started",
+                "role": self.role,
                 "version": package_version(),
                 "api_keys": "on" if self.keys is not None else "off",
                 "own_authenticators": self._own_authenticators,
@@ -135,6 +144,7 @@ class BuilderEngine:
     def health(self) -> EngineHealth:
         snapshot = self.discovery.snapshot
         return EngineHealth(
+            role=self.role,
             ready=snapshot.last_attempt_at is not None,
             discovery_fresh=self.discovery.is_fresh(),
             discovery_observed_at=snapshot.observed_at,

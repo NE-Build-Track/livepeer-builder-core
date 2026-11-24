@@ -52,9 +52,10 @@ class EscrowSource(Protocol):
 
 @runtime_checkable
 class SignerProbe(Protocol):
-    """Optional for a runner transport: whether the signer it pays through answers its identity call now
-    (#167). ``SdkRunnerTransport`` has it. The call is the one every payment begins with; it needs no
-    credential and signs no payment. Without it (a supplied transport that cannot ask) the engine serves
-    no wallet report: the wallet route is absent."""
+    """Optional for a runner transport: whether the signer at ``LPB_SIGNER_URL`` answers its identity
+    call now (#167). ``SdkRunnerTransport`` has it, and so has ``IdentityOnlyTransport``, the transport
+    of an engine in its ``clearinghouse`` role, which signs nothing (#169). The call is the one every
+    payment begins with; it needs no credential and signs no payment. Without it (a supplied transport
+    that cannot ask) the engine serves no wallet report: the wallet route is absent."""
 
     async def signer_readiness(self) -> SignerReadiness: ...

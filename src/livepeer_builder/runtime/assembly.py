@@ -12,6 +12,10 @@
 3. **Assemble.** ``assemble`` builds every service from the final parts. It does no I/O, so it cannot
    leave anything half-open, and a decorated policy reaches every service.
 
+The engine's role (``LPB_ROLE``, D84) is wired here and in ``payment_defaults``: an engine in its ``work``
+role uses a payment clearinghouse and is nobody's clearinghouse, and one in its ``clearinghouse`` role
+runs no jobs, stores no allocation's key, and must be able to allot and onboard.
+
 Parts are ports (behaviour). Tuning values stay in ``EngineSettings``.
 """
 
@@ -269,6 +273,11 @@ class EngineServices:
 
 def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     """Build every service from the final parts. No I/O: it opens nothing, so it leaves nothing open."""
+    # The role (D84, #169). An engine in its work role uses a clearinghouse and is not one: it reports no
+    # wallet and publishes no runner list, whatever its parts could do. One in its clearinghouse role
+    # runs no jobs and syncs no job's cost.
+    is_clearinghouse = not settings.uses_clearinghouse
+    runs_jobs = settings.runs_jobs
     discovery = DiscoveryService(
         parts.discovery_source,
         parts.policy,
@@ -287,17 +296,10 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         tenants = TenantDesk(
             parts.grants_manager, parts.policy, settings.default_currency, ledger, settings.engine_id, keys
         )
-    runner_list: RunnerList | None = None
-    if isinstance(parts.discovery_source, DiscoveryDocumentSource):  # otherwise no list is served (#166)
-        runner_list = RunnerList(parts.discovery_source, parts.policy)
     usage: TenantUsage | None = None
     if isinstance(parts.usage_source, TenantUsageSource):  # otherwise no tenant's usage is served (#166)
         usage = TenantUsage(parts.usage_source, parts.policy)
-    wallet: Wallet | None = None
-    # otherwise no wallet report is served (#167): the grants manager reports the escrow and the grants,
-    # and the transport asks the signer it pays through
-    if isinstance(parts.grants_manager, EscrowSource) and isinstance(parts.transport, SignerProbe):
-        wallet = Wallet(parts.grants_manager, parts.grants_manager, parts.transport, parts.policy)
+    runner_list, wallet = _offered_as_a_clearinghouse(parts) if is_clearinghouse else (None, None)
     payments = PaymentsService(
         store=parts.store,
         secrets=parts.secret_store,
@@ -312,7 +314,11 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         currency=settings.default_currency,
         allowances=parts.allowances,
     )
-    admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)
+    if not runs_jobs:
+        _require_a_whole_clearinghouse(parts, tenants)
+    admission = AdmissionLimiter(
+        settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app, runs_jobs=runs_jobs
+    )
     jobs = JobService(
         parts.store,
         discovery,
@@ -330,7 +336,10 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         ),
         max_paid_attempts=settings.max_paid_attempts,
     )
-    worker = CostSyncWorker(parts.usage_source, parts.store) if parts.usage_source is not None else None
+    # Cost sync attributes the provider's usage to this engine's jobs: an engine that runs none has no
+    # worker. A tenant's usage route reads the provider itself (TenantUsage, above).
+    source = parts.usage_source if runs_jobs else None
+    worker = CostSyncWorker(source, parts.store) if source is not None else None
     costs = CostService(
         parts.store, parts.policy, parts.clock, worker, payments, settings.cost_sync_interval_s
     )
@@ -352,6 +361,50 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     )
 
 
+def _offered_as_a_clearinghouse(parts: EngineParts) -> tuple[RunnerList | None, Wallet | None]:
+    """What an engine offers as a clearinghouse, each only when its parts can: the runner list it
+    publishes and the wallet report. It signs for nobody: its tenants' engines sign at the signer
+    themselves (D85 point 1)."""
+    runner_list: RunnerList | None = None
+    if isinstance(parts.discovery_source, DiscoveryDocumentSource):  # otherwise no list is served (#166)
+        runner_list = RunnerList(parts.discovery_source, parts.policy)
+    wallet: Wallet | None = None
+    # otherwise no wallet report is served (#167): the grants manager reports the escrow and the grants,
+    # and the transport asks the signer at LPB_SIGNER_URL for its identity
+    if isinstance(parts.grants_manager, EscrowSource) and isinstance(parts.transport, SignerProbe):
+        wallet = Wallet(parts.grants_manager, parts.grants_manager, parts.transport, parts.policy)
+    return runner_list, wallet
+
+
+def _require_a_whole_clearinghouse(parts: EngineParts, tenants: TenantDesk | None) -> None:
+    """A payment clearinghouse allots from its tenants' grants and onboards them (#169). One that cannot
+    would serve routes that do nothing, so it does not start. Judged on the parts the engine will run
+    with, as the secret store is: a supplied part counts. Only settings are named.
+
+    The signer is not asked for here. The engine signs nothing in this role, and its tenants' engines
+    reach the signer at its published address, not through this engine: ``LPB_SIGNER_URL`` is only
+    where the wallet report reads the signer's readiness, and ``lpb payments check`` says when it is
+    missing."""
+    missing = [
+        needed
+        for needed, absent in (
+            (
+                "LPB_BATTERIES_URL and LPB_BATTERIES_TOKEN (the allocations it allots)",
+                parts.allocation_manager is None,
+            ),
+            (
+                "LPB_BATTERIES_URL and LPB_BATTERIES_GRANTS_TOKEN (the tenant desk, which onboards tenants)",
+                tenants is None,
+            ),
+        )
+        if absent
+    ]
+    if missing:
+        raise ValueError(
+            f"LPB_ROLE=clearinghouse needs {'; '.join(missing)}, or the part supplied in its place"
+        )
+
+
 async def build(
     settings: EngineSettings, *, supply: EngineSupply | None = None, decorate: Decorate | None = None
 ) -> tuple[EngineServices, contextlib.AsyncExitStack]:
@@ -363,7 +416,8 @@ async def build(
         parts = await default_parts(settings, stack, supply)
         if decorate is not None:
             parts = decorate(parts)
-        await _require_storable_payment_keys(parts)  # the final parts, after decoration
+        if settings.runs_jobs:  # a clearinghouse hands each key to the caller and stores none (#169)
+            await _require_storable_payment_keys(parts)  # the final parts, after decoration
         resources = stack.pop_all()  # out of the stack: the caller takes them with the services
     try:
         return assemble(settings, parts), resources
@@ -373,7 +427,11 @@ async def build(
 
 
 async def _require_storable_payment_keys(parts: EngineParts) -> None:
-    """Allotment would fund an allocation, then fail to keep its key (#112, C2). Judged on the parts the
+    """Allotment would fund an allocation, then fail to keep its key (#112, C2): asked of every engine
+    that stores allocation keys, which is every role that runs jobs. In its ``both`` role an engine
+    stores the keys its Batteries mints, and in its ``work`` role the keys its clearinghouse hands
+    over. An engine in its ``clearinghouse`` role stores none and is not asked; a command that would
+    store one there is refused when it is made (``PaymentKeys.require_writable``). Judged on the parts the
     engine will run with, so a decorator that turns the provider off or installs its own store is not
     refused, and one that adds a provider is. Only the built-in store is asked here: a plug-in store that
     cannot write at boot (a sealed vault) still starts, and is asked per request."""

@@ -79,9 +79,12 @@ def mount_clearinghouse_routes(
     store none.
 
     ``False``, for an engine that also runs jobs: it stores the key for its own jobs and returns none.
-    ``create_app`` passes ``False``, for every listener (``http/listeners.py``). With ``True`` on such an
-    engine the caller is handed each key, the engine stores none, and that actor's jobs fail
-    ``not_provisioned``.
+    With ``True`` on such an engine the caller is handed each key, the engine stores none, and that
+    actor's jobs fail ``not_provisioned``.
+
+    ``create_app`` passes what the engine's role says, for every listener: ``True`` in the
+    ``clearinghouse`` role and ``False`` in the ``both`` role (``delivers_allocation_keys``,
+    ``http/listeners.py``, #169).
     """
     mount_tenant_routes(app, engine, deliver_allocation_keys=deliver_allocation_keys)
     mount_clearinghouse_admin_routes(app, engine)

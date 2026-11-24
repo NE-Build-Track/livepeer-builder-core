@@ -28,6 +28,7 @@ from livepeer_builder.adapters.runner_call import (
 from livepeer_builder.adapters.signer_failures import unavailable_before_signing
 from livepeer_builder.contracts import JobRequest, Runner, RunnerReply, SignerNotReady, SignerReadiness
 from livepeer_builder.contracts.payments import payable_rate
+from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.protocols import OnSigned
 
 _LOG = logging.getLogger(__name__)
@@ -142,6 +143,58 @@ def _without_the_request(error: Exception) -> Exception:
     return fresh
 
 
+async def signer_readiness(signer_url: str | None) -> SignerReadiness:
+    """Whether the signer at ``signer_url`` answers its identity call now (#167): the call every paid job
+    begins with, at the root of the signer address, as the SDK makes it. It carries no credential, signs
+    no payment, and its answer (the wallet's address and a signature) is not kept. The SDK's own words
+    for a failure hold the signer address and the signer's body, so only the kind of failure is logged."""
+    if signer_url is None:
+        return SignerReadiness(ready=False, reason="not_configured")
+    try:
+        await _ask_signer_identity(signer_url)
+    except (LivepeerGatewayError, ValueError) as error:  # ValueError: an address the SDK cannot call
+        answered = isinstance(error, LivepeerGatewayError) and not unavailable_before_signing(error)
+        reason: SignerNotReady = "no_identity" if answered else "unavailable"
+        status = error.status_code if isinstance(error, LivepeerHTTPError) else None
+        _LOG.warning(
+            "signer not ready",
+            extra={
+                "event": "signer.not_ready",
+                "reason": reason,
+                "status_code": status,
+                "error": type(error).__name__,
+            },
+        )
+        return SignerReadiness(ready=False, reason=reason)
+    return SignerReadiness(ready=True)
+
+
+class IdentityOnlyTransport:
+    """The transport of an engine in its ``clearinghouse`` role (#169), which never runs a job (D82) and
+    signs nothing: its tenants' engines sign at the signer themselves. All it can do is ask the signer
+    at ``LPB_SIGNER_URL`` for its identity, which the wallet report states (``SignerProbe``). It calls no
+    runner and no signing path, opens no stream, and takes no credential anywhere."""
+
+    pays = False  # no credential pays a runner through it
+
+    def __init__(self, signer_url: str | None) -> None:
+        self._signer_url = signer_url
+
+    async def signer_readiness(self) -> SignerReadiness:
+        return await signer_readiness(self._signer_url)
+
+    async def call(  # NOSONAR - async by protocol (RunnerTransport)
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
+    ) -> RunnerReply:
+        """Never reached through the engine: admission refuses every job in this role first."""
+        del runner, request, credential, on_signed
+        raise InvalidRequest("this engine is in its clearinghouse role (LPB_ROLE) and calls no runner")
+
+
 class SdkRunnerTransport:
     """The Live Runner call with the actor's credential as the signer bearer. Unpaid when there is none.
 
@@ -160,30 +213,8 @@ class SdkRunnerTransport:
         return self._signer_url is not None
 
     async def signer_readiness(self) -> SignerReadiness:
-        """Whether the signer answers its identity call now (``SignerProbe``, #167): the call every paid
-        job begins with, at the root of the signer address, as the SDK makes it. It carries no
-        credential, signs no payment, and its answer (the wallet's address and a signature) is not kept.
-        The SDK's own words for a failure hold the signer address and the signer's body, so only the
-        kind of failure is logged."""
-        if self._signer_url is None:
-            return SignerReadiness(ready=False, reason="not_configured")
-        try:
-            await _ask_signer_identity(self._signer_url)
-        except (LivepeerGatewayError, ValueError) as error:  # ValueError: an address the SDK cannot call
-            answered = isinstance(error, LivepeerGatewayError) and not unavailable_before_signing(error)
-            reason: SignerNotReady = "no_identity" if answered else "unavailable"
-            status = error.status_code if isinstance(error, LivepeerHTTPError) else None
-            _LOG.warning(
-                "signer not ready",
-                extra={
-                    "event": "signer.not_ready",
-                    "reason": reason,
-                    "status_code": status,
-                    "error": type(error).__name__,
-                },
-            )
-            return SignerReadiness(ready=False, reason=reason)
-        return SignerReadiness(ready=True)
+        """Whether the signer answers its identity call now (``SignerProbe``, #167)."""
+        return await signer_readiness(self._signer_url)
 
     def _request(
         self, runner: Runner, request: JobRequest, credential: str | None, events: PaymentEvents

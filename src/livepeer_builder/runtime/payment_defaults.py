@@ -2,16 +2,19 @@
 payment clearinghouse, and the signer either way.
 
 ``default_parts`` asks here for each payment part the caller did not supply, so a supplied part is never
-built. ``LPB_CLEARINGHOUSE_URL`` (with the tenant admin key and the tenant's id) selects the
-clearinghouse: ``AllocationManager``, ``AllowanceReader`` and ``UsageSource`` then reach it, and nothing
-of Batteries is built. The settings refuse a mix of the two (``config.py``).
+built. The engine's role chooses (``LPB_ROLE``, #169): in its ``work`` role ``AllocationManager``,
+``AllowanceReader`` and ``UsageSource`` reach the clearinghouse that ``LPB_CLEARINGHOUSE_URL`` names (with
+the tenant admin key and the tenant's id), and nothing of Batteries is built; in its ``both`` and its
+``clearinghouse`` role they reach Batteries. The settings refuse a role without what it needs, and a mix
+of the two (``config.py``).
 
 **Signing and the key** are the engine's own either way (D85 point 1 and D87 point 1, as amended). The
 runner transport is the gateway SDK's, at ``LPB_SIGNER_URL``: the engine's own signer, or the one a
 clearinghouse publishes. The credential is the actor's allocation key from the engine's own secret
 store: minted by its Batteries, or handed over once by the clearinghouse at allotment and rotation. So
 ``transport`` and ``credentials`` are one answer for both configurations (``_OwnSigning``), and nothing
-of a clearinghouse's engine is in the signing path.
+of a clearinghouse's engine is in the signing path. An engine in its ``clearinghouse`` role runs no job,
+so its transport cannot pay at all: it asks the signer's identity, for the wallet report, and no more.
 
 The adapters are imported inside the methods, not at module level, so importing the package loads no
 HTTP client or SDK (tests/structure/test_import_weight.py).
@@ -67,11 +70,21 @@ class _OwnSigning:
 
 
 class SelfHosted(_OwnSigning):
-    """Batteries' management API and usage feed, as the settings name them."""
+    """An engine in its ``both`` or its ``clearinghouse`` role: Batteries' management API and usage feed,
+    as the settings name them."""
 
     def __init__(self, settings: EngineSettings, keep: Keep) -> None:
         super().__init__(settings)
         self._keep = keep
+
+    def transport(self) -> RunnerTransport:
+        """An engine in its ``clearinghouse`` role runs no job and signs nothing (D82), so it is given no
+        transport that could pay: only the signer's identity call, which its wallet report makes."""
+        if self._settings.runs_jobs:
+            return super().transport()
+        from livepeer_builder.adapters.sdk import IdentityOnlyTransport
+
+        return IdentityOnlyTransport(self._settings.signer_url)
 
     def allocation_manager(self) -> AllocationManager | None:
         token = self._settings.batteries_token
@@ -112,7 +125,8 @@ class SelfHosted(_OwnSigning):
 
 
 class ThroughClearinghouse(_OwnSigning):
-    """The remote adapters, over one wire to the clearinghouse, opened when the first is asked for.
+    """An engine in its ``work`` role: the remote adapters, over one wire to the clearinghouse, opened
+    when the first is asked for.
     ``actors`` and ``secrets`` are the engine's own: where it keeps each actor's allocation record and
     the key the clearinghouse handed over for it."""
 
@@ -160,6 +174,8 @@ class ThroughClearinghouse(_OwnSigning):
 def payment_defaults(
     settings: EngineSettings, keep: Keep, actors: ActorRepo, secrets: SecretStore
 ) -> PaymentDefaults:
+    """By the role alone: ``work`` reaches a clearinghouse, and the other two roles Batteries
+    (tests/structure/test_two_halves.py)."""
     if settings.uses_clearinghouse:
         return ThroughClearinghouse(settings, keep, actors, secrets)
     return SelfHosted(settings, keep)

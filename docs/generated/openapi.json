@@ -747,6 +747,16 @@
             "title": "Ready",
             "type": "boolean"
           },
+          "role": {
+            "default": "both",
+            "enum": [
+              "both",
+              "work",
+              "clearinghouse"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
           "running_jobs": {
             "title": "Running Jobs",
             "type": "integer"
@@ -2793,7 +2803,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Allowance"
+        "summary": "Allowance",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/clearinghouse/discovery": {
@@ -2818,7 +2831,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Discovery"
+        "summary": "Discovery",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants": {
@@ -2847,6 +2863,7 @@
         ],
         "summary": "List Tenants",
         "tags": [
+          "clearinghouse half",
           "private listener"
         ]
       },
@@ -2892,6 +2909,7 @@
         ],
         "summary": "Onboard Tenant",
         "tags": [
+          "clearinghouse half",
           "private listener"
         ]
       }
@@ -2993,7 +3011,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "List Actors"
+        "summary": "List Actors",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation": {
@@ -3049,7 +3070,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Actor"
+        "summary": "Get Actor",
+        "tags": [
+          "clearinghouse half"
+        ]
       },
       "post": {
         "operationId": "allot_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_post",
@@ -3112,7 +3136,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Allot"
+        "summary": "Allot",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/revoke": {
@@ -3167,7 +3194,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Revoke"
+        "summary": "Revoke",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/rotate-payment-key": {
@@ -3232,7 +3262,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Rotate Payment Key"
+        "summary": "Rotate Payment Key",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/status": {
@@ -3297,7 +3330,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Set Status"
+        "summary": "Set Status",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/top-up": {
@@ -3362,7 +3398,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Top Up"
+        "summary": "Top Up",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/grant": {
@@ -3408,7 +3447,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Grant"
+        "summary": "Get Grant",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/grant/top-up": {
@@ -3458,6 +3500,7 @@
         ],
         "summary": "Top Up Grant",
         "tags": [
+          "clearinghouse half",
           "private listener"
         ]
       }
@@ -3508,7 +3551,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "List Tenant Keys"
+        "summary": "List Tenant Keys",
+        "tags": [
+          "clearinghouse half"
+        ]
       },
       "post": {
         "description": "Issue an auditor key for the tenant, or, as a clearinghouse admin, another tenant admin key.",
@@ -3562,7 +3608,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Issue Tenant Key"
+        "summary": "Issue Tenant Key",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}": {
@@ -3617,7 +3666,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Tenant Key"
+        "summary": "Get Tenant Key",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}/revoke": {
@@ -3665,7 +3717,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Revoke Tenant Key"
+        "summary": "Revoke Tenant Key",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}/rotate": {
@@ -3730,7 +3785,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Rotate Tenant Key"
+        "summary": "Rotate Tenant Key",
+        "tags": [
+          "clearinghouse half"
+        ]
       }
     },
     "/v1/clearinghouse/tenants/{tenant_id}/status": {
@@ -3788,6 +3846,7 @@
         ],
         "summary": "Set Tenant Status",
         "tags": [
+          "clearinghouse half",
           "private listener"
         ]
       }
@@ -3815,6 +3874,7 @@
         ],
         "summary": "Wallet Report",
         "tags": [
+          "clearinghouse half",
           "private listener"
         ]
       }
@@ -3867,7 +3927,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Cost Projections"
+        "summary": "Cost Projections",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/costs/reconciliation": {
@@ -3947,7 +4010,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Reconcile"
+        "summary": "Reconcile",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/costs/summary": {
@@ -4033,7 +4099,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Cost Summary"
+        "summary": "Cost Summary",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/costs/sync": {
@@ -4056,7 +4125,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Sync Costs"
+        "summary": "Sync Costs",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/events": {
@@ -4113,7 +4185,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Events"
+        "summary": "Events",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/jobs": {
@@ -4182,7 +4257,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "List Jobs"
+        "summary": "List Jobs",
+        "tags": [
+          "work half"
+        ]
       },
       "post": {
         "operationId": "run_job_v1_jobs_post",
@@ -4235,7 +4313,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Run Job"
+        "summary": "Run Job",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/jobs/{job_id}": {
@@ -4280,7 +4361,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Job"
+        "summary": "Get Job",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/jobs/{job_id}/cost": {
@@ -4325,7 +4409,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Job Cost"
+        "summary": "Job Cost",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/jobs/{job_id}/result": {
@@ -4368,7 +4455,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Result"
+        "summary": "Get Result",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/jobs/{job_id}/usage": {
@@ -4423,7 +4513,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Report Usage"
+        "summary": "Report Usage",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/keys": {
@@ -4479,7 +4572,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "List Keys"
+        "summary": "List Keys",
+        "tags": [
+          "work half"
+        ]
       },
       "post": {
         "operationId": "issue_key_v1_keys_post",
@@ -4520,7 +4616,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Issue Key"
+        "summary": "Issue Key",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/keys/{key_id}": {
@@ -4565,7 +4664,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Key"
+        "summary": "Get Key",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/keys/{key_id}/revoke": {
@@ -4603,7 +4705,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Revoke Key"
+        "summary": "Revoke Key",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/keys/{key_id}/rotate": {
@@ -4658,7 +4763,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Rotate Access Key"
+        "summary": "Rotate Access Key",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/offerings": {
@@ -4709,7 +4817,10 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Offerings"
+        "summary": "Offerings",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/runners": {
@@ -4758,7 +4869,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Runners"
+        "summary": "Runners",
+        "tags": [
+          "work half"
+        ]
       }
     },
     "/v1/sessions": {
@@ -4801,13 +4915,24 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Open Session"
+        "summary": "Open Session",
+        "tags": [
+          "work half"
+        ]
       }
     }
   },
   "tags": [
     {
-      "description": "Served on the private listener only, when the deployment has one (`LPB_HTTP_PRIVATE_PORT`): these routes are 404 on the public listener. A deployment with one listener serves them there.",
+      "description": "Served by an engine in its `both` or its `work` role (`LPB_ROLE`): these routes are 404 on an engine in its `clearinghouse` role, which never runs jobs.",
+      "name": "work half"
+    },
+    {
+      "description": "Served by an engine in its `both` or its `clearinghouse` role (`LPB_ROLE`): these routes are 404 on an engine in its `work` role, which uses a payment clearinghouse and is not one.",
+      "name": "clearinghouse half"
+    },
+    {
+      "description": "Served on the private listener only, when the deployment has one (`LPB_HTTP_PRIVATE_PORT`): these routes are 404 on the public listener. A deployment with one listener serves them there. An engine in its `clearinghouse` role always has a private listener.",
       "name": "private listener"
     }
   ]

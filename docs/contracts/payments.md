@@ -308,7 +308,8 @@ engine reads no chain, holds no RPC address and gains no setting for one.
 
 **What "ready" proves.** The identity call is the one every paid job begins with. It needs no
 credential, signs no payment and costs nothing, and `ready` says the signer is reachable where the engine
-calls it and signed with the wallet's key. It does not say the wallet is funded, that the signer's
+calls it and answered with an address and a signature. The engine does not check that signature: the
+answer does not carry what was signed. `ready` does not say the wallet is funded, that the signer's
 price feed or event stream is up, or that the signer can reach Batteries: those are the signer's own
 `/readyz`, which livepeer/node serves on a separate metrics listener the engine is not given (T34). The
 payment SDK remembers a signer's identity for the life of the process; the report asks the signer each

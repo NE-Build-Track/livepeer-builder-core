@@ -117,6 +117,7 @@ async def test_the_payments_check_passes_there_and_asks_the_signer_at_its_own_ad
     ``LPB_SIGNER_URL``: a signer answers 405 to a GET of its identity path."""
     settings = EngineSettings.model_validate(
         {
+            "role": "work",
             "clearinghouse_url": CLEARINGHOUSE_URL,
             "clearinghouse_token": ports.token,
             "clearinghouse_tenant_id": ports.tenant_id,

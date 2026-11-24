@@ -41,22 +41,33 @@ See [contracts/access.md](contracts/access.md#boundaries).
   admin token.
 - **Payment calls:** the caller's credential stops at the engine. Only the actor's allocation key
   goes to the signer.
-- **The payment key handover (D85, D87, #166):** a standalone clearinghouse hands each allocation's own
-  Batteries key (`lpg_`) to the engine of the tenant it belongs to, once, in the answer to the allotment
-  or the rotation that minted it. That answer goes to the tenant's admin or a clearinghouse admin and to
-  nobody else: another tenant's admin is 403 before any provider call. The clearinghouse keeps no copy.
+- **Roles (D84, #169):** `LPB_ROLE` decides what a deployment exposes. An engine in its `work` role
+  serves no clearinghouse route, and holds no address or credential of Batteries: its allotments and
+  reads go to the clearinghouse, its payments are signed at the clearinghouse's published signer, and a
+  prompt or a result goes to neither. An engine in its `clearinghouse` role serves no job route and no
+  other work route, runs no job, stores no allocation's key, and does not start without the private
+  listener: onboarding, a grant's top-up, a tenant's status and the wallet report are never on the
+  address it publishes. A setting that contradicts the role is refused at startup by name, with no
+  value echoed (`tests/unit/test_role_settings.py`, `tests/unit/test_roles.py`).
+- **The payment key handover (D85, D87, #166):** a standalone clearinghouse, an engine in its
+  `clearinghouse` role, hands each allocation's own Batteries key (`lpg_`) to the engine of the tenant
+  it belongs to, once, in the answer to the allotment or the rotation that minted it. That answer goes
+  to the tenant's admin or a clearinghouse admin and to nobody else: another tenant's admin is 403
+  before any provider call. The clearinghouse keeps no copy.
   The key is in a buffer of that one call, never in a store, a table, the operation ledger or a log
   line, and the answer carries `Cache-Control: no-store`. A repeat of a finished command hands over
   nothing, a resumed one hands over the key Batteries returns again, and a command whose actor was
   revoked, rotated or allotted again meanwhile hands over none
   (`tests/unit/test_allocation_delivery.py`, [payments.md](contracts/payments.md#payment-keys)). A key
   spends its own allocation and no other: a leaked one is bounded by that allocation, and a rotation or
-  a revoke ends it. On a self-hosted engine no key leaves: the engine stores each one and returns none.
+  a revoke ends it. On a self-hosted engine, the `both` role, no key leaves: the engine stores each one
+  and returns none.
 - **The signer is published; Batteries is not (D85 point 1):** at a clearinghouse every enterprise's
   engine signs at the signer itself, with the keys it was handed. The clearinghouse's engine is not in
   that path, so the signer's Batteries authorization webhook is the only check at signing: the signer
   is reachable by enterprise engines and keeps that webhook configured. Batteries' management API stays
-  private, reached by the clearinghouse's own engine alone.
+  private, reached by the clearinghouse's own engine alone (the
+  [two Compose projects](../deploy/README.md) show the arrangement).
 - **Runner addresses:** a runner URL names one app on an orchestrator, and a job's `path` is appended
   to it. The contract refuses a path that is not already normal (a dot or empty segment, an encoded
   separator, a backslash, a control character, a lone surrogate or a fragment) with a 422 before anything

@@ -16,7 +16,8 @@ from pydantic import (
     model_validator,
 )
 
-from livepeer_builder.contracts import Contract, Currency, Operation
+from livepeer_builder.contracts import Contract, Currency, Role
+from livepeer_builder.contracts.access import reserved_scope
 from livepeer_builder.contracts.common import GrantId
 
 ENV_PREFIX = "LPB_"
@@ -30,11 +31,6 @@ _CLEARINGHOUSE = ("clearinghouse_url", "clearinghouse_token", "clearinghouse_ten
 _BATTERIES = ("batteries_url", "batteries_token", "batteries_grants_token")
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
 AuthMode = Literal["api_keys", "jwt"]
-# Scopes an ordinary token carries: an admin scope must be none of these, or every user is an admin (D47).
-RESERVED_SCOPES = frozenset(
-    {"openid", "profile", "email", "address", "phone", "offline_access"}
-    | {operation.value for operation in Operation}
-)
 # JWT signatures the engine accepts: asymmetric only, so a verification key can never sign (D45).
 ASYMMETRIC_ALGORITHMS = frozenset(
     {"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"}
@@ -51,12 +47,6 @@ DISCOVERY_URL_REQUIRED = (
     "LPB_DISCOVERY_URL is required to start the engine: it reads its runners from that address, as "
     "livepeer/node's /discovery contract (such as http://discovery:8939/discovery), and has no built-in list"
 )
-
-
-def _reserved(scope: str, prefix: str) -> bool:
-    """A scope ordinary tokens carry, as written or once the scope prefix is removed (#50 review):
-    with LPB_JWT_SCOPE_PREFIX=api:, api:jobs.run is the jobs.run every builder holds."""
-    return scope in RESERVED_SCOPES or (bool(prefix) and scope.removeprefix(prefix) in RESERVED_SCOPES)
 
 
 def _env(name: str) -> str:
@@ -80,6 +70,10 @@ class EngineSettings(Contract):
     model_config = ConfigDict(hide_input_in_errors=True)  # merged with Contract's frozen, extra="forbid"
 
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
+    # Which half of the engine this deployment runs (D84, #169): "both" for self-hosted payments, "work"
+    # for an enterprise that uses a payment clearinghouse, "clearinghouse" for one, which never runs jobs.
+    # It chooses the routes, the payment adapters and what starts; the settings below must agree with it.
+    role: Role = "both"
 
     # persistence
     database_url: str = DEFAULT_DATABASE_URL  # durable by default; there is no silent in-memory store
@@ -331,11 +325,54 @@ class EngineSettings(Contract):
             )
         return self
 
+    @model_validator(mode="after")
+    def _the_settings_agree_with_the_role(self) -> "EngineSettings":
+        """The role is the one switch (D84, #169). ``work`` names a payment clearinghouse; ``both`` and
+        ``clearinghouse`` reach Batteries themselves and name none; and ``clearinghouse`` has the private
+        listener, where alone its admin's routes are served. Only names are said. ``LPB_SIGNER_URL`` is
+        no part of this rule either: every role may name a signer."""
+        named = [_env(name) for name in _CLEARINGHOUSE if getattr(self, name) is not None]
+        if self.uses_clearinghouse:
+            if not named:
+                raise ValueError(self._work_needs_a_clearinghouse())
+            return self
+        if named:
+            why = (
+                "an engine pays through a payment clearinghouse in its work role only"
+                if self.runs_jobs
+                else "a payment clearinghouse is not a tenant of another one"
+            )
+            raise ValueError(
+                f"{', '.join(named)} cannot be set unless LPB_ROLE=work: {why}. Set LPB_ROLE=work to use "
+                "a payment clearinghouse, or remove them"
+            )
+        if not self.runs_jobs and self.http_private_port is None:
+            raise ValueError(
+                "LPB_ROLE=clearinghouse needs LPB_HTTP_PRIVATE_PORT: what only a clearinghouse admin does "
+                "(onboarding, grant top-ups, tenant status, the wallet) is served on the private "
+                "listener and nowhere else"
+            )
+        return self
+
+    def _work_needs_a_clearinghouse(self) -> str:
+        held = [_env(name) for name in _BATTERIES if getattr(self, name) is not None]
+        beside = f", and cannot hold {', '.join(held)}" if held else ""
+        return (
+            f"LPB_ROLE=work needs {', '.join(map(_env, _CLEARINGHOUSE))}: an engine in its work role pays "
+            f"through a payment clearinghouse{beside}"
+        )
+
     @property
     def uses_clearinghouse(self) -> bool:
-        """Whether allotment, the allowance and usage reach a payment clearinghouse, and not Batteries.
-        The engine signs at ``signer_url`` either way."""
-        return self.clearinghouse_url is not None
+        """Whether allotment, the allowance and usage reach a payment clearinghouse, and not Batteries:
+        the ``work`` role alone. The engine signs at ``signer_url`` either way."""
+        return self.role == "work"
+
+    @property
+    def runs_jobs(self) -> bool:
+        """Whether the engine runs jobs: every role but ``clearinghouse``, a payment clearinghouse's,
+        which does payments only (D82)."""
+        return self.role != "clearinghouse"
 
     @property
     def clearinghouse_runner_list_token(self) -> str | None:
@@ -370,10 +407,10 @@ class EngineSettings(Contract):
                     raise ValueError(
                         f"LPB_{name.upper()} must be https (LPB_JWT_ALLOW_HTTP=true for local development)"
                     )
-        if self.jwt_admin_scope is not None and _reserved(self.jwt_admin_scope, self.jwt_scope_prefix):
+        if self.jwt_admin_scope is not None and reserved_scope(self.jwt_admin_scope, self.jwt_scope_prefix):
             raise ValueError(f"jwt_admin_scope is {_ORDINARY_SCOPE}, so every user would be an admin")
         read = self.jwt_admin_read_scope
-        if read is not None and (_reserved(read, self.jwt_scope_prefix) or read == self.jwt_admin_scope):
+        if read is not None and (reserved_scope(read, self.jwt_scope_prefix) or read == self.jwt_admin_scope):
             raise ValueError(
                 f"jwt_admin_read_scope is {_ORDINARY_SCOPE}, or the admin scope, so it would not mark a "
                 "read-only admin"
@@ -415,11 +452,9 @@ class EngineSettings(Contract):
         raise ValidationError.from_exception_data(title, [_without_input(detail) for detail in details])
 
     def require_discovery_url(self) -> str:
-        """The discovery address, for an engine about to start. ``BuilderEngine.start()`` asks before
-        anything polls, and ``serve`` before it opens anything: an engine does not start without the
-        address (D63), whatever its discovery source is. Reading settings does not ask (#154), so the
-        commands that build an engine and never start it need none. The refusal is not pydantic's: it
-        holds no setting."""
+        """The discovery address, for an engine about to start: ``BuilderEngine.start()`` asks before
+        anything polls, and ``serve`` before it opens anything (D63). Reading settings does not ask
+        (#154). The refusal is not pydantic's: it holds no setting."""
         if self.discovery_url is None:
             raise ValueError(DISCOVERY_URL_REQUIRED)
         return self.discovery_url

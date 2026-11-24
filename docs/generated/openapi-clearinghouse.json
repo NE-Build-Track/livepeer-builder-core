@@ -1,0 +1,2607 @@
+{
+  "components": {
+    "schemas": {
+      "AccessKey": {
+        "additionalProperties": false,
+        "description": "An engine-issued key, as inspected. The token itself is never stored or returned again.",
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "key_id": {
+            "title": "Key Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "actor",
+              "clearinghouse_admin",
+              "tenant_admin",
+              "auditor",
+              "service"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key_id",
+          "kind",
+          "actor_id",
+          "tenant_id",
+          "permissions",
+          "label",
+          "created_at",
+          "revoked_at"
+        ],
+        "title": "AccessKey",
+        "type": "object"
+      },
+      "ActorAllocation": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation_id": {
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "credential_custody": {
+            "default": "secret_store",
+            "enum": [
+              "secret_store",
+              "work_engine"
+            ],
+            "title": "Credential Custody",
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          },
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "secret_ref": {
+            "$ref": "#/components/schemas/SecretRef"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "exhausted",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "actor_id",
+          "grant_id",
+          "allocation_id",
+          "api_key_id",
+          "secret_ref",
+          "currency",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ActorAllocation",
+        "type": "object"
+      },
+      "AllocationRead": {
+        "additionalProperties": false,
+        "description": "The answer to reading one actor's allocation (#168): the allocation's record, and its amounts as\nthe payment provider reports them now. ``allowance`` is what the allowance read answers for the\nsame actor, by the same read of the provider: what was allotted (``granted``), what is spent, what\nis available, and the provider's status. An enterprise's engine reads an actor's allowance here.\n\n``allowance`` is ``None`` when the provider could not be read: unknown, never zero. The record is\nthe engine's own and is answered either way.",
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation_id": {
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "allowance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Allowance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "credential_custody": {
+            "default": "secret_store",
+            "enum": [
+              "secret_store",
+              "work_engine"
+            ],
+            "title": "Credential Custody",
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          },
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "secret_ref": {
+            "$ref": "#/components/schemas/SecretRef"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "exhausted",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "actor_id",
+          "grant_id",
+          "allocation_id",
+          "api_key_id",
+          "secret_ref",
+          "currency",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AllocationRead",
+        "type": "object"
+      },
+      "AllotBody": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "operation_ref"
+        ],
+        "title": "AllotBody",
+        "type": "object"
+      },
+      "Allowance": {
+        "additionalProperties": false,
+        "description": "The allocation as the provider reports it. A cap that can overshoot: funds are not reserved.",
+        "properties": {
+          "allocation_id": {
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "available": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "granted": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spent": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Money-Output"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "allocation_id",
+          "status",
+          "granted",
+          "spent",
+          "available"
+        ],
+        "title": "Allowance",
+        "type": "object"
+      },
+      "DeliveredAllocationBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation_api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allocation Api Key"
+          },
+          "allocation_id": {
+            "title": "Allocation Id",
+            "type": "string"
+          },
+          "api_key_id": {
+            "title": "Api Key Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "credential_custody": {
+            "default": "secret_store",
+            "enum": [
+              "secret_store",
+              "work_engine"
+            ],
+            "title": "Credential Custody",
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          },
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "resumed": {
+            "default": false,
+            "title": "Resumed",
+            "type": "boolean"
+          },
+          "secret_ref": {
+            "$ref": "#/components/schemas/SecretRef"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "exhausted",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "actor_id",
+          "grant_id",
+          "allocation_id",
+          "api_key_id",
+          "secret_ref",
+          "currency",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "DeliveredAllocationBody",
+        "type": "object"
+      },
+      "EngineHealth": {
+        "additionalProperties": false,
+        "properties": {
+          "cost_sync_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Sync At"
+          },
+          "cost_sync_error": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unavailable",
+                  "invalid_answer",
+                  "store_error"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Sync Error"
+          },
+          "cost_sync_set_aside": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Sync Set Aside"
+          },
+          "discovery_error": {
+            "anyOf": [
+              {
+                "enum": [
+                  "unavailable",
+                  "invalid_answer"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Error"
+          },
+          "discovery_fresh": {
+            "title": "Discovery Fresh",
+            "type": "boolean"
+          },
+          "discovery_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Discovery Observed At"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "role": {
+            "default": "both",
+            "enum": [
+              "both",
+              "work",
+              "clearinghouse"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "running_jobs": {
+            "title": "Running Jobs",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ready",
+          "discovery_fresh",
+          "discovery_observed_at",
+          "discovery_error",
+          "cost_sync_at",
+          "cost_sync_error",
+          "running_jobs",
+          "version"
+        ],
+        "title": "EngineHealth",
+        "type": "object"
+      },
+      "EscrowAccount": {
+        "additionalProperties": false,
+        "description": "One on-chain escrow account of the clearinghouse's wallet, as the payment provider reports it\n(#167): the TicketBroker deposit and reserve of one sender on one chain. Both are in ETH, exact to\nthe wei. They are what the provider's on-chain listener has confirmed through\n``confirmed_through_block``, not the chain's head: the engine reads no chain itself.\n\n``sender`` is the wallet's public address, which the provider already reports. No key material, no\nkeystore path and no RPC address is here.",
+        "properties": {
+          "chain_id": {
+            "title": "Chain Id",
+            "type": "string"
+          },
+          "confirmed_through_block": {
+            "title": "Confirmed Through Block",
+            "type": "integer"
+          },
+          "contract_address": {
+            "title": "Contract Address",
+            "type": "string"
+          },
+          "deposit": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "reserve": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "sender": {
+            "title": "Sender",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chain_id",
+          "contract_address",
+          "sender",
+          "deposit",
+          "reserve",
+          "confirmed_through_block"
+        ],
+        "title": "EscrowAccount",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "IssuedKey": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/AccessKey"
+          },
+          "replayed": {
+            "default": false,
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          }
+        },
+        "required": [
+          "key",
+          "token"
+        ],
+        "title": "IssuedKey",
+        "type": "object"
+      },
+      "KnownActor": {
+        "additionalProperties": false,
+        "description": "One row of the operator's actor list (D46, D48): allotted, signed in, or both.",
+        "properties": {
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "allocation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ActorAllocation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "allotted": {
+            "readOnly": true,
+            "title": "Allotted",
+            "type": "boolean"
+          },
+          "first_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen At"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "actor_id",
+          "label",
+          "name",
+          "allocation",
+          "first_seen_at",
+          "last_seen_at",
+          "allotted"
+        ],
+        "title": "KnownActor",
+        "type": "object"
+      },
+      "Money-Input": {
+        "additionalProperties": false,
+        "description": "An exact amount in one currency. Serialized as a decimal string, never a float.",
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Amount"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "Money",
+        "type": "object"
+      },
+      "Money-Output": {
+        "additionalProperties": false,
+        "description": "An exact amount in one currency. Serialized as a decimal string, never a float.",
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "USD",
+              "ETH"
+            ],
+            "title": "Currency",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ],
+        "title": "Money",
+        "type": "object"
+      },
+      "OnboardBody": {
+        "additionalProperties": false,
+        "properties": {
+          "admin_actor_id": {
+            "default": "tenant-admin",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Admin Actor Id",
+            "type": "string"
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "amount",
+          "operation_ref"
+        ],
+        "title": "OnboardBody",
+        "type": "object"
+      },
+      "OnboardedTenant": {
+        "additionalProperties": false,
+        "description": "The answer to onboarding a tenant (D83, #165): the tenant, whose id is the id of the grant the\nprovider created for it, and its first tenant admin key. The key's token is in the answer to the\nfirst successful call only: the engine keeps its hash, so a repeat of the reference answers\n``token: null`` and ``replayed: true``, as issuing any access key does.",
+        "properties": {
+          "admin_key": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IssuedKey"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "name",
+          "admin_key"
+        ],
+        "title": "OnboardedTenant",
+        "type": "object"
+      },
+      "RotateBody": {
+        "additionalProperties": false,
+        "properties": {
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_ref"
+        ],
+        "title": "RotateBody",
+        "type": "object"
+      },
+      "RotateKeyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_ref"
+        ],
+        "title": "RotateKeyBody",
+        "type": "object"
+      },
+      "SecretRef": {
+        "additionalProperties": false,
+        "description": "A SecretStore handle, or an opaque receipt for a credential the work engine holds. Which one is the\nactor's ``credential_custody``, never the text of ``ref``.",
+        "properties": {
+          "ref": {
+            "minLength": 1,
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "SecretRef",
+        "type": "object"
+      },
+      "SetAsideUsage": {
+        "additionalProperties": false,
+        "description": "A provider usage row the cost sync could not read or store, left out of every cost (#114, C13).\n\nKept so reconciliation can name what is missing. ``raw`` is the row as received, for the log only: the\nstore never holds it.",
+        "properties": {
+          "computed_fee_eth": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed Fee Eth"
+          },
+          "computed_fee_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed Fee Usd"
+          },
+          "id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "raw": {
+            "default": "",
+            "title": "Raw",
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "missing_id",
+              "unknown_status",
+              "unreadable_created_at",
+              "unreadable_fee",
+              "unreadable_row",
+              "unstorable_id",
+              "unstorable_event_id",
+              "unstorable_manifest_id",
+              "unstorable_allocation_id",
+              "unstorable_payment_session_id",
+              "unstorable_request_id",
+              "unstorable_pipeline",
+              "unstorable_computed_fee_eth",
+              "unstorable_computed_fee_usd",
+              "unstorable_currency"
+            ],
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "reason"
+        ],
+        "title": "SetAsideUsage",
+        "type": "object"
+      },
+      "SignerReadiness": {
+        "additionalProperties": false,
+        "description": "Whether the signer answered its identity call just now (#167): the unauthenticated call every\npayment begins with. ``ready`` says the signer is reachable where the engine calls it and answered\nwith an address and a signature, which the engine does not check. It does not say the wallet is\nfunded, that the signer's price feed or event stream is up, or that it can reach the payment\nprovider: those are the signer's own ``/readyz``, on a listener the engine is not given.",
+        "properties": {
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "not_configured",
+                  "unavailable",
+                  "no_identity"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "ready"
+        ],
+        "title": "SignerReadiness",
+        "type": "object"
+      },
+      "StatusBody": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "active",
+              "paused",
+              "exhausted",
+              "revoked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "StatusBody",
+        "type": "object"
+      },
+      "TenantGrant": {
+        "additionalProperties": false,
+        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked\nones included (#166). ``allocated_unspent`` is what its allocations still hold (#167): for each one,\nwhat it was allotted less what it has spent, and nothing for one that has spent more, so an overdrawn\nallocation takes nothing off another's. A revoked allocation holds nothing: what it had not spent is\nback in ``unallocated``. The two together are what the tenant may still spend.",
+        "properties": {
+          "allocated_unspent": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "spent": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "total": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
+          "unallocated": {
+            "$ref": "#/components/schemas/Money-Output"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "name",
+          "status",
+          "total",
+          "unallocated",
+          "spent",
+          "allocated_unspent"
+        ],
+        "title": "TenantGrant",
+        "type": "object"
+      },
+      "TenantKeyBody": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "auditor",
+            "enum": [
+              "auditor",
+              "tenant_admin"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Label",
+            "type": "string"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor_id",
+          "operation_ref"
+        ],
+        "title": "TenantKeyBody",
+        "type": "object"
+      },
+      "TenantState": {
+        "additionalProperties": false,
+        "description": "The answer to pausing or resuming a tenant: the status its grant now has.",
+        "properties": {
+          "status": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "status"
+        ],
+        "title": "TenantState",
+        "type": "object"
+      },
+      "TenantStatusBody": {
+        "additionalProperties": false,
+        "properties": {
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "active",
+              "paused"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "operation_ref"
+        ],
+        "title": "TenantStatusBody",
+        "type": "object"
+      },
+      "TopUpRequest": {
+        "additionalProperties": false,
+        "description": "A top-up of an allocation or of a tenant's grant. The path names which: the body names no grant.",
+        "properties": {
+          "amount": {
+            "$ref": "#/components/schemas/Money-Input"
+          },
+          "operation_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Operation Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "operation_ref"
+        ],
+        "title": "TopUpRequest",
+        "type": "object"
+      },
+      "UnspentGrants": {
+        "additionalProperties": false,
+        "description": "What the tenants whose grants are in one currency may still spend (#167): for every grant the\nprovider holds in that currency, whatever its status, what is not yet allotted (``unallocated``) and\nwhat its allocations still hold (``allocated_unspent``), neither counted below zero. It is not the\ngrant's total less what was spent: an allocation that spent more than it held takes nothing off the\nrest. ``grants`` is how many grants were summed. Nothing is converted: a deployment with grants in two\ncurrencies has two of these.",
+        "properties": {
+          "grants": {
+            "title": "Grants",
+            "type": "integer"
+          },
+          "unspent": {
+            "$ref": "#/components/schemas/Money-Output"
+          }
+        },
+        "required": [
+          "unspent",
+          "grants"
+        ],
+        "title": "UnspentGrants",
+        "type": "object"
+      },
+      "UsagePage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UsageRow"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "default": "",
+            "title": "Next Cursor",
+            "type": "string"
+          },
+          "set_aside": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SetAsideUsage"
+            },
+            "title": "Set Aside",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "UsagePage",
+        "type": "object"
+      },
+      "UsageRow": {
+        "additionalProperties": false,
+        "description": "One Batteries ``GET /v1/usage`` item. Batteries remains the authority; this is a cached copy.",
+        "properties": {
+          "allocation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allocation Id"
+          },
+          "computed_fee_eth": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed Fee Eth"
+          },
+          "computed_fee_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed Fee Usd"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "manifest_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Id"
+          },
+          "payment_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Session Id"
+          },
+          "pipeline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "status": {
+            "enum": [
+              "applied",
+              "quarantined",
+              "ignored",
+              "duplicate"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "event_id",
+          "status",
+          "manifest_id",
+          "allocation_id",
+          "payment_session_id",
+          "request_id",
+          "pipeline",
+          "computed_fee_eth",
+          "computed_fee_usd",
+          "currency",
+          "created_at"
+        ],
+        "title": "UsageRow",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WalletReport": {
+        "additionalProperties": false,
+        "description": "What a clearinghouse admin watches the wallet by (D82, #167): the deposit and reserve, the total\nof unspent grants, and the signer's readiness. Each amount is in its own currency. Nothing is\nconverted between ETH and a grant's currency, and no margin is computed: the report states, and a\nperson judges.",
+        "properties": {
+          "escrow": {
+            "items": {
+              "$ref": "#/components/schemas/EscrowAccount"
+            },
+            "title": "Escrow",
+            "type": "array"
+          },
+          "signer": {
+            "$ref": "#/components/schemas/SignerReadiness"
+          },
+          "unspent_grants": {
+            "items": {
+              "$ref": "#/components/schemas/UnspentGrants"
+            },
+            "title": "Unspent Grants",
+            "type": "array"
+          }
+        },
+        "required": [
+          "escrow",
+          "unspent_grants",
+          "signer"
+        ],
+        "title": "WalletReport",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "bearerFormat": "lpk",
+        "description": "An engine API key: `lpk_...`",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "livepeer-builder",
+    "version": "generated"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/readyz": {
+      "get": {
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readyz"
+      }
+    },
+    "/v1/clearinghouse/discovery": {
+      "get": {
+        "description": "The clearinghouse's runner list, in livepeer/node's discovery format: what an enterprise's\nengine reads as its ``LPB_DISCOVERY_URL``. The document is served as the clearinghouse read\nit. Any credential of a tenant may read it.",
+        "operationId": "discovery_v1_clearinghouse_discovery_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "The livepeer/node `/discovery` document the clearinghouse last read."
+          },
+          "503": {
+            "description": "The clearinghouse has read no runner list yet."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Discovery",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants": {
+      "get": {
+        "operationId": "list_tenants_v1_clearinghouse_tenants_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TenantGrant"
+                  },
+                  "title": "Response List Tenants V1 Clearinghouse Tenants Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Tenants",
+        "tags": [
+          "clearinghouse half",
+          "private listener"
+        ]
+      },
+      "post": {
+        "description": "Create the tenant's grant and its first tenant admin key, whose token is shown once.",
+        "operationId": "onboard_tenant_v1_clearinghouse_tenants_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardedTenant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Onboard Tenant",
+        "tags": [
+          "clearinghouse half",
+          "private listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/actors": {
+      "get": {
+        "description": "The tenant's allotted actors and the people an identity provider signed in (D46, D48).",
+        "operationId": "list_actors_v1_clearinghouse_tenants__tenant_id__actors_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "paused",
+                    "exhausted",
+                    "revoked"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "allotted",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Allotted"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KnownActor"
+                  },
+                  "title": "Response List Actors V1 Clearinghouse Tenants  Tenant Id  Actors Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Actors",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation": {
+      "get": {
+        "description": "The actor's allocation: its record, and as `allowance` what the payment provider reports for\nit now (allotted, spent, available, status). `allowance` is `null` when the provider could not\nbe read.",
+        "operationId": "get_actor_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllocationRead"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Actor",
+        "tags": [
+          "clearinghouse half"
+        ]
+      },
+      "post": {
+        "operationId": "allot_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AllotBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveredAllocationBody"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Allot",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/revoke": {
+      "post": {
+        "operationId": "revoke_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAllocation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/rotate-payment-key": {
+      "post": {
+        "operationId": "rotate_payment_key_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_rotate_payment_key_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveredAllocationBody"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Payment Key",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/status": {
+      "post": {
+        "operationId": "set_status_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAllocation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Status",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/top-up": {
+      "post": {
+        "operationId": "top_up_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_top_up_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAllocation"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Top Up",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/grant": {
+      "get": {
+        "description": "The grant's total, its unallocated balance and its status.",
+        "operationId": "get_grant_v1_clearinghouse_tenants__tenant_id__grant_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantGrant"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Grant",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/grant/top-up": {
+      "post": {
+        "operationId": "top_up_grant_v1_clearinghouse_tenants__tenant_id__grant_top_up_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Top Up Grant",
+        "tags": [
+          "clearinghouse half",
+          "private listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/keys": {
+      "get": {
+        "operationId": "list_tenant_keys_v1_clearinghouse_tenants__tenant_id__keys_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AccessKey"
+                  },
+                  "title": "Response List Tenant Keys V1 Clearinghouse Tenants  Tenant Id  Keys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Tenant Keys",
+        "tags": [
+          "clearinghouse half"
+        ]
+      },
+      "post": {
+        "description": "Issue an auditor key for the tenant, or, as a clearinghouse admin, another tenant admin key.",
+        "operationId": "issue_tenant_key_v1_clearinghouse_tenants__tenant_id__keys_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Issue Tenant Key",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}": {
+      "get": {
+        "operationId": "get_tenant_key_v1_clearinghouse_tenants__tenant_id__keys__key_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Tenant Key",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}/revoke": {
+      "post": {
+        "operationId": "revoke_tenant_key_v1_clearinghouse_tenants__tenant_id__keys__key_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Tenant Key",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}/rotate": {
+      "post": {
+        "operationId": "rotate_tenant_key_v1_clearinghouse_tenants__tenant_id__keys__key_id__rotate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateKeyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssuedKey"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Tenant Key",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/status": {
+      "post": {
+        "description": "Pause or resume the tenant by pausing or resuming its grant.",
+        "operationId": "set_tenant_status_v1_clearinghouse_tenants__tenant_id__status_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantStatusBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Tenant Status",
+        "tags": [
+          "clearinghouse half",
+          "private listener"
+        ]
+      }
+    },
+    "/v1/clearinghouse/tenants/{tenant_id}/usage": {
+      "get": {
+        "description": "One page of the tenant's payment records, oldest first: the payment provider's usage rows\nfor the tenant's grant, and none of another tenant's. ``cursor`` is the last page's\n``next_cursor``, which is empty on the last page.",
+        "operationId": "tenant_usage_v1_clearinghouse_tenants__tenant_id__usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 200,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsagePage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Tenant Usage",
+        "tags": [
+          "clearinghouse half"
+        ]
+      }
+    },
+    "/v1/clearinghouse/wallet": {
+      "get": {
+        "description": "The wallet's deposit and reserve as the payment provider has confirmed them, the total of\nunspent grants for each currency, and whether the signer answers. Nothing is converted\nbetween currencies and no margin is computed.",
+        "operationId": "wallet_report_v1_clearinghouse_wallet_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Wallet Report",
+        "tags": [
+          "clearinghouse half",
+          "private listener"
+        ]
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "Served by an engine in its `both` or its `clearinghouse` role (`LPB_ROLE`): these routes are 404 on an engine in its `work` role, which uses a payment clearinghouse and is not one.",
+      "name": "clearinghouse half"
+    },
+    {
+      "description": "Served on the private listener only, when the deployment has one (`LPB_HTTP_PRIVATE_PORT`): these routes are 404 on the public listener. A deployment with one listener serves them there. An engine in its `clearinghouse` role always has a private listener.",
+      "name": "private listener"
+    }
+  ]
+}

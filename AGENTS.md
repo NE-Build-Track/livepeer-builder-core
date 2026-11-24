@@ -65,6 +65,7 @@ src/livepeer_builder/
   cli.py       `lpb` operator commands
 tests/unit  tests/store  tests/structure
 deploy/dev-stack/   optional payment stack (Batteries + node signer + node's static discovery + engine); orchestrators come from the network
+deploy/clearinghouse/, deploy/enterprise/   a payment clearinghouse and an enterprise that uses it, as two Compose projects (deploy/README.md)
                     This repository does not deploy.
 ```
 

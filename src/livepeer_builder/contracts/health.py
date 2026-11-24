@@ -7,8 +7,14 @@ from typing import Literal
 from livepeer_builder.contracts.common import Contract, FailureCode, SourceFailureCode
 from livepeer_builder.contracts.payments import TenantGrant
 
+# Which half of the engine a deployment runs (D84, ``LPB_ROLE``). "both": the work half and the
+# clearinghouse half, for self-hosted payments. "work": the work half alone, paying through a payment
+# clearinghouse. "clearinghouse": the clearinghouse half alone; it never runs jobs.
+Role = Literal["both", "work", "clearinghouse"]
+
 
 class EngineHealth(Contract):
+    role: Role = "both"  # the role this engine runs in (#169)
     ready: bool
     discovery_fresh: bool
     discovery_observed_at: datetime | None
@@ -51,9 +57,13 @@ class PaymentProbe(Contract):
 
 class PaymentCheck(Contract):
     """What ``lpb payments check`` found (D87, #168): every probe a ``GET``, and nothing written
-    anywhere. ``ok`` when every probe is. ``tenant`` is who an engine that uses a clearinghouse is
-    there, with its grant, when the clearinghouse answered that read."""
+    anywhere. ``ok`` when every probe is. ``role`` is the engine's, and ``configuration`` what its
+    payments reach: Batteries and a signer of its own (``self_hosted``, the ``both`` and the
+    ``clearinghouse`` role), or a payment clearinghouse (``clearinghouse``, the ``work`` role).
+    ``tenant`` is who an engine in its ``work`` role is at the clearinghouse, with its grant, when the
+    clearinghouse answered that read."""
 
+    role: Role  # the engine's role, which says what it probes (#169)
     configuration: PaymentConfiguration
     ok: bool
     probes: tuple[PaymentProbe, ...]

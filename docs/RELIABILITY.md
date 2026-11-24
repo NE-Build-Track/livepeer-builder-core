@@ -10,6 +10,7 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `LPB_ROLE` | `both` | Which half of the engine this deployment runs (D84, #169): `both`, `work` or `clearinghouse`. It chooses the routes that are mounted, what the payment ports reach and what the engine starts ([Roles](#roles)). Any other value is refused at startup, and so is a setting that contradicts the role: the refusal names settings and echoes no value |
 | `LPB_DATABASE_URL` | `sqlite+aiosqlite:///./livepeer-builder.db` | Or `postgresql+asyncpg://…` (with the `[postgres]` extra) |
 | `LPB_AUTO_MIGRATE` | `true` | Migrate on start. Production may set `false` and run `lpb migrate`. With `false`, `start()` compares the database's revision with the package's and refuses to start on any mismatch, behind or ahead. The message names both revisions and the database that was checked, says to run `lpb migrate` against that database when it is behind, and says to start the release that migrated it when its revision is one this package does not know. It checks at start only, so replicas already running through a rolling deploy keep running |
 | `LPB_SIGNER_URL` | unset | The remote signer, for payments only. Refused at startup with userinfo, a query or a fragment: the engine logs this URL (D58) |
@@ -17,7 +18,7 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` | unset | Management API and the least-privilege credential (`grants.fund`, not `grants.*`) |
 | `LPB_BATTERIES_GRANTS_TOKEN` | unset | `grants.read`, `grants.create`, `grants.fund`, `grants.status`, `allocations.read` and, for the wallet report (#167), `escrow.read`. Optional: without it the tenant desk is off (`payments.tenants` is `None`; onboarding, the tenant list, a grant's read, a tenant's status and the wallet report are absent) |
 | `LPB_BATTERIES_TIMEOUT_S` | `30` | Each Batteries HTTP request |
-| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used: without it `lpb serve`, `lpb smoke` and an engine an application starts refuse to start ([payments.md](contracts/payments.md#allotment)). `lpb purge` and `lpb bootstrap-admin` never allot, so they do not need it (#106 review) |
+| `LPB_SECRET_KEY` | unset | Fernet key for stored payment keys (`lpb gen-secret-key`, or `livepeer_builder.generate_secret_key()` in code). Required with a payment provider when the built-in secret store is used, by an engine that stores allocation keys, which is one in its `both` or its `work` role: without it `lpb serve`, `lpb smoke` and an engine an application starts refuse to start ([payments.md](contracts/payments.md#allotment)). An engine in its `clearinghouse` role stores no allocation's key and needs none ([Roles](#roles)). `lpb purge` and `lpb bootstrap-admin` never allot, so they do not need it (#106 review) |
 | `LPB_OPERATION_STALE_S` | `120` | How long an admin command may stay `started` in the operation ledger before a repeat resumes it rather than answering 409 `operation_in_progress` (D57, Q3). At least four times `LPB_BATTERIES_TIMEOUT_S`, or the engine refuses to start: a resume must not overlap a call the earlier run may still have in flight |
 | `LPB_ENGINE_ID` | `livepeer-builder` | Namespaces this engine's idempotency keys at the payment provider; at least one character |
 | `LPB_MAX_PAYMENT_CHALLENGE_RETRIES` | `3` | Maximum retries per runner call for payments that answer HTTP 402 challenges (≥ 0). The first challenge payment plus retries allows up to 4 challenge signatures at the default. Metered live sessions sign renewal payments separately, outside this cap. The call has a separate budget of the same size for unsigned requests, including the initial request and requests for fresh challenges after a signer HTTP 480. A runner HTTP 402 after the last permitted challenge payment ends the attempt with `http` (402). A signer HTTP 480 that exhausts the unsigned-request budget ends the attempt with `payment_refused`. |
@@ -45,11 +46,60 @@ release ([what changes](contracts/index.md#upgrading-to-the-domain-language-name
 | `LPB_JWT_ADMIN_READ_SCOPE` | unset | Makes an auditor, a read-only admin, for example a dashboard's service account; the admin scope wins when both are present. Like the admin scope, it may not be an operation, a standard OpenID scope, or the admin scope itself |
 | `LPB_JWT_LEEWAY_S` | `30` | Clock skew allowed on `exp` and `nbf` |
 | `LPB_HTTP_HOST`, `LPB_HTTP_PORT`, `LPB_LOG_JSON` | `127.0.0.1`, `8080`, `true` | Service and logging. With a private listener, this address is the public listener |
-| `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`, `LPB_CLEARINGHOUSE_TENANT_ID` | unset | An engine that uses a payment clearinghouse (D84, #168): the address of its public listener (a scheme, a host and an optional port, and nothing after them), the tenant admin key (a secret) and the tenant's id. Set together or not at all, and never with a Batteries setting, which is refused at startup. Allotment, the allowance and usage then reach the clearinghouse, and `LPB_DISCOVERY_URL` defaults to its runner list ([payments.md](contracts/payments.md#the-remote-adapters)). `LPB_SIGNER_URL` names the clearinghouse's published signer, where the engine signs itself; unset, the engine does not pay. `LPB_SECRET_KEY` is still required: the engine keeps the key each allotment and rotation hands over |
+| `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`, `LPB_CLEARINGHOUSE_TENANT_ID` | unset | The payment clearinghouse of an engine in its `work` role (D84, #168, #169): the address of its public listener (a scheme, a host and an optional port, and nothing after them), the tenant admin key (a secret) and the tenant's id. Required with `LPB_ROLE=work`, set together, and refused at startup with any other role or beside a Batteries setting. Allotment, the allowance and usage then reach the clearinghouse, and `LPB_DISCOVERY_URL` defaults to its runner list ([payments.md](contracts/payments.md#the-remote-adapters)). `LPB_SIGNER_URL` names the clearinghouse's published signer, where the engine signs itself; unset, the engine does not pay. `LPB_SECRET_KEY` is still required: the engine keeps the key each allotment and rotation hands over |
 | `LPB_CLEARINGHOUSE_TIMEOUT_S` | `20` | Each request to the clearinghouse. `LPB_OPERATION_STALE_S` must be at least six times it: a command is cancelled at half the stale window, and the longest one makes three calls to the clearinghouse ([payments.md](contracts/payments.md#the-remote-adapters)) |
-| `LPB_HTTP_PRIVATE_PORT` | unset | Turns the private listener on (D84, #167). Unset, the engine serves one listener with every route, as before. Set (1 to 65535), `lpb serve` serves two: the public one without the routes only a clearinghouse admin calls, where a clearinghouse admin credential is 403, and the private one with every route, for a clearinghouse admin only ([access.md](contracts/access.md#listeners)). Refused at startup when it is the public listener's port on the same host |
+| `LPB_HTTP_PRIVATE_PORT` | unset | Turns the private listener on (D84, #167). Unset, the engine serves one listener with every route, as before. Set (1 to 65535), `lpb serve` serves two: the public one without the routes only a clearinghouse admin calls, where a clearinghouse admin credential is 403, and the private one with every route, for a clearinghouse admin only ([access.md](contracts/access.md#listeners)). Required with `LPB_ROLE=clearinghouse` (#169). Refused at startup when it is the public listener's port on the same host |
 | `LPB_HTTP_PRIVATE_HOST` | `127.0.0.1` | Where the private listener binds. Read only with `LPB_HTTP_PRIVATE_PORT`. Loopback unless set: publish the public listener, never this one |
 | `LPB_HTTP_MAX_REQUEST_BYTES` | `16777216` (16 MiB) | A `/v1/` request body over it is refused with 413 `request_too_large` before it is read (D59); at least 1024. It fits an 8 MiB `raw_body` as base64 |
+
+### Roles
+
+One program covers three deployments (D84, #169). `LPB_ROLE` says which one this is.
+
+| | `both`, the default | `work` | `clearinghouse` |
+| --- | --- | --- | --- |
+| Who runs it | An enterprise with self-hosted payments | An enterprise that uses a payment clearinghouse, as an engine server or an embedded engine | A payment clearinghouse |
+| Routes | The work routes and the clearinghouse routes | The work routes. Every clearinghouse route is 404 | The clearinghouse routes. Every work route is 404: jobs, the catalog (`GET /v1/offerings`), runners, costs, the allowance read and `/v1/keys` |
+| Allotment and rotation | The engine stores each allocation's key for its own jobs and answers none (`deliver_allocation_keys=False`) | No route allots. The engine's own commands store the key its clearinghouse hands over | Each key is handed to the caller once, and none is stored (`deliver_allocation_keys=True`) |
+| Payment ports | Batteries and its signer | The clearinghouse, for allocations, the allowance and usage; its own secret store for keys | Batteries |
+| Signs | At its signer, `LPB_SIGNER_URL` | At the clearinghouse's published signer, `LPB_SIGNER_URL` | Nothing: it never runs a job. Its transport can only ask the signer's identity, for the wallet report |
+| Listeners | One, or two with `LPB_HTTP_PRIVATE_PORT` | One, or two with `LPB_HTTP_PRIVATE_PORT` | Two, always |
+| Needs, or it does not start | With Batteries, `LPB_SECRET_KEY` | `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`, `LPB_CLEARINGHOUSE_TENANT_ID` and `LPB_SECRET_KEY` | `LPB_HTTP_PRIVATE_PORT`, `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` and `LPB_BATTERIES_GRANTS_TOKEN`. No `LPB_SECRET_KEY`: it stores no allocation's key |
+| `LPB_SIGNER_URL` unset | It starts, and runs its jobs unpaid | It starts, and runs its jobs unpaid | It starts, and its wallet report says the signer is `not_configured` |
+| Refuses | The `LPB_CLEARINGHOUSE_*` settings | Any Batteries setting | The `LPB_CLEARINGHOUSE_*` settings: a clearinghouse is no tenant of another |
+| Starts | Resolving interrupted jobs, discovery, cost sync, retention | The same | Discovery alone, for the runner list it publishes. It holds no job: nothing is resolved, synced or purged, and `LPB_COST_SYNC_INTERVAL_S` and the retention settings do nothing |
+| Runs jobs | Yes | Yes | No. `jobs.run` refuses an embedding caller too: `InvalidRequest`, from admission, before the job's reference is claimed or anything is recorded. `jobs.streaming` is `None`: the role's default transport opens no stream. With a transport a caller supplies that does, `jobs.streaming.stream` is refused the same way |
+| Serves the wallet report and the runner list | Yes, with Batteries | No: it is nobody's clearinghouse | Yes |
+
+- **One place decides who keeps the keys.** `delivers_allocation_keys(role)` in `http/listeners.py`.
+  `create_app` asks it for every app, on one listener and on two, and nothing else chooses.
+- **The secret key is needed where the engine stores allocation keys:** in its `both` role, the keys
+  its Batteries mints, and in its `work` role, the keys its clearinghouse hands over. Without it such an
+  engine does not start (#112, C2). An engine in its `clearinghouse` role stores none and is not asked.
+- **No role is refused for a missing signer address.** `lpb payments check` fails for it in every role,
+  and says what follows: a `both` or a `work` engine runs its jobs unpaid, and a clearinghouse's wallet
+  report cannot say whether the signer answers.
+- **A clearinghouse runs the signer and signs nothing.** Its `LPB_SIGNER_URL` is the address its own
+  engine reaches the signer at, where the wallet report reads the signer's readiness. Enterprise
+  engines reach the signer at its published address, which may be another one: neither the wallet
+  report nor the clearinghouse's `lpb payments check` tests that address. An enterprise's
+  `lpb payments check` does, from its own side. The signer keeps its Batteries authorization webhook,
+  which is the only check at signing ([SECURITY.md](SECURITY.md)).
+- **What a `clearinghouse` engine needs is judged on the parts it will run with.** Batteries is an
+  allocation manager and a grants manager, so a part supplied through `EngineSupply` counts. Without
+  one the engine does not start, and the error names the settings.
+- **An engine in its `work` role must name an engine in its `clearinghouse` role.** Pointed at an
+  engine that keeps the keys itself, a `both` engine, its allotment is answered without a key: the
+  command fails with a `ProviderError` that says which role `LPB_CLEARINGHOUSE_URL` must name, and the
+  allocation exists there.
+- **`/livez` and `/readyz` are served in every role, on every listener.** `/readyz` names the role.
+- **`create_app(engine)` mounts the routes of the engine's role.** For an engine in its `clearinghouse`
+  role it takes `listener="public"` or `listener="private"`; the app of one listener is refused.
+- **An engine server in its `work` role serves no route that allots.** The allocation routes are the
+  clearinghouse half's. An embedding app allots through `engine.payments.allot`, which calls the
+  clearinghouse and stores the key it hands over (tech debt T41).
+- **The two Compose projects and a proof runbook** for a clearinghouse and an enterprise on one host
+  are in [deploy/README.md](../deploy/README.md).
 
 ## Operations
 
@@ -60,8 +110,10 @@ only an engine that starts needs the address (#154). `smoke` starts one: without
 address nothing listens on, so its one poll is refused. `lpb serve`, and any engine an application
 starts, still require it (#112, C23): `serve` exits with code 1 before it opens the database, and the
 error names the variable. With a payment provider, `purge` and
-`bootstrap-admin` also do not need `LPB_SECRET_KEY`, since they allot nothing; `smoke` and `serve` do.
-`gen-secret-key`, `verify` and `gen-docs` read no setting.
+`bootstrap-admin` also do not need `LPB_SECRET_KEY`, since they allot nothing. `smoke` and `serve` need it
+in the roles that store allocation keys, `both` and `work`, and not in the `clearinghouse` role, which
+stores none and needs it for no command ([Roles](#roles)). `gen-secret-key`, `verify` and `gen-docs` read
+no setting.
 
 | Command | When |
 | --- | --- |
@@ -69,8 +121,8 @@ error names the variable. With a payment provider, `purge` and
 | `lpb bootstrap-admin` | Once per deployment; prints the first admin key once |
 | `lpb gen-secret-key` | Once; store the key in your secret manager, never in the database |
 | `lpb serve` | Run the REST service (`[server]` extra) |
-| `lpb payments check` | Read-only: every request is a GET, no engine is built and no database is opened (D87, #168). A self-hosted engine probes the signer and Batteries; an engine that uses a clearinghouse probes its grant, its usage and the runner list there, and the clearinghouse's signer at `LPB_SIGNER_URL`. Exit 0 when every probe passed, 1 when one was refused or failed, 2 when the settings are refused. It prints setting names, never a credential or an address ([payments.md](contracts/payments.md#lpb-payments-check)) |
-| `lpb smoke` | Import, migrate, start, health, stop; used by CI and after an install. It ignores `LPB_DATABASE_URL` and runs on a throwaway SQLite file, so it never touches a live database: starting an engine there resolves its running jobs as interrupted. To check the configured database, run `lpb revision`, which only reads |
+| `lpb payments check` | Read-only: every request is a GET, no engine is built and no database is opened (D87, #168). It prints the role and probes what that role needs (#169): every role probes the signer at `LPB_SIGNER_URL`; an engine in its `both` or its `clearinghouse` role also probes Batteries; one in its `work` role probes its grant, its usage and the runner list at the clearinghouse. Exit 0 when every probe passed, 1 when one was refused or failed, 2 when the settings are refused. It prints setting names, never a credential or an address ([payments.md](contracts/payments.md#lpb-payments-check)) |
+| `lpb smoke` | Import, migrate, start, health, stop; used by CI and after an install. It ignores `LPB_DATABASE_URL` and runs on a throwaway SQLite file, so it never touches a live database: starting an engine there resolves its running jobs as interrupted. To check the configured database, run `lpb revision`, which only reads. The engine is built in the role `LPB_ROLE` names, from the deployment's settings, and the output names the role (#169): settings that contradict the role, or a `clearinghouse` engine without Batteries, fail here |
 | `lpb backup FILE` / `lpb verify FILE` / `lpb restore FILE --yes` | SQLite backup and restore (below) |
 | `lpb purge` | Apply retention now |
 
@@ -99,9 +151,10 @@ second cancel, does the same. Whichever way `serve()` ends, every listener has e
 again, and the process has the signal handlers it had before. Both listeners answer `/livez` and `/readyz`, from the one
 engine, so a health check may use either. The log line `http.listeners_bound` names both addresses.
 
-Health is reported by `GET /readyz` (and `engine.health()`): discovery freshness and errors,
-the last cost sync, its error and the count of usage rows it has set aside (`cost_sync_set_aside`),
-running jobs and the version. It no longer reports an `allocation_mode`: `per_actor` is the only one
+Health is reported by `GET /readyz` (and `engine.health()`): the engine's role (#169), discovery
+freshness and errors, the last cost sync, its error and the count of usage rows it has set aside
+(`cost_sync_set_aside`), running jobs and the version. An engine in its `clearinghouse` role syncs no
+cost, so its `cost_sync_at` stays `null`. It no longer reports an `allocation_mode`: `per_actor` is the only one
 (D82). Logs are JSON lines; every line has an `event` field (for example `jobs.recovered` or
 `costs.sync_failed`).
 

@@ -455,3 +455,230 @@ async def test_a_store_without_a_set_aside_table_still_syncs_and_the_row_is_logg
     logged = [record for record in caplog.records if getattr(record, "event", "") == "costs.usage_set_aside"]
     assert len(logged) == 1
     assert engine.health().cost_sync_set_aside is None
+
+
+# -- #158: an item the JSON decoder's own limits refuse ------------------------------------------------
+
+DEEP = "[" * 100_000 + "]" * 100_000
+PAST_THE_DECODER = {
+    "a 5000-digit integer": '{"id": "u-bad", "status": "applied", "offset": ' + "9" * 5000 + "}",
+    "a 5000-digit fee": '{"id": "u-bad", "status": "applied", "computed_fee_eth": ' + "9" * 5000 + "}",
+    "a deeply nested field": '{"id": "u-bad", "status": "applied", "extra": ' + DEEP + "}",
+    "deeply nested objects": '{"id": "u-bad", "a": ' + '{"a": ' * 50_000 + "1" + "}" * 50_000 + "}",
+    "brackets in its text too": '{"id": "u-\\"}]{[", "note": "]}\\\\", "offset": ' + "9" * 5000 + "}",
+}
+
+
+def raw_batteries(*bodies: str) -> BatteriesUsageSource:
+    """A usage feed that answers page ``n`` with the text ``bodies[n]``, as written: its cursor is ``p<n>``."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        index = int(request.url.params.get("cursor", "p0")[1:])
+        return httpx.Response(
+            200, content=bodies[index].encode(), headers={"content-type": "application/json"}
+        )
+
+    client = httpx.AsyncClient(base_url="https://batteries.test", transport=httpx.MockTransport(handle))
+    return BatteriesUsageSource("https://batteries.test", "t", client=client)
+
+
+def page_text(*items: str | dict[str, Any], next_cursor: str = "") -> str:
+    texts = [entry if isinstance(entry, str) else json.dumps(entry) for entry in items]
+    return '{"items": [' + ", ".join(texts) + '], "next_cursor": ' + json.dumps(next_cursor) + "}"
+
+
+@pytest.mark.parametrize("name", PAST_THE_DECODER)
+async def test_a_usage_item_the_json_decoder_cannot_read_is_set_aside_and_the_rest_of_its_page_is_stored(
+    make_engine: EngineFactory, store: SqlStore, caplog: pytest.LogCaptureFixture, name: str
+) -> None:
+    """One integer past the decoder's digit limit, or one field nested past its depth, failed the whole
+    page at ``response.json()``, before any row was read: no row could be set aside, the cursor never
+    moved and no later cost arrived."""
+    bad = PAST_THE_DECODER[name]
+    source = raw_batteries(
+        page_text(item("u1"), next_cursor="p1"), page_text(item("u2"), bad, item("u3"), next_cursor="p2"),
+        page_text(item("u4")),
+    )  # fmt: skip
+    engine = await make_engine(supply=EngineSupply(usage_source=source))
+    with caplog.at_level(logging.WARNING):
+        report = await engine.costs.sync_once()
+    assert (report.pages, report.rows_seen, report.rows_new, report.rows_set_aside) == (3, 5, 4, 1)
+    assert await stored_ids(store) == ["u1", "u2", "u3", "u4"]
+    checkpoint = await store.cost_checkpoint()
+    assert checkpoint is not None and checkpoint.resume_cursor == "p2"
+    [(key, reason, fee_eth, fee_usd)] = await set_aside(store)
+    assert key.startswith("sha256:") and len(key) == 71  # nothing of it is read, its id included
+    assert (reason, fee_eth, fee_usd) == ("unreadable_row", None, None)
+    [line] = logged(caplog.records)
+    assert (line.row_id, line.reason) == (key, "unreadable_row")  # type: ignore[attr-defined]
+    assert line.raw == bad[:2000]  # type: ignore[attr-defined]  # the item's own text, as received
+    health = engine.health()
+    assert (health.cost_sync_error, health.cost_sync_set_aside) == (None, 1)
+
+    again = await engine.costs.sync_once()  # re-reads the last page only
+    assert (again.rows_new, again.rows_set_aside) == (0, 0)
+
+
+async def test_two_items_the_decoder_cannot_read_on_one_page_are_each_set_aside_once() -> None:
+    one, two = PAST_THE_DECODER["a 5000-digit integer"], PAST_THE_DECODER["a deeply nested field"]
+    body = '{"next_cursor": "p1", "items": [' + ", ".join([one, json.dumps(item("u1")), two, one]) + "]}"
+    page = await raw_batteries(body).page(None)
+    assert ([row.id for row in page.items], page.next_cursor) == (["u1"], "p1")
+    assert [row.reason for row in page.set_aside] == ["unreadable_row"] * 3
+    assert page.set_aside[0].id == page.set_aside[2].id != page.set_aside[1].id  # a digest of its text
+
+
+async def test_a_page_with_a_byte_order_mark_is_salvaged_as_the_decoder_reads_it() -> None:
+    """The decoder takes a UTF-8 page that begins with a byte order mark. The salvage decoded the bytes
+    itself and kept the mark, which the decoder then refused as text: a page the ordinary reader takes
+    failed on every pass once it held one oversized item, and the cursor never moved (John, #189 review)."""
+    plain = b"\xef\xbb\xbf" + page_text(item("u1"), next_cursor="p1").encode()
+    marked = (
+        b"\xef\xbb\xbf"
+        + page_text(item("u1"), PAST_THE_DECODER["a 5000-digit integer"], next_cursor="p1").encode()
+    )
+    for body, set_aside_rows in ((plain, 0), (marked, 1)):
+        client = httpx.AsyncClient(
+            base_url="https://batteries.test",
+            transport=httpx.MockTransport(lambda _, body=body: httpx.Response(200, content=body)),
+        )
+        page = await BatteriesUsageSource("https://batteries.test", "t", client=client).page(None)
+        assert ([row.id for row in page.items], page.next_cursor) == (["u1"], "p1")
+        assert len(page.set_aside) == set_aside_rows
+
+
+async def test_a_page_that_is_not_text_is_no_page_whatever_its_items() -> None:
+    """Bytes that are no UTF-8 are not a page the decoder reads, with an oversized item in it or not."""
+    body = page_text(item("u1"), PAST_THE_DECODER["a 5000-digit integer"]).encode().replace(b"u1", b"u\xff")
+    client = httpx.AsyncClient(
+        base_url="https://batteries.test",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, content=body)),
+    )
+    with pytest.raises(ProviderError) as refused:
+        await BatteriesUsageSource("https://batteries.test", "t", client=client).page(None)
+    assert refused.value.status_code == 200
+
+
+STILL_NO_PAGE = {
+    "a page cut short": page_text(item("u1"), PAST_THE_DECODER["a deeply nested field"])[:-30],
+    "an item that is not JSON": page_text(item("u1"), '{"id": "u-bad", "offset": 12x}'),
+    "a deep item that is no object": page_text(item("u1"), DEEP),
+    "a deep value beside the items": '{"items": [], "next_cursor": "", "extra": ' + DEEP + "}",
+    "a deep object in another list": '{"items": [], "extra": [' + PAST_THE_DECODER["deeply nested objects"] + "]}",
+    "a deep item on a page with text after its end": page_text({"id": "u1", "extra": [1]}).replace("[1]", DEEP) + "x",
+    "a page that is a list": "[" + PAST_THE_DECODER["a 5000-digit integer"] + "]",
+    "an item that is null beside one": page_text("null", PAST_THE_DECODER["a 5000-digit integer"]),
+    "a cursor that is a 5000-digit integer": '{"items": [], "next_cursor": ' + "9" * 5000 + "}",
+    # The decoder keeps the last of a repeated key: the first list's row was dropped, the item cut from the
+    # second accounted for every marker, and the page's cursor was followed past the row (John, #189 review).
+    "items named twice, with a row in the first list": '{"items": [' + json.dumps(item("u-good")) + '], "items": ['
+    + PAST_THE_DECODER["a 5000-digit integer"] + '], "next_cursor": "p2"}',
+    "a cursor named twice": '{"items": [' + PAST_THE_DECODER["a 5000-digit integer"] + '], "next_cursor": "p1", '
+    + '"next_cursor": "p2"}',
+    # The decoder stops at the first limit it meets and never reads on: an item that is not JSON after its
+    # oversized integer, or after its nesting, was cut out as if it were one, and the page was checkpointed
+    # (John, #189 review). What is left out must be JSON the decoder only refuses for its size.
+    "an oversized integer that hides a syntax error after it": page_text(
+        item("u1"), '{"id": "u-bad", "offset": ' + "9" * 5000 + ', "then": oops}'
+    ),
+    "an oversized integer in an item with a key that is no string": page_text(
+        item("u1"), '{"id": "u-bad", "offset": ' + "9" * 5000 + ", 7: 1}"
+    ),
+    "deep nesting that hides a syntax error after it": page_text(
+        item("u1"), '{"id": "u-bad", "extra": ' + DEEP + ', "then": oops}'
+    ),
+    "deep nesting whose brackets do not match": page_text(
+        item("u1"), '{"id": "u-bad", "extra": ' + "[" * 100_000 + "}" * 100_000 + "}"
+    ),
+    "an oversized integer with a leading zero": page_text(item("u1"), '{"id": "u-bad", "offset": 0' + "9" * 5000 + "}"),
+    # and with no item past the decoder, where the decoder took the page and the first list's row was gone
+    "items named twice, and nothing past the decoder": '{"items": [' + json.dumps(item("u-good"))
+    + '], "items": [], "next_cursor": "p2"}',
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("name", STILL_NO_PAGE)
+async def test_a_usage_page_that_is_malformed_still_fails_whatever_its_items(name: str) -> None:
+    """Only an item the decoder's limits refuse is set aside. A page that is not JSON, or whose envelope
+    the engine cannot read, is no page: nothing of it is stored and the cursor stays."""
+    with pytest.raises(ProviderError) as refused:
+        await raw_batteries(STILL_NO_PAGE[name]).page(None)
+    assert refused.value.status_code == 200
+
+
+# -- #158: a fee is the decimal string Batteries writes, and an id is not blank ------------------------
+
+NOT_A_FEE_AS_BATTERIES_WRITES_ONE: dict[str, Any] = {
+    "an exponent past any amount": "1e999999",
+    "a small exponent": "3.9e-8",
+    "a digit separator": "1_000",
+    "full-width digits": "\uff11\uff12",
+    "digits of another script": "\u0663",
+    "padding": " 0.5 ",
+    "a line break after it": "0.5\n",
+    "a plus sign": "+0.5",
+    "no digit before the point": ".5",
+    "no digit after the point": "5.",
+    "a JSON fraction": 0.1,
+    "a JSON whole number": 5,
+    "a JSON number past a float": 1e400,
+}
+
+
+@pytest.mark.parametrize("field", ["computed_fee_eth", "computed_fee_usd"])
+@pytest.mark.parametrize("name", NOT_A_FEE_AS_BATTERIES_WRITES_ONE)
+async def test_a_fee_that_is_not_a_plain_decimal_string_sets_the_row_aside_and_is_never_guessed_at(
+    make_engine: EngineFactory, store: SqlStore, name: str, field: str
+) -> None:
+    """Python's ``Decimal`` reads more than Batteries writes: ``"1e999999"`` was stored as given (two such
+    rows could not be added up), ``"1_000"`` and padded text were read as numbers, and a JSON number went
+    through ``str()``. Batteries serves a fee as text: digits, a point, and a minus sign when it is negative."""
+    bad = item("u-bad", **{field: NOT_A_FEE_AS_BATTERIES_WRITES_ONE[name]})
+    engine = await make_engine(supply=EngineSupply(usage_source=batteries([item("u1"), bad, item("u2")])))
+    report = await engine.costs.sync_once()
+    assert (report.rows_new, report.rows_set_aside) == (2, 1)
+    assert await stored_ids(store) == ["u1", "u2"]
+    kept = (None, "0.25") if field == "computed_fee_eth" else ("0.5", None)  # the fee it could read
+    assert await set_aside(store) == [("u-bad", "unreadable_fee", *kept)]
+
+
+FEES_BATTERIES_WRITES = {
+    "a whole number": ("7", Decimal(7)),
+    "zero": ("0", Decimal(0)),
+    "one wei": ("0.000000000000000001", Decimal("0.000000000000000001")),
+    "eighteen decimal places": ("0.000000039028439697", Decimal("0.000000039028439697")),
+    "a large fee": ("123456789012345678901234567890.5", Decimal("123456789012345678901234567890.5")),
+    "a negative amount": ("-0.25", Decimal("-0.25")),
+}
+
+
+@pytest.mark.parametrize("name", FEES_BATTERIES_WRITES)
+async def test_every_fee_batteries_writes_is_still_read_exactly(name: str) -> None:
+    """``internal/units/eth.go`` (v0.0.3): digits, then a point and up to 18 more when the amount has a
+    fraction, and a minus sign for a negative one. No exponent, whatever the size."""
+    text, amount = FEES_BATTERIES_WRITES[name]
+    page = await batteries([item("u1", computed_fee_eth=text, computed_fee_usd=text)]).page(None)
+    [row] = page.items
+    assert (row.computed_fee_eth, row.computed_fee_usd, page.set_aside) == (amount, amount, ())
+
+
+BLANK_IDS = {"spaces": "  ", "a tab": "\t", "a line break": "\n", "a no-break space": "\u00a0"}
+
+
+@pytest.mark.parametrize("row_id", BLANK_IDS.values(), ids=BLANK_IDS)
+async def test_a_usage_row_whose_id_is_blank_has_no_id(
+    make_engine: EngineFactory, store: SqlStore, row_id: str
+) -> None:
+    """An id of spaces was stored as the row's id. It is no id, as ``""`` is none."""
+    engine = await make_engine(supply=EngineSupply(usage_source=batteries([item(row_id), item("u1")])))
+    report = await engine.costs.sync_once()
+    assert (report.rows_new, report.rows_set_aside) == (1, 1)
+    assert await stored_ids(store) == ["u1"]
+    [(key, reason, fee_eth, fee_usd)] = await set_aside(store)
+    assert key.startswith("sha256:") and (reason, fee_eth, fee_usd) == ("missing_id", "0.5", "0.25")
+
+
+async def test_an_id_with_text_in_it_is_stored_as_received() -> None:
+    """Nothing is trimmed: the id stored is the id Batteries served."""
+    page = await batteries([item(" u 1 "), item("AZqk3vX7cQK1m0Jf9d2hLw")]).page(None)
+    assert ([row.id for row in page.items], page.set_aside) == ([" u 1 ", "AZqk3vX7cQK1m0Jf9d2hLw"], ())

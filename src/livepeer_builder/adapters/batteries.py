@@ -1,6 +1,6 @@
 """Clearinghouse Batteries: management API (AllocationManager) and usage feed (UsageSource).
 
-With ``batteries_usage_rows.py``, which reads one usage item, the only module that knows the Batteries
+With ``batteries_usage_rows.py``, which reads one usage item, the only modules that know the Batteries
 wire format. Baseline: livepeer/clearinghouse-batteries
 v0.0.3, ``03bc9fb`` (docs/references/upstream-baseline.md). Every route needs the least-privilege
 management credential in ``Livepeer-Clearinghouse-Token``. It may ``grants.fund`` any grant the engine
@@ -11,7 +11,7 @@ names. It has no ``grants.*``: creating, reading and pausing a grant use the gra
 import asyncio
 import json
 from collections.abc import Mapping
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import quote
 
@@ -19,7 +19,12 @@ import httpx
 from pydantic import SecretStr
 
 from livepeer_builder.adapters.batteries_escrow import read_escrow_report
-from livepeer_builder.adapters.batteries_usage_rows import decimal_or_none, read_usage_item
+from livepeer_builder.adapters.batteries_usage_rows import (
+    KeyNamedTwice,
+    loads_naming_each_key_once,
+    page_past_the_decoder,
+    read_usage_item,
+)
 from livepeer_builder.contracts import (
     Allowance,
     Currency,
@@ -34,9 +39,11 @@ from livepeer_builder.contracts import (
     UsageRow,
 )
 from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnavailable
+from livepeer_builder.utils import BODY_LIMIT, CursorTrail
 
 TOKEN_HEADER = "Livepeer-Clearinghouse-Token"  # noqa: S105 - a header name
 _GRANTS = "/v1/grants"
+_NO_AMOUNT = ("", "[error]")  # what Batteries serves, with null, for an amount it has not or cannot convert
 _Held = tuple[Decimal, Decimal, Decimal]  # of a grant's allocations: allotted, spent, still held unspent
 _NOTHING_HELD: _Held = (Decimal(0), Decimal(0), Decimal(0))  # a grant with no allocation
 
@@ -177,15 +184,15 @@ class BatteriesClient:
         return held
 
     async def _pages(self, path: str, filters: dict[str, str]) -> list[dict[str, Any]]:
-        """Every item of a list. A page that answers the cursor it was asked with is an answer the
-        engine cannot read: asking again would never end."""
+        """Every item of a list. A page that names a cursor the list was already at (the one it was asked
+        with, or an earlier one: A, B, A) is an answer the engine cannot read: the list would never end."""
         items: list[dict[str, Any]] = []
-        cursor = ""
+        cursor, trail = "", CursorTrail(None)
         while True:
             params = {**filters, "limit": "1000"} | ({"cursor": cursor} if cursor else {})
             page, following = list_page(await self._request("GET", path, params=params))
             items += page
-            if following == cursor and cursor:
+            if following and trail.repeats(following):
                 raise ProviderError(200, "Batteries answered a list whose cursor did not advance")
             if not following:
                 return items
@@ -214,8 +221,14 @@ class BatteriesClient:
         try:
             # One deadline for the whole call: httpx times each phase separately, and the operation ledger's
             # stale window is counted in whole calls (D57).
-            async with asyncio.timeout(self._timeout_s):
-                response = await self._client.request(method, path, json=json, headers=headers, params=params)
+            async with (
+                asyncio.timeout(self._timeout_s),
+                self._client.stream(method, path, json=json, headers=headers, params=params) as response,
+            ):
+                try:
+                    await response.aread()
+                except httpx.DecodingError as exc:  # no TransportError: it answered, as in the usage feed
+                    raise ProviderError(response.status_code, f"the body did not decode: {exc}") from exc
         except TimeoutError as exc:
             raise ProviderUnavailable(f"Batteries call timed out after {self._timeout_s:g} s") from exc
         except httpx.TransportError as exc:
@@ -268,12 +281,21 @@ class BatteriesUsageSource:
         except httpx.TransportError as exc:
             raise ProviderUnavailable(f"Batteries unreachable: {exc}") from exc
         message = error_message(response) if response.status_code >= 400 else ""
-        if response.status_code == 400 and "cursor" in message:
+        # decided from all of the provider's words: the cut is for what a caller and the log see (#189 review)
+        if response.status_code == 400 and "cursor" in _error_text(response):
             raise CursorMismatch(message)
         if response.status_code >= 400:
             raise ProviderError(response.status_code, message)
-        items, next_cursor = list_page(json_object(response))  # which refuses a redirect (#113, C7)
-        read = [read_usage_item(item) for item in items]
+        unread: list[SetAsideUsage] = []
+        try:
+            body = json_object(response)  # which refuses a redirect (#113, C7)
+        except ProviderError:
+            salvaged = page_past_the_decoder(response.content) if response.is_success else None
+            if salvaged is None:
+                raise
+            body, unread = salvaged  # without the items the decoder's own limits refuse (#158)
+        items, next_cursor = list_page(body)
+        read = [*unread, *(read_usage_item(item) for item in items)]
         return UsagePage(
             items=tuple(row for row in read if isinstance(row, UsageRow)),
             set_aside=tuple(row for row in read if isinstance(row, SetAsideUsage)),
@@ -301,7 +323,11 @@ def json_value(response: httpx.Response) -> object:
     if not response.is_success:
         raise ProviderError(response.status_code, "Batteries answered with a redirect, which is not followed")
     try:
-        return response.json()
+        return loads_naming_each_key_once(response.content)
+    except KeyNamedTwice:  # the decoder would keep the last, and drop what the first held (#189 review)
+        raise ProviderError(
+            response.status_code, "Batteries answered with a JSON object that names a key twice"
+        ) from None
     except (ValueError, RecursionError):  # not JSON, not UTF-8, or nested past the decoder's depth
         return None
 
@@ -367,7 +393,7 @@ def _amount(item: dict[str, Any], name: str) -> Decimal:
     engine cannot read (#114, C21), never a zero."""
     key = f"{name}_{_optional(item, 'currency').lower() or 'usd'}"
     value = item.get(key)
-    amount = decimal_or_none(value) if isinstance(value, str) else None
+    amount = _decimal(value) if isinstance(value, str) else None
     if amount is None or not amount.is_finite():
         raise ProviderError(200, f"Batteries answered with no usable {key}")
     return amount
@@ -392,10 +418,11 @@ def _optional(body: dict[str, Any], key: str) -> str:
 
 
 def _metadata(raw: str) -> dict[str, str]:
-    """A grant's metadata when it is a JSON object of strings (the engine's tag); free text reads as {}."""
+    """A grant's metadata when it is a JSON object of strings (the engine's tag); free text reads as {},
+    and so does JSON the decoder cannot read (nested past its depth, a number past its digit limit)."""
     try:
         parsed = json.loads(raw) if raw else None
-    except ValueError:
+    except (ValueError, RecursionError):
         return {}
     if not isinstance(parsed, dict):
         return {}
@@ -409,9 +436,9 @@ def allowance_from_body(body: dict[str, Any]) -> Allowance:
     return Allowance(
         allocation_id=_required(body, "id"),
         status=_optional(body, "status"),
-        granted=_money(body.get(f"allocated_{suffix}"), currency),
-        spent=_money(body.get(f"spent_{suffix}"), currency),
-        available=_money(body.get(f"available_{suffix}"), currency),
+        granted=_money(body, f"allocated_{suffix}", currency),
+        spent=_money(body, f"spent_{suffix}", currency),
+        available=_money(body, f"available_{suffix}", currency),
     )
 
 
@@ -423,14 +450,20 @@ def segment(value: str) -> str:
 
 
 def error_message(response: httpx.Response) -> str:
-    """The provider's own words for an error status: its ``error`` text, else the body as text."""
+    """The provider's own words for an error status: its ``error`` text, else the body as text. At most
+    ``BODY_LIMIT`` characters of either, as of a runner's or a signer's error body: the text is in the
+    answer a caller reads and in the log."""
+    return _error_text(response)[:BODY_LIMIT]
+
+
+def _error_text(response: httpx.Response) -> str:
     try:
         body = response.json()
     except (ValueError, RecursionError):  # as in json_object; a number past the digit limit is one too
-        return response.text
-    if isinstance(body, dict) and isinstance(body.get("error"), str):
-        return str(body["error"])
-    return response.text
+        body = None
+    return (
+        str(body["error"]) if isinstance(body, dict) and isinstance(body.get("error"), str) else response.text
+    )
 
 
 def _amount_fields(amount: Money) -> dict[str, str]:
@@ -445,6 +478,20 @@ def _new_key(body: dict[str, Any]) -> NewAllocationKey:
     )
 
 
-def _money(value: Any, currency: Currency) -> Money | None:
-    amount = decimal_or_none(value)
+def _money(body: dict[str, Any], key: str, currency: Currency) -> Money | None:
+    """An allocation's amount, or None where the answer states none or the engine reads none: unknown,
+    never zero. A stated amount that is no finite number (``NaN``, ``Infinity``) is an answer the engine
+    cannot read, as a grant's total is (``_amount``): ``Money`` holds no such amount."""
+    amount = _decimal(body.get(key))
+    if amount is not None and not amount.is_finite():
+        raise ProviderError(200, f"Batteries answered with no usable {key}")
     return None if amount is None else Money(amount=amount, currency=currency)
+
+
+def _decimal(value: Any) -> Decimal | None:
+    if value is None or value in _NO_AMOUNT:
+        return None
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        return None

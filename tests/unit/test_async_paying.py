@@ -1,10 +1,11 @@
 """ISS-26 on both sets of payment adapters (D84, #168): a queued job pays at dispatch, never at submit.
 
 Each test runs twice, as the signing section of ``tests/unit/test_payment_port_suite.py`` does: ``local``
-is a self-hosted engine (its ``both`` role), and ``remote`` an enterprise's engine in its ``work`` role
-that pays through a real clearinghouse on a loopback socket, with the gateway SDK's transport pointed at
-it and the actor's payment key. The signer and the runner are ``tests/unit/livepeer_net.py``. A queued
-job must behave the same whichever way it pays (the guide's amendment of 18 November 2026): with a
+is a self-hosted engine (its ``both`` role), and ``remote`` an enterprise's engine in its ``work`` role,
+whose payment ports call a standalone clearinghouse on a loopback socket. Either engine signs at the
+signer itself, with the allocation's own key: the one its own Batteries call minted, or the one the
+clearinghouse handed over at allotment. The signer and the runner are ``tests/unit/livepeer_net.py``. A
+queued job must behave the same on either engine (the guide's amendment of 18 November 2026): with a
 clearinghouse, ``not_provisioned`` means the actor has no allocation there.
 """
 
@@ -25,7 +26,8 @@ def queued(payload: dict[str, str]) -> JobRequest:
 
 
 def signer_calls(ports: Ports, net: Net) -> list[str]:
-    """Every signer call made so far: at the signer itself, and at the clearinghouse's signer paths."""
+    """Every signer call made so far: at the signer, and any that reached the clearinghouse's listener,
+    which serves no signer path and is in no payment's path."""
     at_the_clearinghouse = [path for path, _ in ports.seen if path in SIGNER_PATHS]
     return [*(line for line in net.log if line.startswith("sign")), *at_the_clearinghouse]
 

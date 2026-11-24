@@ -2,11 +2,16 @@
 
 The async worker is the engine's: ``BuilderEngine.start()`` starts its loop and ``stop()`` drains it
 (``AsyncJobWorker.drain``). ``serve()`` starts and stops the engine, and some of its exits do not wait
-for callers: a cancelled ``serve()``, with one listener or two, and a second Ctrl-C with two. Those hang
-up on open connections. They do not skip the engine's stop, which ``serve()`` runs on every way out. So
-a job the worker is running is still ended in order: it is given ``LPB_ASYNC_DRAIN_TIMEOUT_S``, then
-cancelled and its end written, before the engine closes its database, and when ``serve()`` has returned
-no task of the worker or of the engine is left.
+for callers: a cancelled ``serve()``, with one listener or two, and a second Ctrl-C with two. None of
+them skips the engine's stop, which ``serve()`` runs on every way out. So a job the worker is running is
+still ended in order: it is given ``LPB_ASYNC_DRAIN_TIMEOUT_S``, then cancelled and its end written,
+before the engine closes its database, and when ``serve()`` has returned no task of the worker or of the
+engine is left.
+
+What a cancel does to the listeners themselves is not this file's subject. Two listeners hang up on
+their callers and close (tests/unit/test_listener_serving.py). One listener is uvicorn's own server,
+which a cancel leaves without its shutdown: its socket stays open until the event loop ends, so the
+port is asserted free for two listeners only.
 
 Each test serves on loopback ports the system picked, over a database in a file, which is read again
 once the engine has closed it.
@@ -127,9 +132,9 @@ async def test_a_cancelled_serve_ends_a_running_async_job_and_leaves_no_task_of_
     signals: dict[int, object],  # noqa: F811 - the fixture
     listeners: int,
 ) -> None:
-    """Cancelling is how an embedder stops ``serve()``, and it is a forced exit: no listener waits for a
-    request in flight. The engine's stop is not skipped: the worker's job gets its drain time, is
-    cancelled, and its end is in the database the engine then closes."""
+    """Cancelling is how an embedder stops ``serve()``, and no listener then waits for a request in
+    flight. The engine's stop is not skipped: the worker's job gets its drain time, is cancelled, and its
+    end is in the database the engine then closes."""
     ports = [free_port() for _ in range(listeners)]
     served = Served(f"sqlite+aiosqlite:///{tmp_path / 'engine.db'}", ports)
     try:
@@ -141,7 +146,7 @@ async def test_a_cancelled_serve_ends_a_running_async_job_and_leaves_no_task_of_
     assert served.serving.cancelled()  # the caller sees its own cancellation
     assert engine_tasks() == []  # no loop, no job and no listener outlives serve()
     assert served.engine.jobs.worker._running == set()
-    if listeners == 2:  # one listener is uvicorn's own server, which a cancel leaves to the event loop
+    if listeners == 2:  # one listener is uvicorn's own server: a cancel leaves its socket open
         assert not any(listening(port) for port in ports)
     assert stopped_in_flight(await served.stored(job)) == UNCERTAIN
     assert len(served.transport.calls) == 1  # never run again

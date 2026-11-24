@@ -59,8 +59,9 @@ From ISS-26, as amended on 13 November 2026.
   half's: their routes are in the work group of the listener table, and an engine in its `clearinghouse`
   role queues none, starts no worker and serves none of them, with the transport that role is given
   too. An engine in its `work` role signs for a queued job at the published signer itself, at dispatch.
-  A forced exit of `serve()` still stops the engine, so a running async job is drained or cancelled and
-  its end written before the database closes (`tests/unit/test_async_forced_exit.py`).
+  An exit of `serve()` that does not wait for callers still stops the engine, so a running async job is
+  drained or cancelled and its end written before the database closes
+  (`tests/unit/test_async_forced_exit.py`).
 - [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log

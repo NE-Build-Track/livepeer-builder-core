@@ -221,7 +221,11 @@ Batteries. Cost sync attributes a fee by `(allocation_id, manifest_id)` and then
   `items`. The clearinghouse records and logs nothing of such a row: its reader does, as cost sync does
   for its own page. A page that is not JSON, or whose `items` or `next_cursor` the engine cannot read,
   is 502. So is a page whose own object names a key twice, with such an item or not: read with the last
-  of the two, the rows of a first `items` list would be dropped and the cursor followed past them.
+  of the two, the rows of a first `items` list would be dropped and the cursor followed past them. And
+  an item is left out only when it is JSON that the decoder refuses for its size: the decoder stops at
+  the limit it meets, so the engine reads the rest of such an item itself, and one that is no JSON
+  after its long integer leaves its page no page. A page that begins with a byte order mark is read as
+  the decoder reads it.
 - **A cursor is Batteries', and bound to its filter.** One tenant's cursor read under another tenant is
   refused: 400, `code: cursor_mismatch`, and no row. The route takes a cursor of at most 200 characters;
   Batteries' is about 135 for a grant id it issues.
@@ -732,7 +736,9 @@ left unfinished; a replay of a finished command is not a resume.
   again after `LPB_OPERATION_STALE_S`. The one exception is `already_allotted`, below. A provider error
   an admin command answers with ("provider HTTP 409: ...") carries Batteries' own error text: the `error`
   of its JSON body, else the body as text, and at most 4096 characters of either, the limit a runner's
-  or a signer's error body has (`BODY_LIMIT`, #158).
+  or a signer's error body has (`BODY_LIMIT`, #158). Whether a 400 on the usage feed refuses the cursor is read
+  from all of that text, before the cut: a refusal that names the cursor further on is still a
+  `CursorMismatch`, which is what restarts cost sync from the beginning.
 - **A provider answer the engine cannot read (#114, C21).** One strict reader takes every Batteries
   answer that is not an error status. It must be a JSON object: a body that is not JSON, not UTF-8, or
   nested deeper than the decoder reads (that one answered 500) is none, and so is an object that names

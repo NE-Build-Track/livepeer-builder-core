@@ -281,7 +281,8 @@ class BatteriesUsageSource:
         except httpx.TransportError as exc:
             raise ProviderUnavailable(f"Batteries unreachable: {exc}") from exc
         message = error_message(response) if response.status_code >= 400 else ""
-        if response.status_code == 400 and "cursor" in message:
+        # decided from all of the provider's words: the cut is for what a caller and the log see (#189 review)
+        if response.status_code == 400 and "cursor" in _error_text(response):
             raise CursorMismatch(message)
         if response.status_code >= 400:
             raise ProviderError(response.status_code, message)
@@ -452,13 +453,17 @@ def error_message(response: httpx.Response) -> str:
     """The provider's own words for an error status: its ``error`` text, else the body as text. At most
     ``BODY_LIMIT`` characters of either, as of a runner's or a signer's error body: the text is in the
     answer a caller reads and in the log."""
+    return _error_text(response)[:BODY_LIMIT]
+
+
+def _error_text(response: httpx.Response) -> str:
     try:
         body = response.json()
     except (ValueError, RecursionError):  # as in json_object; a number past the digit limit is one too
         body = None
-    if isinstance(body, dict) and isinstance(body.get("error"), str):
-        return str(body["error"])[:BODY_LIMIT]
-    return response.text[:BODY_LIMIT]
+    return (
+        str(body["error"]) if isinstance(body, dict) and isinstance(body.get("error"), str) else response.text
+    )
 
 
 def _amount_fields(amount: Money) -> dict[str, str]:

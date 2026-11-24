@@ -62,7 +62,7 @@ from livepeer_builder.protocols import (
     UsageSource,
 )
 from livepeer_builder.services.cost_window import summary_window
-from livepeer_builder.services.failure_codes import STORE_ERROR, source_failure
+from livepeer_builder.services.failure_codes import STORE_ERROR, from_source, raised_by_source, source_failure
 from livepeer_builder.services.ownership import check_owner, sees_every_actor
 from livepeer_builder.services.reconciliation import PaidAttempts, current_allocation
 from livepeer_builder.services.usage_intake import SetAsideRecorder, count_set_aside, sort_page
@@ -90,7 +90,6 @@ class CostSyncWorker:
         self._store = store
         self._aside = SetAsideRecorder(store)
         self._filters = dict(filters or {})
-        self.source_error: Exception | None = None  # what the usage source last raised: its health code
 
     async def sync_once(self) -> tuple[SyncReport, list[UsageRow]]:
         checkpoint = await self._store.cost_checkpoint()
@@ -129,7 +128,7 @@ class CostSyncWorker:
                 raise ProviderError(200, "the usage cursor did not advance")
             return page
         except Exception as error:
-            self.source_error = error
+            from_source(error)  # noted on the error: its health code is the source's, for this run
             raise
 
     async def _set_aside(self, rows: Sequence[SetAsideUsage]) -> int:
@@ -179,7 +178,7 @@ class CostService:
         try:
             return await self._sync(self._worker)
         except Exception as exc:
-            code: FailureCode = source_failure(exc) if self._worker.source_error is exc else STORE_ERROR
+            code: FailureCode = source_failure(exc) if raised_by_source(exc) else STORE_ERROR
             self.last_error = code
             _LOG.warning(
                 "cost sync failed", extra={"event": "costs.sync_failed", "code": code, "error": str(exc)}

@@ -19,15 +19,15 @@ from sqlalchemy import select
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
 from livepeer_builder.contracts import ActorContext, Money
-from livepeer_builder.errors import OperationInProgress, ProviderError, ProviderUnavailable
+from livepeer_builder.errors import CursorMismatch, OperationInProgress, ProviderError, ProviderUnavailable
 from livepeer_builder.http import create_app
 from livepeer_builder.services.costs import CostSyncWorker
-from livepeer_builder.services.failure_codes import source_failure
+from livepeer_builder.services.failure_codes import raised_by_source, source_failure
 from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FixedClock
-from livepeer_builder.utils import CursorTrail
+from livepeer_builder.utils import BODY_LIMIT, CursorTrail
 from tests.conftest import EngineFactory
 
 USD = Money(amount=Decimal("2.5"), currency="USD")
@@ -86,6 +86,23 @@ async def test_a_2xx_that_is_not_a_json_object_is_a_provider_error_for_every_cal
         await CALLS[call](client)
     assert refused.value.status_code == status  # the provider's own status: an answer the engine cannot read
     assert not definite_refusal(refused.value)  # an unknown outcome to the ledger: the reference stays held
+
+
+@pytest.mark.parametrize("body", ["a JSON error", "plain text"])
+async def test_a_400_that_names_the_cursor_past_the_text_a_caller_sees_is_still_a_cursor_mismatch(
+    body: str,
+) -> None:
+    """The provider's words are cut at ``BODY_LIMIT`` for the answer and the log. Whether the 400 refuses
+    the cursor was decided from the cut text too: a refusal that named the cursor further on was any
+    other error, cost sync restarts from the beginning only for a cursor mismatch, and it asked for the
+    rejected checkpoint on every pass (John, #189 review)."""
+    words = "the filters given were: " + "grant_id " * 600 + "so this cursor is not theirs"
+    assert "cursor" not in words[:BODY_LIMIT]
+    answer: bytes | dict[str, Any] = {"error": words} if body == "a JSON error" else words.encode()
+    source = BatteriesUsageSource(BASE, "t", client=answering(answer, status=400))
+    with pytest.raises(CursorMismatch) as refused:
+        await source.page("a-stale-cursor")
+    assert str(refused.value) == words[:BODY_LIMIT]  # what a caller and the log see is still cut
 
 
 NO_ERROR_TEXT = {
@@ -555,7 +572,7 @@ async def test_a_usage_feed_whose_cursor_does_not_advance_fails_the_sync_as_an_i
     with pytest.raises(ProviderError, match="did not advance") as refused:
         await worker.sync_once()
     assert asked == [None, "c1"]
-    assert worker.source_error is refused.value and source_failure(refused.value) == "invalid_answer"
+    assert raised_by_source(refused.value) and source_failure(refused.value) == "invalid_answer"
     checkpoint = await store.cost_checkpoint()
     assert checkpoint is not None and checkpoint.resume_cursor == "c1"  # the next sync asks for it again
 
@@ -679,7 +696,7 @@ async def test_a_usage_feed_whose_cursor_comes_back_after_other_pages_fails_the_
     worker = CostSyncWorker(BatteriesUsageSource(BASE, "t", client=circling(route, asked, usage=True)), store)
     with pytest.raises(ProviderError, match="did not advance") as refused:
         await worker.sync_once()
-    assert worker.source_error is refused.value and source_failure(refused.value) == "invalid_answer"
+    assert raised_by_source(refused.value) and source_failure(refused.value) == "invalid_answer"
     assert len(asked) <= 3 * len(route)
     first = len(asked)
     with pytest.raises(ProviderError, match="did not advance"):  # the next pass starts inside the cycle

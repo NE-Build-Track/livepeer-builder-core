@@ -77,8 +77,8 @@ async def serve(
     stops both and the engine, and neither listener serves without the other.
 
     To stop it from your own code, cancel the task that runs it. That does not wait for requests in
-    flight, with one listener or two (two hang up on their callers): the engine is stopped, and the
-    cancellation is raised."""
+    flight, with one listener or two: each listener is closed and hangs up on its callers, the engine
+    is stopped, and the cancellation is raised."""
     import uvicorn
 
     configure_logging(json_lines=settings.log_json)
@@ -87,11 +87,40 @@ async def serve(
         if settings.http_private_port is None:
             app = _app(engine, settings, extend)
             config = uvicorn.Config(app, host=settings.http_host, port=settings.http_port, log_config=None)
-            await uvicorn.Server(config).serve()
+            await _serve_one_listener(uvicorn.Server(config))
         else:
             await _serve_two_listeners(engine, settings, settings.http_private_port, extend)
     finally:
         await engine.stop()  # idempotent: the lifespan may already have stopped it
+
+
+async def _serve_one_listener(server: "uvicorn.Server") -> None:
+    """One server, as uvicorn runs it and with uvicorn's own signal handling, but for a cancel. uvicorn
+    leaves a cancelled ``serve()`` where it stood: its listening socket stays open and goes on accepting
+    for the rest of the process, with the engine stopped. So the server runs in a task of its own, and
+    a cancel is the forced exit it is for two listeners (``_all_ended``): the listener is closed and
+    hangs up on its open connections, and the cancellation is raised once the server has ended."""
+    task = asyncio.create_task(_run(server), name="lpb-listener-0")
+    try:
+        await _ended([server], [task])
+    except asyncio.CancelledError:
+        server.should_exit = True
+        await _all_ended([server], [task], forced=True)
+        raise
+    asked = task.result()
+    if asked is not None:
+        raise asked
+
+
+async def _run(server: "uvicorn.Server", sockets: list[socket.socket] | None = None) -> SystemExit | None:
+    """Run one server in a task, to its end. The exit uvicorn asks for when a server cannot start is
+    returned: raised inside a task, it would end the event loop where it stands, so the caller raises
+    it, once every server has ended."""
+    try:
+        await (server.serve() if sockets is None else server.serve(sockets=sockets))
+    except SystemExit as asked:  # NOSONAR - returned for the caller to raise, once the servers have ended
+        return asked
+    return None
 
 
 def _app(
@@ -173,19 +202,11 @@ async def _serve_together(servers: Sequence["uvicorn.Server"], sockets: Sequence
     things end them without that wait (``_ended``): a second Ctrl-C, a server that ended with no signal
     sent, and a cancelled ``serve()``. A server that ended by itself leaves a process that must end:
     uvicorn waits for open connections without limit, and one held open would keep the process up with a
-    listener gone, where no supervisor restarts it. Cancelling is how a caller stops ``serve()``, and for
-    one listener uvicorn raises at once, so here it must not wait for a request that may never end.
+    listener gone, where no supervisor restarts it. Cancelling is how a caller stops ``serve()``, so it
+    must not wait for a request that may never end.
 
     However this is left, the servers have ended and the process has its own signal handlers back. A
     cancelled caller sees its cancellation, whatever the servers ended with."""
-
-    async def run(server: "uvicorn.Server", sock: socket.socket) -> SystemExit | None:
-        try:
-            await server.serve(sockets=[sock])
-        # Raised inside a task, it would end the event loop where it stands: serve() raises it, below.
-        except SystemExit as asked:  # NOSONAR - re-raised by _serve_together, once both servers have ended
-            return asked
-        return None
 
     signalled: list[int] = []  # the signals taken: a stop that was asked for ends in order
 
@@ -202,7 +223,7 @@ async def _serve_together(servers: Sequence["uvicorn.Server"], sockets: Sequence
     signals = (signal.SIGINT, signal.SIGTERM) if takes_signals else ()
     previous = {signum: signal.signal(signum, stop) for signum in signals}
     tasks = [
-        asyncio.create_task(run(server, sock), name=f"lpb-listener-{index}")
+        asyncio.create_task(_run(server, [sock]), name=f"lpb-listener-{index}")
         for index, (server, sock) in enumerate(zip(servers, sockets, strict=True))
     ]
     in_order = False  # only a signal ends the servers in order; a cancel raises out of the wait below

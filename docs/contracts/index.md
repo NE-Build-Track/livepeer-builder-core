@@ -216,9 +216,10 @@ code of an existing route changed.
 - **A database that ran this work before it was released** is recreated. An earlier revision 0015
   created a table `lpb_payment_keys`; it was never released, and it is deleted, not undone by a later
   revision (Mike, 23 November 2026). The revision check will not tell you: that revision had the same
-  number, so such a database records 0015, the engine starts on it and `lpb migrate` changes nothing.
-  A database that has `lpb_payment_keys` is recreated. One at revision 0014 or earlier never ran that
-  work and is migrated as usual ([persistence.md](persistence.md#migrations)).
+  number, so such a database records 0015 and passes for a sound one. The engine starts on it, and
+  `lpb migrate` adds only what later revisions add. A database that has `lpb_payment_keys` is
+  recreated. One at revision 0014 or earlier never ran that work and is migrated as usual
+  ([persistence.md](persistence.md#migrations)).
 
 **What a repeat gets.** The repeat of an allotment or a rotation recorded before the upgrade is answered
 from its record, as before, with `credential_custody: secret_store`. No repeat of a finished command
@@ -450,6 +451,10 @@ longer read to its end (the last row but one).
 **Before you start the new release:**
 
 - **Migrate** (`lpb migrate`, or start with `LPB_AUTO_MIGRATE=true`).
+- **A database that ran the withdrawn payment-key work** is recreated, as said under
+  [the payment key handover](#upgrading-to-the-payment-key-handover-a-tenants-usage-and-the-runner-list). The revision check does not find it here either: that work's second migration was
+  numbered 0016, the number of this one, so a database that ran it records the head and has neither
+  `lpb_actors.credential_custody` nor the tables of async jobs ([persistence.md](persistence.md#migrations)).
 - **Decide how long results are kept.** `LPB_RETENTION_RESULTS_DAYS` is 7 unless set. The stored
   requests and results are not encrypted by the engine: protect the database and its backups.
 - **A supplied store** implements the queue's methods of `JobRepo`, and `finish_job` returns `bool`.

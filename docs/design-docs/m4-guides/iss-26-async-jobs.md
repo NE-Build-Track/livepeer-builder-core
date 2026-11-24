@@ -293,8 +293,8 @@ From the locked answers (D69) and the amendment of 18 November
     (test_async_migration.py)
 [x] a clearinghouse queues no job and runs no worker, for an embedding caller too; its job routes are 404
     (test_async_roles.py; test_roles.py and test_route_sets.py with the cancel route added)
-[x] a queued job behaves the same on an engine that pays through a clearinghouse (role work) as on a
-    both engine: paid at dispatch, refused unpaid when the allocation is spent or revoked (test_async_paying.py)
+[x] a queued job behaves the same on an engine that uses a clearinghouse (role work) as on a both
+    engine: paid at dispatch, refused unpaid when the allocation is spent or revoked (test_async_paying.py)
 [-] a provider request id that lets a late result be collected: ISS-48's. The seam is kept: the job
     record and ResultRef can take the id as an optional field, and lpb_job_results is keyed by job id
 ```

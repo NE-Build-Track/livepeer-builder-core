@@ -54,6 +54,13 @@ From ISS-26, as amended on 13 November 2026.
   `running` until a restart; the admission slot was never lost there. A runner's error answer and its
   402 challenge are no longer read whole: 16 KiB of an error (its first 4096 characters are kept, as
   before) and 64 KiB of a challenge, on the call path immediate jobs and streams share.
+- [x] **23 November 2026, carried forward.** The branch is on the direct-signer design and the roles
+  (#183, #185). Migration 0016 follows the new 0015, credential custody. Async jobs stay the work
+  half's: their routes are in the work group of the listener table, and an engine in its `clearinghouse`
+  role queues none, starts no worker and serves none of them, with the transport that role is given
+  too. An engine in its `work` role signs for a queued job at the published signer itself, at dispatch.
+  A forced exit of `serve()` still stops the engine, so a running async job is drained or cancelled and
+  its end written before the database closes (`tests/unit/test_async_forced_exit.py`).
 - [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log

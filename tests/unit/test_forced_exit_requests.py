@@ -15,7 +15,10 @@ the engine has closed it.
 """
 
 import asyncio
+import json
 import signal
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -140,15 +143,19 @@ class Served:
         return bool(done)
 
     async def stored(self) -> list[tuple[str, list[tuple[str, bool]]]]:
-        """Every job as the database holds it, read once the engine has closed its own connection."""
-        store = await SqlStore.connect(self.database_url, migrate=False)
-        try:
-            jobs: list[Job] = []
-            for state in ("running", "uncertain", "failed", "succeeded"):
-                jobs += await store.jobs_in_state(state)  # type: ignore[arg-type]
-        finally:
-            await store.close()
-        return [(job.state, [(a.outcome, a.payment_sent) for a in job.attempts]) for job in jobs]
+        return await stored(self.database_url)
+
+
+async def stored(database_url: str) -> list[tuple[str, list[tuple[str, bool]]]]:
+    """Every job as the database holds it, read once the engine has closed its own connection."""
+    store = await SqlStore.connect(database_url, migrate=False)
+    try:
+        jobs: list[Job] = []
+        for state in ("running", "uncertain", "failed", "succeeded"):
+            jobs += await store.jobs_in_state(state)  # type: ignore[arg-type]
+    finally:
+        await store.close()
+    return [(job.state, [(a.outcome, a.payment_sent) for a in job.attempts]) for job in jobs]
 
 
 UNCERTAIN = [("uncertain", [("in_flight", True)])]
@@ -197,3 +204,30 @@ async def test_a_second_interrupt_ends_the_request_in_flight_before_it_stops_the
     assert served.still_running == 0, "a request was still running after serve() returned"
     assert served.lifespans_waiting == 0, "an app's lifespan was still waiting after serve() returned"
     assert await served.stored() == UNCERTAIN
+
+
+def test_a_second_interrupt_of_one_listener_ends_the_request_before_the_engine_stops(tmp_path: Path) -> None:
+    """``lpb serve`` with its default of one listener, in a process of its own
+    (tests/unit/second_interrupt_child.py). uvicorn takes both signals, and once its server has ended it
+    gives them back to the handler ``asyncio.run`` installed, which raises ``KeyboardInterrupt`` where
+    the server was awaited. The request is ended before that interrupt leaves the listener's task: left
+    to the event loop's own clean-up, the engine was asked to stop with the request still running, and
+    what the job ended as was a matter of which finished first (#183 review)."""
+    child = subprocess.run(  # noqa: S603 - this interpreter, a module of this repository
+        [
+            sys.executable,
+            "-m",
+            "tests.unit.second_interrupt_child",
+            f"sqlite+aiosqlite:///{tmp_path / 'engine.db'}",
+            str(free_port()),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert child.returncode == 0, child.stderr[-2000:]
+    said = json.loads(child.stdout.strip().splitlines()[-1])
+    assert said["ended"] == "KeyboardInterrupt"  # as a second Ctrl-C ends ``lpb serve``
+    assert said["requests_running_when_the_engine_stopped"] == 0
+    assert said["jobs"] == [["uncertain", [["in_flight", True]]]]

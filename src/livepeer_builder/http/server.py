@@ -116,6 +116,17 @@ async def _serve_one_listener(server: "uvicorn.Server") -> None:
 _STARTUP_FAILURE = 3  # uvicorn's exit status for a server that cannot start: an address, or its app
 
 
+async def _ended_what_it_left(server: "uvicorn.Server") -> None:
+    """End what a server that has ended left running: its requests, then its app's lifespan."""
+    left = [request for request in server.server_state.tasks if not request.done()]
+    for request in left:
+        request.cancel()
+    if left:
+        await asyncio.wait(left)
+    if server.force_exit and server.started:  # in order, uvicorn has shut the app down itself
+        await server.lifespan.shutdown()
+
+
 async def _run(server: "uvicorn.Server", sockets: list[socket.socket] | None = None) -> SystemExit | None:
     """Run one server in a task, to its end and the end of its requests. The exit uvicorn asks for when
     a server cannot start is returned: raised inside a task, it would end the event loop where it
@@ -132,13 +143,10 @@ async def _run(server: "uvicorn.Server", sockets: list[socket.socket] | None = N
         await (server.serve() if sockets is None else server.serve(sockets=sockets))
     except SystemExit as asked:  # NOSONAR - returned for the caller to raise, once the servers have ended
         return asked
-    left = [request for request in server.server_state.tasks if not request.done()]
-    for request in left:
-        request.cancel()
-    if left:
-        await asyncio.wait(left)
-    if server.force_exit and server.started:  # in order, uvicorn has shut the app down itself
-        await server.lifespan.shutdown()
+    finally:
+        # On every way out: after a second Ctrl-C uvicorn gives the signal back to the handler it found,
+        # and the one ``asyncio.run`` installs raises ``KeyboardInterrupt`` right where it is awaited.
+        await _ended_what_it_left(server)
     # uvicorn before 0.50 returns from a start that failed, where later ones exit: never a server that served.
     return None if server.started else SystemExit(_STARTUP_FAILURE)
 

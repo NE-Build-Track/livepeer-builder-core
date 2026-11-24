@@ -80,8 +80,8 @@ async def serve(
     stops both and the engine, and neither listener serves without the other.
 
     To stop it from your own code, cancel the task that runs it. That does not wait for requests in
-    flight, with one listener or two: each listener is closed and hangs up on its callers, the engine
-    is stopped, and the cancellation is raised."""
+    flight, with one listener or two: each listener is closed and hangs up on its callers, the requests
+    still running are cancelled, the engine is stopped, and the cancellation is raised."""
     import uvicorn
 
     configure_logging(json_lines=settings.log_json)
@@ -119,13 +119,24 @@ _STARTUP_FAILURE = 3  # uvicorn's exit status for a server that cannot start: an
 
 
 async def _run(server: "uvicorn.Server", sockets: list[socket.socket] | None = None) -> SystemExit | None:
-    """Run one server in a task, to its end. The exit uvicorn asks for when a server cannot start is
-    returned: raised inside a task, it would end the event loop where it stands, so the caller raises
-    it, once every server has ended."""
+    """Run one server in a task, to its end and the end of its requests. The exit uvicorn asks for when
+    a server cannot start is returned: raised inside a task, it would end the event loop where it
+    stands, so the caller raises it, once every server has ended.
+
+    A server that ended in order has waited for its requests. One forced to exit has not: hanging up on
+    a caller does not end a handler that awaits a runner, and ``serve()`` would stop the engine under it
+    (#181 review). So a request still running is cancelled, as uvicorn cancels one that outlasts its own
+    shutdown timeout, and waited for: a job cut off this way writes its end as a cancelled job does,
+    before the engine closes its store."""
     try:
         await (server.serve() if sockets is None else server.serve(sockets=sockets))
     except SystemExit as asked:  # NOSONAR - returned for the caller to raise, once the servers have ended
         return asked
+    left = [request for request in server.server_state.tasks if not request.done()]
+    for request in left:
+        request.cancel()
+    if left:
+        await asyncio.wait(left)
     # uvicorn before 0.50 returns from a start that failed, where later ones exit: never a server that served.
     return None if server.started else SystemExit(_STARTUP_FAILURE)
 

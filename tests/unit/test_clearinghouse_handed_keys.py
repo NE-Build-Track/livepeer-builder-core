@@ -46,7 +46,7 @@ from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FixedClock
-from tests.unit.payment_ports import OPERATOR, Ports, open_ports, usd
+from tests.unit.payment_ports import BOTH_ROLE, CLEARINGHOUSE_URL, OPERATOR, Ports, open_ports, usd
 
 ALLOCATION = "/actors/alice/allocation"
 ROTATE = ALLOCATION + "/rotate-payment-key"
@@ -917,17 +917,22 @@ async def test_no_command_writes_after_its_second_call_and_only_an_overtaken_rot
 
 
 async def test_a_clearinghouse_that_keeps_the_keys_itself_is_an_answer_the_engine_cannot_use() -> None:
-    """The combined app (``create_app``, what ``lpb serve`` runs until the role setting of #169) stores
-    each allocation's key for its own jobs and answers none. An enterprise's engine pointed at it is
-    handed nothing: the allotment happened there, so this is no refusal and frees no reference."""
+    """An engine in its ``work`` role pointed at an engine in its ``both`` role (#169): self-hosted
+    payments, which stores each allocation's key for its own jobs and answers none. The enterprise's
+    engine is handed nothing: the allotment happened there, so this is no refusal and frees no
+    reference, and the error says which role the other engine must be in."""
     from livepeer_builder.http import create_app
 
     async with open_ports(
-        "remote", lambda engine: create_app(engine, manage_lifecycle=False, listener="public")
+        "remote", lambda engine: create_app(engine, manage_lifecycle=False, listener="public"), BOTH_ROLE
     ) as ports:
+        assert (ports.engine.role, house(ports).role) == ("work", "both")
         with pytest.raises(ProviderError) as unusable:
             await allot(ports)
 
+        assert "LPB_ROLE=clearinghouse" in unusable.value.message
+        assert "LPB_CLEARINGHOUSE_URL" in unusable.value.message
+        assert CLEARINGHOUSE_URL not in unusable.value.message  # the setting is named, not its value
         assert not definite_refusal(unusable.value)
         assert "keeps each allocation's key itself" in unusable.value.message
         assert len(ports.provider.allocations) == 1  # allotted there, and held there

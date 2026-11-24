@@ -174,6 +174,19 @@ Enterprises replace the policy for teams, organization admins or RBAC by impleme
 
 ## Listeners
 
+**The role chooses the half, and the listener chooses within it.** An engine serves the routes of its
+role (`LPB_ROLE`, D84, #169), and a listener serves some or all of those:
+
+| `LPB_ROLE` | Routes served | Listeners |
+| --- | --- | --- |
+| `both`, the default | The work routes and the clearinghouse routes | One, or two with `LPB_HTTP_PRIVATE_PORT` |
+| `work` | The work routes. A clearinghouse route, the wallet and the runner list are each 404, as any path the engine does not know, with a credential or without one | One, or two with `LPB_HTTP_PRIVATE_PORT`. It has no private group, so both serve the work routes, and the rule about kinds below still holds |
+| `clearinghouse` | The clearinghouse routes. Every work route is 404 the same way: the job routes, `GET /v1/offerings`, `/v1/runners`, the cost routes, `GET /v1/allowance`, `/v1/events`, `/v1/sessions` and `/v1/keys` | Two, always: the settings do not load without `LPB_HTTP_PRIVATE_PORT`, and `create_app` refuses to build it the app of one listener |
+
+`/livez` and `/readyz` are served in every role and on every listener, with no credential, and `/readyz`
+names the role. The tables below describe an engine in its `both` role; in another role, read "every
+route" as every route of that role.
+
 A clearinghouse admin onboards tenants and tops up grants, so a leaked clearinghouse admin key could
 spend the wallet. A deployment can keep what only a clearinghouse admin does off the address it
 publishes (D84, #167).
@@ -202,32 +215,47 @@ in one process:
 - **A tenant admin key of kind `tenant_admin` is issued on the private listener:**
   `POST .../tenants/{tenant_id}/keys` is served on both, and only a clearinghouse admin may issue that
   kind ([a tenant's access keys](#a-tenants-access-keys)).
-- **An allocation's key stays with the engine, on one listener or two.** Every app `http/listeners.py`
-  builds mounts the tenant routes with `deliver_allocation_keys=False`: the engine behind a listener
-  runs jobs, so allotment and rotation store the key in its `SecretStore` and answer the allocation
-  alone, on the public listener and on the private one ([payments.md](payments.md#payment-keys)).
-  Handing each key to the caller once is a standalone clearinghouse's, which the `clearinghouse` role
-  (#169) mounts. No listener serves a signer path: an engine signs at the signer itself.
+- **Who keeps an allocation's key follows the role, on one listener or two** (#169). An engine in its
+  `both` role runs jobs, so allotment and rotation store the key in its `SecretStore` and answer the
+  allocation alone, on the public listener and on the private one. An engine in its `clearinghouse`
+  role hands each key to the caller once and stores none, on both of its listeners: to the tenant's
+  admin on the public one, and to a clearinghouse admin on the private one
+  ([payments.md](payments.md#payment-keys)). `delivers_allocation_keys(role)` in `http/listeners.py`
+  decides, and `create_app` passes its answer to every app it builds. No listener serves a signer path
+  in any role: an engine signs at the signer itself.
 - **The credential rule is a property of the listener, not of each route.** It is applied where every
   route authenticates (`http/auth.py`), by kind, after the credential is verified. A route added later
   is covered with no check of its own, and so is a route an extension adds with `actor_dependency`
   ([extending the engine](../design-docs/extending-the-engine.md#service-mode)). A JWT with the admin
   scope is a clearinghouse admin credential and is treated as one.
-- **Which group is on which listener is one table,** in `http/listeners.py`. A group of routes that is
-  in neither of its two tuples fails a test (`tests/unit/test_listeners.py`), which also reads the
+- **Which group is served by which role and on which listener is one table,** `ROUTE_GROUPS` in
+  `http/listeners.py`: each group of routes with its half and whether it is private. A group of routes
+  that is not in it fails a test (`tests/unit/test_listeners.py`), which also reads the
   routes from each app: every route of the private group is 404 on the public listener, and every route
   that takes a credential refuses a clearinghouse admin key on the public listener before the provider
   or the store is asked. The routes that take no credential are named there, so a new one is a decision
   somebody made.
-- **The published schema.** `docs/generated/openapi.json` is generated from a deployment with one
-  listener, so it has every route; the routes of the private group carry the tag `private listener`.
+- **The published schema.** `docs/generated/openapi.json` is generated from an engine in its `both`
+  role with one listener, so it has every route. Each route but health carries the tag of its half,
+  `work half` or `clearinghouse half`, whose description names the roles that serve it, and the routes
+  of the private group also carry the tag `private listener`. Its allotment and rotation answer the
+  allocation alone, as that engine does. `docs/generated/openapi-clearinghouse.json` is generated from
+  an engine in its `clearinghouse` role, for its private listener: the routes of that role and no other,
+  with the answer that hands an allocation's key over
+  ([payments.md](payments.md#payment-keys)). An engine's own `/openapi.json` names the routes of its
+  role and its listener, and no other.
+- **A clearinghouse has no route that issues a second clearinghouse admin key** (#169). `/v1/keys`,
+  which issues every kind, is a work route. The first clearinghouse admin key is `lpb bootstrap-admin`'s,
+  once. It is kept under the tenant `default`, so its holder lists, rotates and revokes it on the private
+  listener under `/v1/clearinghouse/tenants/default/keys`, where a tenant's keys are; those routes issue
+  auditor and tenant admin keys only (tech debt T42).
 - **Publish the public listener only.** The private one listens on loopback unless
   `LPB_HTTP_PRIVATE_HOST` says otherwise. Whoever can reach it still needs a clearinghouse admin
   credential.
 
-The `clearinghouse` role of ISS-31 (#169) will require the private listener; until then it is a
-deployment's choice. In embedded mode there is no listener: the enterprise app builds the `ActorContext`
-and the policy applies as before.
+An engine in its `clearinghouse` role requires the private listener (#169); in its other two roles it
+is a deployment's choice. In embedded mode there is no listener: the enterprise app builds the
+`ActorContext` and the policy applies as before.
 
 ## Modes
 

@@ -3,15 +3,16 @@
 The routes are two sets (D84): the work half's (``http/work.py``) and the clearinghouse half's, under
 ``/v1/clearinghouse`` (``http/clearinghouse.py``). Each is one function that adds its routes to an app,
 by itself or with the other. ``shared_app`` builds the app both need: the engine's lifecycle, the error
-answers, the request limit and the health routes. ``create_app`` adds the routes one listener serves:
-every route for a deployment with one listener, and the public or the private listener's for a
-deployment with two (``http/listeners.py``, #167).
+answers, the request limit and the health routes. ``create_app`` adds the routes one listener serves,
+of the engine's role (``LPB_ROLE``, #169): every route of the role for a deployment with one listener,
+and the public or the private listener's for a deployment with two (``http/listeners.py``, #167).
 
 The sets register their routes on the app itself, as ``create_app`` always did, and not through
 ``include_router``: every route stays an ``APIRoute`` in ``app.routes``, which the structure tests read
 (tests/structure/test_route_params.py).
 
-The generated schema is committed at docs/generated/openapi.json and checked for drift in CI.
+The generated schema is committed at docs/generated/openapi.json, with the ``clearinghouse`` role's at
+docs/generated/openapi-clearinghouse.json, and both are checked for drift in CI.
 """
 
 from collections.abc import AsyncIterator
@@ -42,7 +43,7 @@ from livepeer_builder.errors import (
     ProviderUnavailable,
 )
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
-from livepeer_builder.http.listeners import ListenerName, mount_listener_routes
+from livepeer_builder.http.listeners import ListenerName, delivers_allocation_keys, mount_listener_routes
 from livepeer_builder.http.replies import JOB_ID_HEADER
 from livepeer_builder.http.unprocessable import install_unprocessable_handler
 
@@ -72,14 +73,20 @@ def create_app(
     max_request_bytes: int = DEFAULT_MAX_REQUEST_BYTES,
     listener: ListenerName = "only",
 ) -> FastAPI:
-    """The REST service one listener serves: the work routes and the clearinghouse routes on one app.
+    """The REST service one listener serves, with the routes of the engine's role (``engine.role``,
+    #169): the work routes and the clearinghouse routes for ``both``, and one of the two sets for
+    ``work`` and for ``clearinghouse``. Health is served in every role.
 
-    ``listener`` is ``"only"`` for a deployment with one listener, which serves every route to every
-    kind of credential. A deployment with a private listener has two apps over one engine, ``"public"``
-    and ``"private"`` (``http/listeners.py``, #167): start the engine once, with ``manage_lifecycle``
-    on one of them at most, since an engine starts once."""
+    ``listener`` is ``"only"`` for a deployment with one listener, which serves every route of the role
+    to every kind of credential. A deployment with a private listener has two apps over one engine,
+    ``"public"`` and ``"private"`` (``http/listeners.py``, #167): start the engine once, with
+    ``manage_lifecycle`` on one of them at most, since an engine starts once. An engine in its
+    ``clearinghouse`` role always has two: ``"only"`` raises ``ValueError`` for it."""
     app = shared_app(engine, manage_lifecycle=manage_lifecycle, max_request_bytes=max_request_bytes)
-    mount_listener_routes(app, engine, listener)
+    # By the role, for every listener: only a clearinghouse hands each allocation's key to the caller.
+    mount_listener_routes(
+        app, engine, listener, deliver_allocation_keys=delivers_allocation_keys(engine.role)
+    )
     return app
 
 

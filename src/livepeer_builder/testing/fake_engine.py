@@ -51,7 +51,8 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.errors import InvalidRequest, JobFailed, NotFound, NotProvisioned
 from livepeer_builder.protocols import AccessPolicy
-from livepeer_builder.services.costs import classify, summarize, summary_window
+from livepeer_builder.services.cost_window import summary_window
+from livepeer_builder.services.costs import classify, summarize
 from livepeer_builder.services.failover import attempt_verdict
 from livepeer_builder.services.operations import retry_of
 from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor

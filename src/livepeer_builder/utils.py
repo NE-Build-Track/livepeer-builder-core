@@ -17,8 +17,12 @@ def token_hash(token: str) -> str:
 
 
 def utc(value: datetime) -> datetime:
-    """Normalize to timezone-aware UTC (SQLite returns naive datetimes)."""
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    """Normalize to timezone-aware UTC (SQLite returns naive datetimes). A time with no offset is UTC.
+
+    A datetime is naive when it names no offset, whatever ``tzinfo`` it carries: one whose ``utcoffset()``
+    is ``None`` is read as UTC too. ``astimezone`` reads such a time in the host's own zone, so a bound of
+    a cost summary moved by the host's offset (#187 review)."""
+    return value.replace(tzinfo=UTC) if value.utcoffset() is None else value.astimezone(UTC)
 
 
 async def run_shielded[T](work: Coroutine[Any, Any, T]) -> T:

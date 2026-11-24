@@ -21,7 +21,7 @@ shown below, wires it into a real engine, and proves the behavior in CI.
 | `SecretStore` | `RoutingSecretStore` (the Fernet-encrypted DB store, with `LPB_SECRET_KEY`) | `AuditedVaultSecretStore`: HashiCorp Vault, AWS/GCP secret manager, HSM | supply `secret_store=` |
 | `WritableSecretStore` (optional `writable()` beside `put`) | `RoutingSecretStore` (`False` without `LPB_SECRET_KEY`) | A vault that is sealed, or a token without write access. Allotment and key rotation ask it just before the provider is called, and `False` refuses them (#112, C2); a repeat of a finished command, or a resume whose key is stored, is not asked. Without it, the store is not asked. A decorator that wraps the built-in store must forward `writable`, or the store escapes both this check and the one at startup | supply `secret_store=` |
 | `SelectionPolicy` | `MostCapacityFirst` | `CheapestReadyFirst`: price-aware. Or latency-ranked, region-pinned, SLA-weighted | supply `selection=` |
-| `DiscoverySource` | `HttpDiscoverySource` (reads `LPB_DISCOVERY_URL`, required) | `ApprovedOrchestratorsOnly`: an allow-list wrapper around the HTTP source | decorate (wrap `parts.discovery_source`) |
+| `DiscoverySource` | `HttpDiscoverySource` (reads `LPB_DISCOVERY_URL`, required to start) | `ApprovedOrchestratorsOnly`: an allow-list wrapper around the HTTP source | decorate (wrap `parts.discovery_source`) |
 | `RunnerTransport` | `SdkRunnerTransport` (Live Runner via the SDK), signing at `LPB_SIGNER_URL`. With a payment clearinghouse it is the same transport, and that address is the clearinghouse's published signer (#168) | Another network transport, or a recording proxy for audit | supply or decorate `transport=` |
 | `StreamingRunnerTransport` (optional `open` beside `call`) | `SdkRunnerTransport` | The same transport, streaming. Without `open`, `jobs.streaming` is `None` and the REST streaming route answers 400 (D33) | supply `transport=` |
 | `AllocationManager` / `UsageSource` | `BatteriesClient` / `BatteriesUsageSource` | Another payment provider, or a hosted operator's API (Mode B) | supply `allocation_manager=` / `usage_source=` |
@@ -185,9 +185,9 @@ This block is the tested example: `scripts/check_docs.py` fails if it drifts fro
 `tests/unit/test_extension_examples.py`. Then:
 
 ```python
-engine = await BuilderEngine.create(
-    EngineSettings.from_env(), supply=enterprise_supply(), decorate=enterprise_decorations
-)
+settings = EngineSettings.from_env()
+settings.require_discovery_url()  # refuse before the database is opened and migrated
+engine = await BuilderEngine.create(settings, supply=enterprise_supply(), decorate=enterprise_decorations)
 await engine.start()
 ```
 
@@ -209,6 +209,9 @@ The same engine serves both integration modes: call it in-process with your own 
   stops it (a failed start stops it too), so the host must run that lifespan, as any ASGI server does.
   To hold the engine yourself, build it with `BuilderEngine.create` and pass it to
   `livepeer_builder.http.create_app`. Logging is left to the host.
+
+Both refuse without `LPB_DISCOVERY_URL` before they build the engine, so the database is not opened or
+migrated for an engine that would not start (#154).
 
 **Two listeners (#167).** With `LPB_HTTP_PRIVATE_PORT` set, `serve` runs a public and a private
 listener over the one engine, each with an app of its own
@@ -268,14 +271,21 @@ asyncio.run(
 
 ## Discovery
 
-Which runners exist is decided outside the engine. `LPB_DISCOVERY_URL` is required and points at a
+Which runners exist is decided outside the engine. `LPB_DISCOVERY_URL` points at a
 `GET /discovery` document that follows livepeer/node's contract
-([contract](../contracts/discovery.md)). The reference implementation is livepeer/node's
+([contract](../contracts/discovery.md)), and an engine does not start without it: `start()` refuses,
+naming the variable (#154). The reference implementation is livepeer/node's
 `livepeer-discovery`. This package does not ship a discovery process.
 
 To change who the engine calls without replacing that process, wrap `HttpDiscoverySource` through
 `decorate`. Raising from the wrapper keeps the last good snapshot. To replace the inventory entirely,
 serve the same document from another process and point `LPB_DISCOVERY_URL` at it.
+
+The `decorate` stage receives the built-in reader when the address is set. An engine built without the
+address holds a source that reads nothing, and that is what `decorate` receives. An engine whose
+`decorate` stage replaces the discovery source still needs `LPB_DISCOVERY_URL` to start, as it did while
+settings required it. Whether such an engine should start without it is left open and is not changed
+by #154.
 
 ## Rules every implementation must keep
 
@@ -290,7 +300,7 @@ named here show each one.
 | `SelectionPolicy` | Pure and fast: order candidates, don't call the network. The engine applies `max_attempts` and the failover-before-payment rule. On a paid job it then moves the runners the signer takes no ceiling for (no rate, `0`, an unpaid unit or currency) after the rest, keeping your order within each part. The engine hands you every runner for the app, those advertising zero capacity included, and tries what you return in your order (#114, C17): order them last, as `MostCapacityFirst` does, or leave them out to drop them. Returning no runner fails the job `no_offering`. One case is decided before you are asked: when every runner advertises zero capacity and the job pays, the runners it would sign a payment for are left out, and with none left the job fails `no_capacity` ([contract](../contracts/discovery.md#advertised-capacity)) |
 | `DiscoverySource` | Return contract `Runner`s. Raising keeps the last good snapshot (`discovery_error` in health, as a code; the text is logged). Give every text field valid Unicode text with no control character (an optional field may hold a tab or a line break): the engine skips a runner that has any other text, logs `discovery.inventory_skipped` and keeps the rest ([contract](../contracts/discovery.md#how-a-document-is-read), `tests/unit/test_runner_text.py`) |
 | `CredentialResolver` (implemented by `PaymentsService`; not replaceable today) | Return a `PaymentKey` with the signer bearer and the allocation that bearer spends, or raise `NotProvisioned` for an actor with no allocation. A `token` of `None` makes the call unpaid; `PaymentsService` never returns one, since no job runs without an allocation |
-| `RunnerTransport` | Await **`on_signed(manifest_id)`** for each session the signer signs, before the paid request goes out (`""` when the challenge has none): the engine stores the evidence there, so a cancel or crash mid-request keeps the charge attributed (D42). Raise `RunnerCallError` with an accurate **`payment_sent`** and **`manifest_ids`** (one per signed session, in order). Failover, `uncertain` and cost attribution all depend on them; a session reported through `on_signed` keeps the attempt paid even if the error says otherwise. When the callback has `remember` and `refused` (the engine's recorder does), await `remember(manifest_id)` before asking the signer and sign nothing if it raises, and await `refused(manifest_id)` when the signer refuses (D54). Use `payment_refused` only for orchestrator-specific refusals before payment. Set `reason` on a `payment` refusal (`not_authorized`, `allowance_exhausted`, `signer_unavailable`, D58) and write `message` in your own words: it reaches builders, so it must not quote the signer's URL or body |
+| `RunnerTransport` | Await **`on_signed(manifest_id)`** for each session the signer signs, before the paid request goes out (`""` when the challenge has none): the engine stores the evidence there, so a cancel or crash mid-request keeps the charge attributed (D42). Raise `RunnerCallError` with an accurate **`payment_sent`** and **`manifest_ids`** (one per signed session, in order). Failover, `uncertain` and cost attribution all depend on them; a session reported through `on_signed` keeps the attempt paid even if the error says otherwise. When the callback has `remember` and `refused` (the engine's recorder does), await `remember(manifest_id)` before asking the signer and sign nothing if it raises, and await `refused(manifest_id)` when the signer refuses (D54). Use `payment_refused` only for orchestrator-specific refusals before payment. Set `reason` on a `payment` refusal (`not_authorized`, `allowance_exhausted`, `signer_unavailable`, D58) and write `message` in your own words: it reaches builders, so it must not quote the signer's URL or body. Report `content_type` (on the reply, and on a stream) as text a response header can hold: the header's bytes read as Latin-1, with no control character but a tab. The engine answers and stores any other value as `application/octet-stream` ([contract](../contracts/engine.md#rest-d37), `tests/unit/test_runner_content_type.py`) |
 | `StreamingRunnerTransport` | `open` returns once the runner answered (status, content type), with `payment_sent` and `manifest_ids` already known. It must give up after `request.first_byte_timeout_s` and raise `RunnerCallError("timeout")` (or `payment` / `signer_unavailable` when the deadline lands on signer identity, before the runner is asked) with the payment evidence so far; the engine stops an `open` that runs `LPB_STREAM_OPEN_GRACE_S` (default 5 s) longer and treats it as paid (D35). Iteration raises `RunnerCallError` mid-stream; `aclose` closes the connection and stops any ongoing funding, and may be called more than once (`tests/unit/test_stream_deadlines.py`) |
 | `AllocationManager` | Every money-moving call honors its `idempotency_key`. A replay returns the original result. `create_key_for_grant` and `top_up_allocation` refuse an amount larger than the grant's unallocated balance, and a call that names an unknown grant, with a `ProviderError` (a 4xx: 409, 404): the engine passes the refusal on and computes no balance itself. `read_grant` and `grant_balances` return each grant as a `TenantGrant` (the tenant's id is the grant's id) with what is left to allot, what its allocations have spent and what they still hold unspent (each allocation's amount less what it spent, never below zero for one), and `set_grant_status` sets `active` or `paused`; the tenant desk calls the three on the grants manager (#165). `create_grant` stores `metadata` with the grant and `list_grants` returns it, every page; `grant_page(cursor)` returns one page, oldest first, and a cursor that goes on from it: the engine finds a grant it created by its `lpb_operation` tag, resuming the search from a recorded cursor (D57, Q5). An answer you cannot read is an error (`ProviderError` with a status that is not a 4xx, or `ProviderUnavailable`), never an empty list or page: a resumed grant create that reads "no grants" creates a second one (#114, C21). A `grant_page` that returns the cursor it was given fails the resumed search with a `ProviderError`; your own `list_grants` loop needs the same check |
 | `UsageSource` | Opaque cursor. Raise `CursorMismatch` on a rejected cursor so the worker resyncs. Rows are immutable per `id`. An item you cannot read as a `UsageRow` goes in `UsagePage.set_aside` (build it with `contracts.costs.set_aside_record`; its reason is one of `SetAsideReason`, and `unreadable_row` when no other fits), not in an exception: raising fails the page on every pass, so the cursor never moves. The worker itself sets aside a `UsageRow` whose text the store cannot keep (#114, C13). A page whose `next_cursor` is the cursor it was asked with fails the sync (`invalid_answer`): asking again would never end (#114, C21) |

@@ -44,7 +44,10 @@ async def render_openapi(role: PublishedRole = "both") -> str:
     settings = EngineSettings(
         database_url="sqlite+aiosqlite:///:memory:",
         log_json=False,
-        discovery_url="http://127.0.0.1:9/discovery",
+        # The runner list route is served only by an engine whose discovery source reads an address
+        # (#166), so this one is given a reserved name. The engine is built and never started, and
+        # nothing is asked there (#154).
+        discovery_url="https://discovery.invalid/discovery",
         **values,
     )
     engine = await BuilderEngine.create(settings, supply=supply)

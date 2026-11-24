@@ -28,7 +28,8 @@ from typing import Final
 
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.clock import SystemClock
-from livepeer_builder.config import EngineSettings
+from livepeer_builder.config import DISCOVERY_URL_REQUIRED, EngineSettings
+from livepeer_builder.contracts import Runner
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllocationManager,
@@ -141,6 +142,15 @@ class EngineSupply:
 Decorate = Callable[[EngineParts], EngineParts]
 
 
+class NoDiscoveryAddress:
+    """The discovery source of an engine built without ``LPB_DISCOVERY_URL`` (#154): it has no address
+    to read. ``lpb purge`` and ``lpb bootstrap-admin`` build such an engine and never start it; ``start()``
+    refuses it before anything polls (D63). Asked anyway, it gives no answer, in the refusal's words."""
+
+    async def fetch(self) -> tuple[Runner, ...]:  # NOSONAR - async by protocol (DiscoverySource)
+        raise RuntimeError(DISCOVERY_URL_REQUIRED)
+
+
 def own(stack: contextlib.AsyncExitStack, resource: object, close: Callable[[], Awaitable[None]]) -> None:
     """Register ``close`` on ``stack``; a failure is logged, never raised, so the rest still close."""
 
@@ -164,8 +174,6 @@ async def default_parts(
     importing the package loads no database, HTTP, crypto or SDK library
     (tests/structure/test_import_weight.py).
     """
-    from livepeer_builder.adapters.sdk import HttpDiscoverySource
-
     supply = supply or EngineSupply()
     clock = _supplied(supply.clock, SystemClock)
     policy = _supplied(supply.policy, DefaultPolicy)
@@ -183,23 +191,13 @@ async def default_parts(
     grants_manager = _supplied(supply.grants_manager, defaults.grants_manager)
     usage_source = _supplied(supply.usage_source, defaults.usage_source)
 
-    # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. It
-    # carries the tenant admin key only when the address is the clearinghouse's runner list (D87), and
-    # then it asks whose key that is before it reads a list with it (#165).
-    bearer = settings.clearinghouse_runner_list_token
-    http_source = HttpDiscoverySource(
-        settings.discovery_url, bearer=bearer, confirm=defaults.confirm_tenant if bearer else None
-    )
-    own(stack, http_source, http_source.aclose)
-    discovery_source: DiscoverySource = http_source
-
     return EngineParts(
         store=store,
         clock=clock,
         policy=policy,
         authenticators=authenticators,
         api_keys=api_keys,
-        discovery_source=discovery_source,
+        discovery_source=_discovery_source(settings, stack, defaults.confirm_tenant),
         transport=_supplied(supply.transport, defaults.transport),
         selection=_supplied(supply.selection, MostCapacityFirst),
         allocation_manager=allocation_manager,
@@ -211,6 +209,25 @@ async def default_parts(
         credentials=_supplied(supply.credentials, defaults.credentials),
         allowances=_supplied(supply.allowances, defaults.allowances),
     )
+
+
+def _discovery_source(
+    settings: EngineSettings, stack: contextlib.AsyncExitStack, confirm_tenant: Callable[[], Awaitable[None]]
+) -> DiscoverySource:
+    """Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. It
+    carries the tenant admin key only when the address is the clearinghouse's runner list (D87), and
+    then it asks whose key that is before it reads a list with it (#165). Without the address there is
+    nothing to read: the engine is built, and ``start()`` refuses it (#154)."""
+    from livepeer_builder.adapters.sdk import HttpDiscoverySource  # here: see default_parts
+
+    if settings.discovery_url is None:
+        return NoDiscoveryAddress()
+    bearer = settings.clearinghouse_runner_list_token
+    http_source = HttpDiscoverySource(
+        settings.discovery_url, bearer=bearer, confirm=confirm_tenant if bearer else None
+    )
+    own(stack, http_source, http_source.aclose)
+    return http_source
 
 
 def _supplied[T](part: T | _Unset, default: Callable[[], T]) -> T:

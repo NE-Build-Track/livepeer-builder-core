@@ -44,6 +44,7 @@ from livepeer_builder.contracts import (
     Runner,
     RunnerReply,
 )
+from livepeer_builder.contracts.http import response_content_type
 from livepeer_builder.errors import (
     InvalidRequest,
     JobFailed,
@@ -363,7 +364,7 @@ class JobService:
                 job=finished,
                 status_code=reply.status_code,
                 content=reply.content,
-                content_type=reply.content_type,
+                content_type=response_content_type(reply.content_type),
                 data=reply.data,
             )
         raise await self._exhausted(job, attempts, cast(RunnerCallError, last))
@@ -486,7 +487,7 @@ class JobService:
 def _result_ref(reply: RunnerReply) -> ResultRef:
     return ResultRef(
         storage="inline",
-        content_type=reply.content_type,
+        content_type=response_content_type(reply.content_type),  # one rule (#158)
         size_bytes=len(reply.content),
         sha256=hashlib.sha256(reply.content).hexdigest(),
     )

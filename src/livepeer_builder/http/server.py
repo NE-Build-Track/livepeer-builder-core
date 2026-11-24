@@ -52,7 +52,11 @@ async def build_app(
 
     The engine lives as long as the app's lifespan, which starts and stops it, so run that lifespan (any
     ASGI server does). To hold the engine yourself, use ``BuilderEngine.create`` and ``create_app``.
+
+    Without ``LPB_DISCOVERY_URL`` it refuses here, as ``serve`` does: the lifespan would refuse to start
+    the engine (D63, #154), after ``create`` had opened the database and migrated it.
     """
+    settings.require_discovery_url()
     if settings.http_private_port is not None:
         raise ValueError(
             "LPB_HTTP_PRIVATE_PORT is set, and build_app builds the app of one listener. Run serve(), "
@@ -82,9 +86,13 @@ async def serve(
     To stop it from your own code, cancel the task that runs it. That does not wait for requests in
     flight, with one listener or two: each listener is closed and hangs up on its callers, the requests
     still running are cancelled, the app's shutdown handlers run, the engine is stopped, and the
-    cancellation is raised."""
+    cancellation is raised.
+
+    Without ``LPB_DISCOVERY_URL`` it refuses here, before the store is opened or migrated: the engine it
+    is about to start would refuse (D63, #154), and ``create`` opens the database and migrates it."""
     import uvicorn
 
+    settings.require_discovery_url()
     configure_logging(json_lines=settings.log_json)
     engine = await BuilderEngine.create(settings, supply=supply, decorate=decorate)
     try:

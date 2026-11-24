@@ -8,9 +8,10 @@ the same thing against the engine.
 import asyncio
 import hashlib
 import json
+import time
 from collections.abc import AsyncIterable, AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -42,6 +43,7 @@ from livepeer_builder.testing import (
     make_engine,
     runner,
 )
+from livepeer_builder.utils import utc
 
 APP, OTHER, NONE = "example/echo", "example/other", "example/nobody"  # no runner serves NONE
 ALICE = ActorContext(
@@ -194,6 +196,148 @@ async def test_cost_reads_and_discovery_need_their_permission_too(side: Side) ->
             await engine.payments.allowance(no_costs)
         with pytest.raises(AccessDenied):
             engine.discovery.runners(no_discover, APP)
+
+
+async def test_a_summary_with_no_start_that_ends_in_the_first_30_days_of_year_1_is_refused(
+    side: Side,
+) -> None:
+    """Its start, 30 days before ``end``, is a time no datetime holds: the subtraction raised
+    ``OverflowError`` (#158). An ``end`` with no offset is read the same way."""
+    async with side() as engine:
+        for end in (datetime(1, 1, 15, tzinfo=UTC), datetime(1, 1, 30, 23, 59, 59), datetime.min):
+            with pytest.raises(InvalidRequest, match="end: must be 0001-01-31T00:00:00Z or later"):
+                await engine.costs.summary(ALICE, None, end)
+        first = await engine.costs.summary(ALICE, None, datetime(1, 1, 31, tzinfo=UTC))
+        stated = await engine.costs.summary(
+            ALICE, datetime.min.replace(tzinfo=UTC), datetime(1, 1, 15, tzinfo=UTC)
+        )
+    assert (first.start, first.end) == (datetime.min.replace(tzinfo=UTC), datetime(1, 1, 31, tzinfo=UTC))
+    assert stated.end == datetime(1, 1, 15, tzinfo=UTC)
+
+
+async def test_a_default_summary_window_is_judged_by_the_instant_of_end_whatever_its_offset(
+    side: Side,
+) -> None:
+    """Review of #187: the window was measured in ``end``'s own offset. ``0001-01-31T00:00+01:00`` passed,
+    and its start, ``0001-01-01T00:00+01:00``, is before year 1 in UTC: an ``OverflowError`` where the
+    window is normalized. ``0001-01-30T20:00-05:00`` is ``0001-01-31T01:00Z`` and was refused."""
+    ahead, behind = timezone(timedelta(hours=1)), timezone(timedelta(hours=-5))
+    async with side() as engine:
+        for end in (
+            datetime(1, 1, 31, tzinfo=ahead),
+            datetime(1, 1, 1, tzinfo=timezone(timedelta(hours=14))),
+        ):
+            with pytest.raises(InvalidRequest, match="end: must be 0001-01-31T00:00:00Z or later"):
+                await engine.costs.summary(ALICE, None, end)
+        late_enough = await engine.costs.summary(ALICE, None, datetime(1, 1, 30, 20, tzinfo=behind))
+        first = await engine.costs.summary(ALICE, None, datetime(1, 1, 31, 1, tzinfo=ahead))
+    assert (late_enough.start, late_enough.end) == (
+        datetime(1, 1, 1, 1, tzinfo=UTC),
+        datetime(1, 1, 31, 1, tzinfo=UTC),
+    )
+    assert (first.start, first.end) == (datetime.min.replace(tzinfo=UTC), datetime(1, 1, 31, tzinfo=UTC))
+
+
+class NewYork2026(tzinfo):
+    """New York's wall clock in 2026, with no time zone database: summer time from 8 March to 1 November."""
+
+    def utcoffset(self, dt: datetime | None) -> timedelta:
+        assert dt is not None
+        summer = datetime(2026, 3, 8, 2) <= dt.replace(tzinfo=None) < datetime(2026, 11, 1, 2)
+        return timedelta(hours=-4 if summer else -5)
+
+    def dst(self, dt: datetime | None) -> timedelta:
+        return self.utcoffset(dt) + timedelta(hours=5)
+
+    def tzname(self, dt: datetime | None) -> str:
+        return "New York"
+
+
+async def test_a_default_summary_window_is_thirty_days_of_time_across_a_clock_change(side: Side) -> None:
+    """The start was taken 30 days back on ``end``'s own wall clock (John, #187 review). Noon on 1 April
+    2026 in New York is 16:00 UTC, and 30 days of wall time before it is noon on 2 March, in winter time:
+    17:00 UTC. The same instant given in UTC started at 16:00, so the first window left an hour of jobs
+    out. The window is 30 days of time, whichever zone names its end."""
+    new_york = datetime(2026, 4, 1, 12, tzinfo=NewYork2026())
+    same_instant = new_york.astimezone(UTC)
+    autumn = datetime(2026, 11, 20, 12, tzinfo=NewYork2026())  # the clock went back on 1 November
+    async with side() as engine:
+        local = await engine.costs.summary(ALICE, None, new_york)
+        utc = await engine.costs.summary(ALICE, None, same_instant)
+        back = await engine.costs.summary(ALICE, None, autumn)
+    assert same_instant == datetime(2026, 4, 1, 16, tzinfo=UTC)
+    assert local.start == utc.start == datetime(2026, 3, 2, 16, tzinfo=UTC)
+    assert local.end - local.start == utc.end - utc.start == timedelta(days=30)
+    assert back.end - back.start == timedelta(days=30)
+    assert back.start == datetime(2026, 10, 21, 17, tzinfo=UTC)  # 17:00 UTC is noon in winter time
+
+
+class NoOffset(tzinfo):
+    """A ``tzinfo`` that names no offset: Python reads a datetime that carries it as naive."""
+
+    def utcoffset(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+    def dst(self, dt: datetime | None) -> timedelta | None:
+        return None
+
+    def tzname(self, dt: datetime | None) -> str | None:
+        return None
+
+
+async def test_a_default_summary_window_reads_an_end_whose_tzinfo_names_no_offset_as_naive(
+    side: Side,
+) -> None:
+    """Such an ``end`` is naive to Python, whatever ``tzinfo`` it carries. Judged by ``tzinfo is None``
+    it was measured from an aware first instant, and the subtraction raised ``TypeError``, for an input
+    the summary took before #158 (John, #187 review)."""
+    async with side() as engine:
+        late = await engine.costs.summary(ALICE, None, datetime(2026, 11, 23, 12, tzinfo=NoOffset()))
+        with pytest.raises(InvalidRequest, match="end: must be 0001-01-31T00:00:00Z or later"):
+            await engine.costs.summary(ALICE, None, datetime(1, 1, 15, tzinfo=NoOffset()))
+    assert late.end - late.start == timedelta(days=30)
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="changing the process timezone requires Unix tzset")
+@pytest.mark.parametrize("given", ["end alone", "start and end"])
+async def test_a_window_whose_tzinfo_names_no_offset_is_utc_on_a_host_in_another_zone(
+    side: Side, monkeypatch: pytest.MonkeyPatch, given: str
+) -> None:
+    """A datetime whose ``tzinfo`` names no offset is naive to Python, and a time with no offset is UTC
+    here (T25). Told apart by ``tzinfo is None``, such a bound was read in the host's own zone: five hours
+    behind UTC, a window meant to end an hour before a job reached four hours past it, and the job's cost
+    was in the summary (John, #187 review). Both bounds are checked, by a job on each side of each."""
+    monkeypatch.setenv("TZ", "EST5")  # five hours behind UTC, all year
+    time.tzset()
+    try:
+        async with side() as engine:
+            ran = await engine.jobs.run(ALICE, JobRequest(app=APP))
+            created = utc(ran.job.created_at)
+
+            def wall(instant: datetime) -> datetime:
+                """``instant``'s UTC wall time, carried by a ``tzinfo`` that names no offset."""
+                return instant.replace(tzinfo=NoOffset())
+
+            early = None if given == "end alone" else wall(created - timedelta(hours=2))
+            ends_before = await engine.costs.summary(ALICE, early, wall(created - timedelta(hours=1)))
+            ends_after = await engine.costs.summary(ALICE, early, wall(created + timedelta(hours=1)))
+            starts_after = await engine.costs.summary(
+                ALICE, wall(created + timedelta(minutes=1)), wall(created + timedelta(hours=1))
+            )
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+    assert ends_before.jobs_pending == 0, "a window that ended before the job holds it"
+    assert ends_after.jobs_pending == 1
+    assert starts_after.jobs_pending == 0, "a window that started after the job holds it"
+    if given == "end alone":
+        assert utc(ends_after.end) - utc(ends_after.start) == timedelta(days=30)
+
+
+def test_a_time_with_no_offset_is_utc_whatever_tzinfo_it_carries() -> None:
+    noon = datetime(2026, 11, 23, 12)
+    assert utc(noon) == utc(noon.replace(tzinfo=NoOffset())) == datetime(2026, 11, 23, 12, tzinfo=UTC)
+    assert utc(noon.replace(tzinfo=timezone(timedelta(hours=-5)))) == datetime(2026, 11, 23, 17, tzinfo=UTC)
 
 
 async def test_the_summary_counts_the_jobs_run_by_class_and_by_app(side: Side) -> None:

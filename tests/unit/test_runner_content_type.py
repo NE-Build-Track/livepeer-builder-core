@@ -15,12 +15,14 @@ from collections.abc import AsyncIterator
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+import h11
 import httpx
 import pytest
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
 from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, JobResult, Money, Runner
+from livepeer_builder.contracts.http import response_content_type
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import ScriptedStreamTransport, StreamScript, runner
 from tests.conftest import EngineFactory
@@ -223,6 +225,17 @@ async def test_the_transport_keeps_content_type_bytes_as_latin_1_or_not_at_all(
         await stream.aclose()
 
 
+async def test_a_runner_that_sends_no_content_type_is_octet_stream() -> None:
+    transport = SdkRunnerTransport(None)
+    async for bare in answering(b"X-Other: 1"):
+        reply = await transport.call(bare, JobRequest(app=APP), None)
+        stream = await transport.open(bare, JobRequest(app=APP), None)
+        try:
+            assert (reply.content_type, stream.content_type) == (OCTETS.decode(), OCTETS.decode())
+        finally:
+            await stream.aclose()
+
+
 @pytest.mark.parametrize(("raw_runner", "sent"), RAW, ids=RAW_IDS, indirect=["raw_runner"])
 async def test_rest_answers_a_content_type_that_is_not_utf_8_byte_for_byte_and_the_jobs_still_read(
     make_engine: EngineFactory, admin: ActorContext, raw_runner: Runner, sent: bytes
@@ -271,3 +284,141 @@ async def test_a_stream_s_headers_are_the_runner_s_bytes_read_as_latin_1(
     assert json.dumps(headers, ensure_ascii=False).encode()  # it can be logged and stored
     sent_on = [name.encode("latin-1") + b": " + value.encode("latin-1") for name, value in headers]
     assert line in sent_on  # and sent on, as the bytes that came
+
+
+# -- a supplied transport's content type (#158) -----------------------------------------------------------
+
+# What a supplied transport reported and no response header can hold. Starlette writes a header as
+# Latin-1, so the first two were a 500 after the job ran, and the streamed job was left ``running``; a
+# stored lone surrogate made every later read of the job a 500. The rest went out as written.
+NOT_A_HEADER = [
+    'text/plain; title="日本"',  # the text itself, which Latin-1 cannot encode
+    "text/plain; t=\udce9",  # a lone surrogate, as aiohttp reads a byte that is not UTF-8
+    "text/plain\r\nX-Injected: 1",
+    "text/plain; t=\x7f",
+    "",
+    "text/plain ",  # outer whitespace: the server cannot write the header, and the answer is lost
+    " text/plain",
+    "\ttext/plain",
+    " ",
+]
+NOT_A_HEADER_IDS = [
+    "above latin-1",
+    "lone surrogate",
+    "line break",
+    "DEL",
+    "empty",
+    "trailing space",
+    "leading space",
+    "leading tab",
+    "only a space",
+]
+
+
+KEPT = ["text/plain; t=\xe9", "text/plain; t=\x80\xff", "text/plain;\tt=1", "a", "text/plain; a b"]
+
+
+@pytest.mark.parametrize("reported", [*KEPT, *NOT_A_HEADER], ids=ascii)
+def test_every_content_type_the_engine_keeps_is_one_the_server_writes(reported: str) -> None:
+    """The route tests here run the app in process, which never writes a header to a socket (John, #187
+    review). uvicorn writes it with h11, which refuses a value that begins or ends with whitespace: the
+    job had run, and its answer was lost. So what the engine keeps is checked against h11 itself."""
+    kept = response_content_type(reported)
+    assert kept == (reported if reported in KEPT else OCTETS.decode())
+    server = h11.Connection(h11.SERVER)
+    server.receive_data(b"GET / HTTP/1.1\r\nHost: engine.test\r\n\r\n")
+    assert isinstance(server.next_event(), h11.Request)
+    written = server.send(h11.Response(status_code=200, headers=[("content-type", kept.encode("latin-1"))]))
+    assert written is not None and b"content-type: " + kept.encode("latin-1") + b"\r\n" in written.lower()
+
+
+@pytest.mark.parametrize("reported", NOT_A_HEADER, ids=NOT_A_HEADER_IDS)
+async def test_rest_answers_octet_stream_for_a_supplied_transport_s_content_type_no_header_holds(
+    rest: tuple[httpx.AsyncClient, dict[str, str]], transport: ScriptedStreamTransport, reported: str
+) -> None:
+    client, alice = rest
+    transport.steps = [ScriptedStreamTransport.ok(b"hello").model_copy(update={"content_type": reported})]
+    buffered = await client.post("/v1/jobs", json={"app": APP}, headers=alice)
+    assert (buffered.status_code, content_type_bytes(buffered)) == (200, OCTETS), buffered.text
+    assert buffered.content == b"hello" and buffered.headers.get("x-injected") is None
+
+    transport.opens = [StreamScript(events=[b"data: a\n\n"], content_type=reported)]
+    streamed = await client.post("/v1/jobs?stream=true", json={"app": APP}, headers=alice)
+    assert (streamed.status_code, content_type_bytes(streamed)) == (200, OCTETS), streamed.text
+    assert streamed.content == b"data: a\n\n" and streamed.headers.get("x-injected") is None
+
+    transport.opens = [StreamScript(events=[], content_type=reported)]  # an empty streamed body
+    empty = await client.post("/v1/jobs?stream=true", json={"app": APP}, headers=alice)
+    assert (empty.status_code, content_type_bytes(empty)) == (200, OCTETS), empty.text
+
+    listed = await client.get("/v1/jobs", headers=alice)
+    assert listed.status_code == 200, listed.text  # the jobs read back, and none is left running
+    assert [(job["state"], job["result"]["content_type"]) for job in listed.json()] == [
+        ("succeeded", OCTETS.decode())
+    ] * 3
+
+
+@pytest.mark.parametrize("reported", NOT_A_HEADER, ids=NOT_A_HEADER_IDS)
+async def test_an_embedded_caller_reads_the_same_content_type_the_job_record_keeps(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport,
+    reported: str,
+) -> None:  # fmt: skip
+    engine = await allotted(make_engine, admin)
+    transport.steps = [ScriptedStreamTransport.ok(b"hello").model_copy(update={"content_type": reported})]
+    result = await engine.jobs.run(alice, JobRequest(app=APP))
+    assert result.job.result is not None
+    assert (result.content_type, result.job.result.content_type) == (OCTETS.decode(), OCTETS.decode())
+
+    transport.opens = [StreamScript(events=[b"data: a\n\n"], content_type=reported)]
+    async with await engine.jobs.streaming.stream(alice, JobRequest(app=APP)) as stream:
+        assert stream.content_type == OCTETS.decode()
+        assert [chunk async for chunk in stream] == [b"data: a\n\n"]
+    assert stream.job.result is not None and stream.job.result.content_type == OCTETS.decode()
+
+
+@pytest.mark.parametrize(
+    "reported", ["text/plain; t=\xe9", "text/plain; t=\x80\xff", "text/plain;\tt=1", "a"], ids=ascii
+)
+async def test_a_supplied_transport_s_content_type_a_header_holds_is_kept_as_reported(
+    make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport,
+    reported: str,
+) -> None:  # fmt: skip
+    engine = await allotted(make_engine, admin)
+    transport.steps = [ScriptedStreamTransport.ok(b"hello").model_copy(update={"content_type": reported})]
+    result = await engine.jobs.run(alice, JobRequest(app=APP))
+    assert result.job.result is not None
+    assert (result.content_type, result.job.result.content_type) == (reported, reported)
+    transport.opens = [StreamScript(events=[b"data: a\n\n"], content_type=reported)]
+    async with await engine.jobs.streaming.stream(alice, JobRequest(app=APP)) as stream:
+        assert stream.content_type == reported
+        assert [chunk async for chunk in stream] == [b"data: a\n\n"]
+    assert stream.job.result is not None and stream.job.result.content_type == reported
+
+
+@pytest.mark.parametrize(
+    ("header_runner", "pair"),
+    [(line, pair) for line, pair in HEADERS],
+    ids=HEADER_IDS,
+    indirect=["header_runner"],
+)
+async def test_a_job_stream_s_headers_are_the_transport_s_pairs_with_no_lone_surrogate(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    header_runner: Runner,
+    pair: tuple[str, str],
+) -> None:
+    """``JobStream.headers`` is what an embedded caller reads, through the engine (#158): the SDK
+    transport's pairs as they are, so every one can be logged, stored and sent on."""
+    engine = await make_engine(
+        runners=(header_runner,), supply=EngineSupply(transport=SdkRunnerTransport(None))
+    )
+    amount = Money(amount=Decimal(5), currency="USD")
+    await engine.payments.allot(
+        admin, AllotRequest(operation_ref="p1", tenant_id="default", actor_id="alice", amount=amount)
+    )
+    async with await engine.jobs.streaming.stream(alice, JobRequest(app=APP)) as stream:
+        headers = stream.headers
+        assert [chunk async for chunk in stream] == [b"hello"]
+    assert pair in headers and ("Content-Type", "application/json") in headers
+    assert json.dumps(headers, ensure_ascii=False).encode()

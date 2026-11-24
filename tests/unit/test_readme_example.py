@@ -5,6 +5,8 @@ The region between the docs markers is the README's example; scripts/check_docs.
 
 from pathlib import Path
 
+import pytest
+
 # docs:start quick-start
 from livepeer_builder import (
     ActorContext,
@@ -21,6 +23,7 @@ async def quick_start(
     settings: EngineSettings, supply: EngineSupply | None = None, decorate: Decorate | None = None
 ) -> JobCost:
     """Run one paid job for a customer and read what it cost. ``supply`` replaces parts and ``decorate`` wraps them."""
+    settings.require_discovery_url()  # an engine does not start without it: refuse before the database is opened
     async with await BuilderEngine.create(settings, supply=supply, decorate=decorate) as engine:
         actor = ActorContext(
             actor_id="customer-42",
@@ -67,3 +70,15 @@ async def test_the_quick_start_runs_a_job_and_reads_its_cost(tmp_path: Path) -> 
     finally:
         await client.aclose()
     assert cost.status == "pending"
+
+
+async def test_the_quick_start_refuses_without_the_address_before_it_opens_the_database(
+    tmp_path: Path,
+) -> None:
+    """``create`` opens the database and migrates it, and ``start()`` refuses after that. The quick start
+    asks the settings first, so a deployment with no address fails with its database untouched (#154)."""
+    database = tmp_path / "quick-start.db"
+    settings = EngineSettings(database_url=f"sqlite+aiosqlite:///{database}", log_json=False)
+    with pytest.raises(ValueError, match="LPB_DISCOVERY_URL is required to start the engine"):
+        await quick_start(settings)
+    assert not database.exists()

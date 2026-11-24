@@ -48,6 +48,8 @@ async def make_engine(
         "database_url": MEMORY_URL,
         "secret_key": generate_secret_key(),
         "log_json": False,
+        # A test may start this engine, and an engine does not start without an address (D63, #154).
+        # Nothing is read from it: the runners come from the fake service ``serve`` installs below.
         "discovery_url": FAKE_DISCOVERY_URL,
         **settings,
     }

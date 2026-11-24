@@ -27,3 +27,17 @@ def source_failure(error: BaseException) -> SourceFailureCode:
     # timeout, a refused connection or an error status is none of these
     unreadable = isinstance(error, ValueError | KeyError | TypeError | ArithmeticError)
     return INVALID_ANSWER if unreadable else UNAVAILABLE
+
+
+_BY_THE_SOURCE: Final = "_lpb_raised_by_source"
+
+
+def from_source[E: BaseException](error: E) -> E:
+    """``error``, noted as what a usage source raised. The note is on the error itself: two syncs share a
+    worker and can overlap, so a field on the worker told the first run about the second's failure."""
+    setattr(error, _BY_THE_SOURCE, True)
+    return error
+
+
+def raised_by_source(error: BaseException) -> bool:
+    return getattr(error, _BY_THE_SOURCE, False) is True

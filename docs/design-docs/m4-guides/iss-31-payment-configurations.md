@@ -739,7 +739,8 @@ One builder-core issue each, all sub-issues of ISS-31.
    short paths with the tenant admin key, and the adapters refuse a command about another tenant before
    anything is sent. No service rule changed. `LPB_CLEARINGHOUSE_TENANT_ID` stays (T38): with no tenant
    in a path the clearinghouse no longer compares it with the key, so the engine does. It reads the
-   key's grant before its first request, refuses every request when the key belongs to another tenant,
+   key's grant before its first request (a command, before its operation record is begun, so the read
+   spends none of the ledger's budget), refuses every request when the key belongs to another tenant,
    and reads the tenant each answer states (`adapters/clearinghouse_tenant.py`). Carried forward onto
    the direct-signer design and the roles on 23 November 2026: both forms of a tenant's routes hand an
    allocation's key over on an engine in its `clearinghouse` role and store it on one in its `both` role.

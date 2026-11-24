@@ -1205,12 +1205,10 @@ selects the remote adapters (#169), and three settings, set together, say which 
   allocation, sends the rotation, and reads which key the allocation takes. Every other command makes
   one or two, and none writes after its second call, so a read that is cut short leaves nothing in
   flight and the resume asks again. Three calls in the half is six timeouts in the window, where
-  Batteries' two calls make four. The defaults, 20 and 120, meet it exactly. The first request of a
-  process is preceded by one read more, of the key's grant
-  ([who the engine is at the clearinghouse](#who-the-engine-is-at-the-clearinghouse)), which the rule
-  does not count: cost sync usually makes it, soon after start. When a command makes it, its one write
-  is its third request at the latest and still ends in the half, and only the last read of an overtaken
-  rotation can be cut short, which the resume asks again.
+  Batteries' two calls make four. The defaults, 20 and 120, meet it exactly. The read of the key's
+  grant, which the engine makes once in a process
+  ([who the engine is at the clearinghouse](#who-the-engine-is-at-the-clearinghouse)), is none of the
+  three: a command makes it before its record is begun, so it spends none of that half.
 - **`LPB_DISCOVERY_URL` defaults to the clearinghouse's runner list** (D87), and the reader carries the
   tenant admin key there and to no other address ([discovery.md](discovery.md#the-clearinghouses-runner-list)).
 - A caller who supplies a part through `EngineSupply` keeps it: a supplied part is never replaced.
@@ -1420,10 +1418,23 @@ all of it under its own tenant. So:
   that fails is that request's failure (`ProviderUnavailable`, or what the clearinghouse answered) and
   says nothing about the key, so the next request reads again. Once one read has answered for the
   engine's tenant, no other is made: a process has one key.
+- **A command makes that read before its record is begun.** An allotment, a top-up and a payment key
+  rotation run on the operation ledger, inside half of `LPB_OPERATION_STALE_S`, which is sized for the
+  three calls the longest of them makes ([the remote adapters](#the-remote-adapters)). So the payments
+  service asks the allocation manager to be ready before it enters the ledger (the optional protocol
+  `ReadyBeforeCommands`, which the remote manager has and Batteries' client does not): the read spends
+  none of that budget, and inside it the command makes the calls it always made. A refusal or a failure
+  there leaves no operation record and the reference free, so the same request runs as new once the
+  clearinghouse answers, with no stale window to wait for. A status change and a revoke, which take no
+  reference, are made ready the same way. The repeat of a finished command is made ready too, before it
+  is answered from the record: in a process that has not yet read the grant it costs that one read, and
+  fails while the clearinghouse cannot be reached. A read that is not a command (the allowance, a usage
+  page, the runner list) makes the read itself, and so does a manager that is called through the port
+  alone, by a caller that never asks it to be ready: that is as safe, and spends that caller's own time.
 - **Another tenant than `LPB_CLEARINGHOUSE_TENANT_ID`** is a refusal of whatever was asked: a
   `ProviderError` 403 that names both tenants and both settings, and says to set the key and the id of
   one tenant and start the engine again. Nothing of the request is sent, so nothing is applied anywhere
-  and a command's reference is free again. The read is repeated at each request while the answer is
+  and a command's reference is never claimed. The read is repeated at each request while the answer is
   another tenant's: only a restart changes the key.
 - **This covers the answers that state no tenant.** A usage page is not read, so cost sync fails, stores
   no row and moves no cursor, and a cursor kept from the engine's own tenant is not followed with the

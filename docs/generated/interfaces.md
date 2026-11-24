@@ -91,6 +91,10 @@ classDiagram
         <<interface>>
         +async holds_key(allocation_id, api_key_id) bool
     }
+    class ReadyBeforeCommands {
+        <<interface>>
+        +async ready_for_commands() None
+    }
     class UsageSource {
         <<interface>>
         +async page(cursor, limit) UsagePage
@@ -208,6 +212,7 @@ classDiagram
     AllocationManager <|.. ClearinghouseAllocations
     AllocationsByActor <|.. ClearinghouseAllocations
     OneKeyPerAllocation <|.. ClearinghouseAllocations
+    ReadyBeforeCommands <|.. ClearinghouseAllocations
     UsageSource <|.. BatteriesUsageSource
     UsageSource <|.. ClearinghouseUsage
     TenantUsageSource <|.. BatteriesUsageSource
@@ -249,6 +254,7 @@ classDiagram
 | `AllocationManager` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
 | `AllocationsByActor` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
 | `OneKeyPerAllocation` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
+| `ReadyBeforeCommands` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `ClearinghouseUsage` | `livepeer_builder.adapters.clearinghouse` |
 | `TenantUsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |

@@ -20,7 +20,11 @@ goes through ``TenantWire``, which holds the engine to one tenant:
   of it is sent. This is what keeps an answer that states no tenant, a usage page or the runner list,
   from being another tenant's. A read that fails says nothing about the key: its error is the caller's,
   and the next request asks again. A process asks once more only until one read has answered: the key
-  of a process does not change.
+  of a process does not change. A command on the operation ledger does not wait for its first request
+  to ask: the payments service awaits ``ready_for_commands`` of the allocation manager before it begins
+  the command's record (``ReadyBeforeCommands``), which is ``confirm``, so the read spends none of the
+  ledger's budget, which is sized for the command's own calls. Asked through the port alone, the
+  adapters still confirm before their first request, as every read does.
 - **Every answer that states a tenant is read** (``tenant_id``: an allocation, a grant). Another tenant
   is never a success. After a read nothing was applied, and it is the same refusal. After a command the
   clearinghouse has applied it at the other tenant: a ``ProviderError`` with the answer's 2xx, which is

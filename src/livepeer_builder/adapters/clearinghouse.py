@@ -2,8 +2,7 @@
 
 An enterprise's engine keeps its own jobs and records and reaches the clearinghouse for payments only.
 Three of its five payment ports are here, each calling the tenant's own routes at the clearinghouse with
-the tenant admin key. Those routes name no tenant, so every request goes through ``TenantWire``
-(``adapters/clearinghouse_tenant.py``): nothing is sent for another tenant, or with another tenant's key.
+the tenant admin key, through ``TenantWire``, which sends nothing for or with the key of another tenant:
 
 - ``ClearinghouseAllocations`` is the ``AllocationManager``. The port names an allocation by its id and
   the routes name an actor, so the manager is asked for the one actor a command is about
@@ -78,13 +77,16 @@ class ClearinghouseAllocations:
         ``operation_ref`` when it has one."""
         return _ActorAllocation(self._wire, self._actors, self._secrets, tenant_id, actor_id, operation_ref)
 
+    async def ready_for_commands(self) -> None:
+        """``ReadyBeforeCommands``: whose key the engine holds, read before a command's record begins."""
+        await self._wire.confirm()
+
     # -- the grant ----------------------------------------------------------------------------------
     # Every member below but ``read_grant`` is async by protocol and awaits nothing: it refuses, or has
     # nothing to do, before anything is sent. Each says so to SonarQube, as the provider fakes do.
 
     async def read_grant(self, grant_id: str) -> TenantGrant:
-        """The tenant's grant. Another tenant's is refused (403) and never asked for, and so is the
-        grant of another tenant than this one that the key turns out to belong to."""
+        """The tenant's grant. Another tenant's is refused (403), asked for or answered by the key."""
         own_tenant(self._wire, grant_id)
         return await self._wire.grant()
 
@@ -407,9 +409,8 @@ class ClearinghouseUsage:
 
 @dataclass(frozen=True)
 class ClearinghousePorts:
-    """The three remote adapters over one wire. ``allocations`` is also the engine's grants manager: it
-    reads the tenant's grant and refuses the rest. ``tenant`` is the wire as all three use it, held to
-    the engine's tenant: whoever else sends the tenant admin key asks it whose key that is first."""
+    """The three remote adapters over one wire, ``tenant``, which whoever else sends the tenant admin key
+    asks whose key it is. ``allocations`` is the grants manager too: it reads the grant, and no more."""
 
     allocations: ClearinghouseAllocations
     allowances: ClearinghouseAllowances

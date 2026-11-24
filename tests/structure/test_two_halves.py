@@ -132,6 +132,9 @@ PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceR
 # OneKeyPerAllocation is how an allocation manager says its provider keeps one key for an allocation and
 # hands it over once (#168): the rotation step, in the clearinghouse half, asks it which key an allocation
 # takes. It is asked of the manager PaymentsService already holds, and reaches nothing new.
+# ReadyBeforeCommands is how an allocation manager learns something of its provider before a command's
+# record is begun (#165): at a clearinghouse, whose tenant admin key the engine holds. PaymentsService
+# awaits it on the manager it already holds, and it reaches nothing new.
 BEHIND_THE_PORTS = {
     "SecretStore",
     "WritableSecretStore",
@@ -140,6 +143,7 @@ BEHIND_THE_PORTS = {
     "ActorCommandRepo",
     "AllocationsByActor",
     "OneKeyPerAllocation",
+    "ReadyBeforeCommands",
     "TenantUsageSource",
     "EscrowSource",
     "SignerProbe",

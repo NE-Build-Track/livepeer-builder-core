@@ -15,7 +15,7 @@ livepeer/clearinghouse-batteries, whose own binary and config keys say `clearing
 | `signer` | livepeer/node `eee09c4` remote signer (v1.0.7), in the `batteries` network namespace. It signs with the wallet's key, and asks Batteries' authorization webhook before every payment | Enterprise engines, through `signer-relay`. The engine, at `http://batteries:8937`, for the wallet report only. Its metrics and readiness port (`8938`) is on loopback |
 | `signer-relay` | `alpine/socat`, named by its digest: a TCP relay of the signer's port `8937`, and of nothing else. It runs as an unprivileged user with a read-only file system | The host, at `127.0.0.1:8137`. An enterprise project, at `http://signer:8937` on the network `lpb-clearinghouse-edge` |
 | `discovery` | livepeer/node's `livepeer-discovery` from that commit, static mode: the orchestrators in `config/discovery.toml`. The engine publishes what it reads as the clearinghouse's runner list | The engine only. Published nowhere |
-| `private` | A curl in the engine's network namespace, for the private listener. Not started by `up` | `docker compose run --rm private ...` |
+| `private` | A curl in the engine's network namespace, for the private listener. Not started by `up` | `docker compose run --rm --no-deps private ...` |
 
 Upstream sources are built from the pinned commits
 ([upstream-baseline](../../docs/references/upstream-baseline.md)), so the first build takes a while.
@@ -81,7 +81,8 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8137/sign-orchestrator
 
 ```sh
 docker compose exec -T engine lpb bootstrap-admin          # the clearinghouse admin's key, shown once
-private() { docker compose --progress quiet run --rm -T private "$@"; }   # curl on the private listener
+# curl on the private listener. --no-deps: it never starts or recreates the engine it is run beside
+private() { docker compose --progress quiet run --rm --no-deps -T private "$@"; }
 private -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8081/v1/clearinghouse/wallet
 private -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
   -d '{"name":"Acme","amount":{"amount":"5","currency":"USD"},"operation_ref":"onboard-acme"}' \

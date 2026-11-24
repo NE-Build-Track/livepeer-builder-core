@@ -68,7 +68,7 @@ copy from, not a service: see [Limits](#limits).
 - **The private listener is on the clearinghouse engine's own loopback.** No network reaches it, the
   enterprise project included. The clearinghouse admin reaches it with the `private` service, a curl
   that runs in the engine's network namespace:
-  `docker compose run --rm private http://127.0.0.1:8081/readyz`.
+  `docker compose run --rm --no-deps private http://127.0.0.1:8081/readyz`.
 - **The wallet report reads the signer inside the project.** The clearinghouse engine's
   `LPB_SIGNER_URL` is `http://batteries:8937`, and `signer.ready` in the wallet report says the signer
   answers there. It does not say the published address works: the enterprise's
@@ -117,10 +117,12 @@ published signer itself:
 - **(b)** the same for a live job;
 - **(c)** an engine in its `both` role still runs a paid job by itself.
 
-Proofs (a) and (b) were run on 19 November 2026 on a design that was withdrawn the same day, in which
-the clearinghouse's engine signed for the enterprise's. They are to be run again from this runbook.
-Proof (c) did not use that path and stands as it was run. What stands and what does not is at the top of
-[the evidence](../docs/references/evidence/2026-11-19-payment-clearinghouse-proofs.md).
+Proofs (a) and (b) were run from this runbook on 23 November 2026:
+[the evidence](../docs/references/evidence/2026-11-23-payment-clearinghouse-proofs.md). An earlier run,
+on 19 November, used a design that was withdrawn the same day, in which the clearinghouse's engine
+signed for the enterprise's. Proof (c) did not use that path and stands as it was run then. What of that
+run stands is at the top of
+[its record](../docs/references/evidence/2026-11-19-payment-clearinghouse-proofs.md).
 
 **Money.** Only a job moves money: each paid job sends the orchestrator payment tickets from the
 wallet's deposit, for the price the runner asked. A grant and an allocation are entries in Batteries'
@@ -166,7 +168,8 @@ CS=$D/clearinghouse/secrets ES=$D/enterprise/secrets
 PUBLIC=http://127.0.0.1:8180 SIGNER=http://127.0.0.1:8137 WORK=http://127.0.0.1:8280
 TENANTS=/v1/clearinghouse/tenants
 
-private() { ch --progress quiet run --rm -T private "$@"; }         # curl on the private listener
+# curl on the private listener. --no-deps: it never starts or recreates the engine it is run beside
+private() { ch --progress quiet run --rm --no-deps -T private "$@"; }
 admin()   { private -H "Authorization: Bearer $(cat $CS/admin-key)" "$@"; }       # the clearinghouse admin
 tenant()  { curl -sS -H "Authorization: Bearer $(cat $CS/tenant-$1-key)" "${@:2}"; }   # tenant one|two ...
 actor()   { curl -sS -H "Authorization: Bearer $(cat $ES/$1-key)" "${@:2}"; }     # actor alice|carol ...

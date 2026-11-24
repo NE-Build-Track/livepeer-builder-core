@@ -14,7 +14,9 @@ import logging
 import httpx
 from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError
 from livepeer_gateway.remote_signer import get_signer_info
+from pydantic import SecretStr
 
+from livepeer_builder.adapters.clean_errors import bare, raised
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_address import runner_address
 from livepeer_builder.adapters.runner_call import (
@@ -29,6 +31,7 @@ from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.protocols import OnSigned
 
 _LOG = logging.getLogger(__name__)
+_JSON = "application/json"  # what the discovery reader asks for, and a runner's default content type
 # The SDK's identity call without its cache, which remembers a signer for the life of the process: a
 # probe has to ask the signer, not the memory of one (tests/unit/test_signer_probe.py).
 _ask_signer_identity = get_signer_info.__wrapped__
@@ -46,12 +49,19 @@ def memory_discovery_client(body: bytes) -> httpx.AsyncClient:
 
 class HttpDiscoverySource:
     """Reads ``GET LPB_DISCOVERY_URL`` as livepeer/node's ``/discovery`` contract (D63). Sends no
-    credentials; the signer is not involved in discovery (#45).
+    credentials; the signer is not involved in discovery (#45). The one exception is ``bearer``: the
+    tenant admin key of an engine whose discovery address is its clearinghouse's runner list, which needs
+    one (D87, #168). It goes to the discovery address only, since no redirect is followed.
 
     The whole request, body included, gets ``timeout_s`` (5 s). ``DiscoveryService`` refreshes serially,
     so a slow source would otherwise freeze the snapshot. A redirect is not followed, even by an injected
     client; it fails the refresh. A 2xx whose content encoding does not decode is a ``ValueError``, as
     a body that is not JSON is. There is no size cap (D63).
+
+    A read that carried ``bearer`` fails with an error that leads to no key (#168 review): the kind and
+    the words the reader always raised, as a new error that holds no request, chains none that does,
+    and was never in a frame that held one (``_read``). Without ``bearer`` nothing is held back, and the
+    HTTP client's own error is raised as before.
     """
 
     def __init__(
@@ -60,8 +70,10 @@ class HttpDiscoverySource:
         *,
         client: httpx.AsyncClient | None = None,
         timeout_s: float = 5.0,
+        bearer: str | None = None,
     ) -> None:
         self._discovery_url = discovery_url
+        self._bearer = SecretStr(bearer) if bearer else None  # never a plain attribute, never in a repr
         self._client = client or httpx.AsyncClient(
             timeout=timeout_s
         )  # one per source: polls reuse its connection
@@ -80,19 +92,31 @@ class HttpDiscoverySource:
         return self._document
 
     async def fetch(self) -> tuple[Runner, ...]:
-        try:
-            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
-            async with asyncio.timeout(self._timeout_s):
-                body = await self._body(self._client)
-        except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
-            message = f"no inventory from {self._discovery_url} within {self._timeout_s:g}s"
-            raise TimeoutError(message) from error
+        body = raised(await self._read())
         runners = read_inventory(body)
         self._document = body  # kept only once it read: the document the snapshot is built from
         return runners
 
+    async def _read(self) -> bytes | Exception:
+        """The document as it was served, or the error the read came to. The error is returned, for
+        ``raised``, and never raised from here: this frame's callee holds the request, whose headers
+        carry ``bearer``, and the HTTP client's own errors hold it too."""
+        try:
+            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
+            async with asyncio.timeout(self._timeout_s):
+                return await self._body(self._client)
+        except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
+            slow = TimeoutError(f"no inventory from {self._discovery_url} within {self._timeout_s:g}s")
+            slow.__cause__ = error if self._bearer is None else bare(error)
+            return slow
+        except Exception as error:
+            return error if self._bearer is None else _without_the_request(error)
+
     async def _body(self, client: httpx.AsyncClient) -> bytes:
-        request = client.build_request("GET", self._discovery_url, headers={"Accept": "application/json"})
+        headers = {"Accept": _JSON}
+        if self._bearer is not None:
+            headers["Authorization"] = f"Bearer {self._bearer.get_secret_value()}"
+        request = client.build_request("GET", self._discovery_url, headers=headers)
         response = await client.send(request, stream=True, follow_redirects=False)
         async with contextlib.aclosing(response):
             response.raise_for_status()  # the status decides first: an error's body is not read
@@ -101,6 +125,21 @@ class HttpDiscoverySource:
             except httpx.DecodingError as error:  # httpx's is no ValueError; an unreadable 2xx is one (C7)
                 message = f"the inventory from {self._discovery_url} did not decode: {error}"
                 raise ValueError(message) from error
+
+
+def _without_the_request(error: Exception) -> Exception:
+    """The error of a read that carried a credential, as a new error of the same kind and words that
+    holds no request. An error status keeps its status and the address it was asked at, on an answer and
+    a request made here, with no header of the ones that were sent and no body. What the error chained
+    is kept by its kind alone."""
+    if isinstance(error, httpx.HTTPStatusError):
+        asked = httpx.Request(error.request.method, error.request.url)
+        answered = httpx.Response(error.response.status_code, request=asked)
+        return httpx.HTTPStatusError(str(error), request=asked, response=answered)
+    fresh = bare(error)
+    if error.__cause__ is not None:
+        fresh.__cause__ = bare(error.__cause__)
+    return fresh
 
 
 class SdkRunnerTransport:
@@ -157,7 +196,7 @@ class SdkRunnerTransport:
             body=request.raw_body
             if request.raw_body is not None
             else json.dumps({} if request.payload is None else request.payload).encode(),
-            content_type=request.content_type or "application/json",
+            content_type=request.content_type or _JSON,
             headers=request.headers,
             return_http_errors=request.return_http_errors,
             app=runner.app,
@@ -182,7 +221,7 @@ class SdkRunnerTransport:
         return RunnerReply(
             status_code=status,
             content=body,
-            content_type=content_type or "application/json",
+            content_type=content_type or _JSON,
             data=json_object(body, content_type),
             manifest_ids=events.ids,
             payment_sent=events.signed,

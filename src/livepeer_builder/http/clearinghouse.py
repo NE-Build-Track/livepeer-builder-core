@@ -36,6 +36,7 @@ from livepeer_builder.contracts import (
     AccessKey,
     ActorAllocation,
     ActorContext,
+    AllocationRead,
     AllocationStatus,
     AllotRequest,
     IssuedKey,
@@ -199,8 +200,11 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi, *, deliver_alloc
         )
 
     @app.get(ALLOCATION)
-    async def get_actor(actor: Actor, tenant_id: PathId, actor_id: PathId) -> ActorAllocation:
-        return await engine.payments.get_actor(actor, tenant_id, actor_id)
+    async def get_actor(actor: Actor, tenant_id: PathId, actor_id: PathId) -> AllocationRead:
+        """The actor's allocation: its record, and as `allowance` what the payment provider reports for
+        it now (allotted, spent, available, status). `allowance` is `null` when the provider could not
+        be read."""
+        return await engine.payments.get_allocation(actor, tenant_id, actor_id)
 
     @app.post(
         ALLOCATION,

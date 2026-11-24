@@ -112,6 +112,9 @@ async def _serve_one_listener(server: "uvicorn.Server") -> None:
         raise asked
 
 
+_STARTUP_FAILURE = 3  # uvicorn's exit status for a server that cannot start: an address, or its app
+
+
 async def _run(server: "uvicorn.Server", sockets: list[socket.socket] | None = None) -> SystemExit | None:
     """Run one server in a task, to its end. The exit uvicorn asks for when a server cannot start is
     returned: raised inside a task, it would end the event loop where it stands, so the caller raises
@@ -120,7 +123,8 @@ async def _run(server: "uvicorn.Server", sockets: list[socket.socket] | None = N
         await (server.serve() if sockets is None else server.serve(sockets=sockets))
     except SystemExit as asked:  # NOSONAR - returned for the caller to raise, once the servers have ended
         return asked
-    return None
+    # uvicorn before 0.50 returns from a start that failed, where later ones exit: never a server that served.
+    return None if server.started else SystemExit(_STARTUP_FAILURE)
 
 
 def _app(
@@ -185,12 +189,34 @@ def _listener_server(app: FastAPI, host: str, port: int) -> "uvicorn.Server":
 
 @contextlib.contextmanager
 def _bound(servers: Sequence["uvicorn.Server"]) -> Iterator[list[socket.socket]]:
-    """Both listeners' sockets, bound before anything is served, and closed on the way out. uvicorn
-    binds each as it does for one listener: an address that is taken is logged, and the process exits
-    with uvicorn's status for a failed start. The socket bound before it is closed, so no listener is
-    left half up."""
+    """Both listeners' sockets, bound and listening before the engine starts, and closed on the way out.
+    uvicorn binds each as it does for one listener: an address that is taken is logged, and the process
+    exits with uvicorn's status for it. The socket opened before it is closed, so no listener is left
+    half up. A caller that connects while the engine starts waits for it."""
     with contextlib.ExitStack() as opened:
-        yield [opened.enter_context(contextlib.closing(server.config.bind_socket())) for server in servers]
+        yield [opened.enter_context(contextlib.closing(_listening(server))) for server in servers]
+
+
+def _listening(server: "uvicorn.Server") -> socket.socket:
+    """One listener's socket, bound and listening. Binding alone does not claim an address: uvicorn sets
+    ``SO_REUSEADDR``, and with it Linux lets a wildcard address and a specific one bind the same port,
+    and refuses the second only when it listens. Left to uvicorn, that refusal came after the engine had
+    started and recovered interrupted work."""
+    sock = server.config.bind_socket()
+    try:
+        sock.listen(server.config.backlog)
+    except OSError as error:
+        sock.close()
+        _LOG.error(  # as uvicorn logs an address it cannot bind: one line, no traceback
+            "a listener's address cannot be used",
+            extra={
+                "event": "http.listener_not_bound",
+                "address": f"{server.config.host}:{server.config.port}",
+                "error": str(error),
+            },
+        )
+        raise SystemExit(_STARTUP_FAILURE) from error
+    return sock
 
 
 async def _serve_together(servers: Sequence["uvicorn.Server"], sockets: Sequence[socket.socket]) -> None:

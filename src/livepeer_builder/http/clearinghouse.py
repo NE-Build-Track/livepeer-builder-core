@@ -47,6 +47,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Query, Response
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter, ValidationError
 
 from livepeer_builder.api import ClearinghouseApi
 from livepeer_builder.contracts import (
@@ -66,6 +67,7 @@ from livepeer_builder.contracts import (
     UsagePage,
     WalletReport,
 )
+from livepeer_builder.contracts.common import GrantId
 from livepeer_builder.errors import AccessDenied
 from livepeer_builder.http.auth import actor_dependency
 from livepeer_builder.http.bodies import (
@@ -94,6 +96,7 @@ ALLOCATION = ACTORS + "/{actor_id}/allocation"
 KEYS = "/keys"
 KEY = KEYS + "/{key_id}"
 TENANT_KINDS: frozenset[CredentialKind] = frozenset({"tenant_admin", "auditor"})
+_GRANT_ID = TypeAdapter(GrantId)
 
 
 @dataclass(frozen=True)
@@ -222,7 +225,23 @@ def mount_tenant_routes(app: FastAPI, engine: ClearinghouseApi, *, deliver_alloc
             )
         return TenantScope(actor, actor.tenant_id)
 
-    _mount_tenant_scoped(app, engine, CLEARINGHOUSE, own_tenant, own_tenant, deliver_allocation_keys)
+    # A tenant whose grant the route reads: its id goes into the payment provider's URL path. A path that
+    # names the tenant reads it as a grant id (422). A key may carry a tenant id that is none, so the
+    # credential's is held to the same rule here, before the provider is asked (#185 review).
+    def own_grant_tenant(actor: Actor) -> TenantScope:
+        scope = own_tenant(actor)
+        try:
+            is_a_grant_id = _GRANT_ID.validate_python(scope.tenant_id) == scope.tenant_id
+        except ValidationError:
+            is_a_grant_id = False
+        if not is_a_grant_id:
+            raise AccessDenied(
+                "this credential's tenant id is no grant's id, so it names no tenant of this "
+                "clearinghouse: a tenant's id is its grant's id, one path segment with no space around it"
+            )
+        return scope
+
+    _mount_tenant_scoped(app, engine, CLEARINGHOUSE, own_tenant, own_grant_tenant, deliver_allocation_keys)
 
 
 def mount_named_tenant_routes(

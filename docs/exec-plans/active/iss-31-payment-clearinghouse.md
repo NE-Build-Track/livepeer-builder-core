@@ -14,8 +14,9 @@
 - **Progress:** P1 to P5 are merged into `releases/m4`. P6, P7 and P8 are built and in review. The paid
   proofs of P8 were run on 19 November 2026 on the signer proxy, which was withdrawn that day:
   [the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md) says which still
-  stand. The proofs through a clearinghouse are to be run again, on the direct-signer path, from the
-  runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook).
+  stand. The proofs through a clearinghouse were run again on 23 November 2026, on the direct-signer
+  path, from the runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook):
+  [the evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md).
 
 ## Goal
 
@@ -210,3 +211,12 @@ Each pull request ticks its own line here in the same change.
   clearinghouse ran on the withdrawn signer proxy and are to be run again from the rewritten runbook;
   the proof of the `both` role stands. Source: #169 as amended on 19 November 2026, D84 point 2, D85
   point 1 and D87 point 1.
+- **23 November 2026, P8, the paid proofs.** Proofs (a) and (b) were run again from the runbook, on the
+  direct-signer path, from new volumes: an allotment from the enterprise's engine left the key in its
+  store and none at the clearinghouse; a fixed-price payment and three jobs priced by the second were
+  signed at the published signer and accounted to tenant one alone; an actor with an empty allocation
+  was refused by the signer with nothing signed. $0.001228 was charged. The run found that the
+  runbook's helper for the private listener recreated the clearinghouse's engine once the enterprise
+  project had rebuilt the shared image; the helper now runs with `--no-deps`. A fixed-price job that
+  succeeds is still not shown, and the proof of the `both` role was not run again.
+  [The evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md).

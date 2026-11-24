@@ -14,10 +14,13 @@
 - **Progress:** P1 to P5 are merged into `releases/m4`. P6, P7 and P8 are built and in review. The paid
   proofs of P8 were run on 19 November 2026 on the signer proxy, which was withdrawn that day:
   [the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md) says which still
-  stand. The proofs through a clearinghouse are to be run again, on the direct-signer path, from the
-  runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook). The amendment of D87 point 3
-  of 19 November (a tenant's routes from the credential) is built and in review
-  ([#185](https://github.com/NE-Build-Track/livepeer-builder-core/pull/185)), on top of P8.
+  stand. The proofs through a clearinghouse were run again on 23 November 2026, on the direct-signer
+  path, from the runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook):
+  [the evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md). The amendment
+  of D87 point 3 of 19 November (a tenant's routes from the credential) is built and in review
+  ([#185](https://github.com/NE-Build-Track/livepeer-builder-core/pull/185)), on top of P8. Those proofs
+  ran before it, on the paths that name a tenant: the runbook's commands are rewritten for the two
+  forms of a tenant's routes and have not been run in that form.
 
 ## Goal
 
@@ -232,6 +235,15 @@ Each pull request ticks its own line here in the same change.
   clearinghouse ran on the withdrawn signer proxy and are to be run again from the rewritten runbook;
   the proof of the `both` role stands. Source: #169 as amended on 19 November 2026, D84 point 2, D85
   point 1 and D87 point 1.
+- **23 November 2026, P8, the paid proofs.** Proofs (a) and (b) were run again from the runbook, on the
+  direct-signer path, from new volumes: an allotment from the enterprise's engine left the key in its
+  store and none at the clearinghouse; a fixed-price image job, a refused fixed-price job and three jobs
+  priced by the second were signed at the published signer and accounted to tenant one alone; an actor
+  with an empty allocation was refused by the signer with nothing signed. $0.021248 was charged. The run found that the
+  runbook's helper for the private listener recreated the clearinghouse's engine once the enterprise
+  project had rebuilt the shared image; the helper now runs with `--no-deps`. The proof of the `both`
+  role was not run again.
+  [The evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md).
 - **23 November 2026, a tenant's routes from the credential, carried forward.** The direct-signer
   design and the roles are merged into this change's branch, and the two forms of a tenant's routes
   follow them. An allotment and a rotation hand the allocation's key over in both forms on an engine in
@@ -258,3 +270,10 @@ Each pull request ticks its own line here in the same change.
   its clearinghouse unreachable. `lpb payments check` fails the grant probe and the usage probe for
   such a key. The stale-window rule is unchanged: the one read more comes before a command's own calls.
   Source: the review of #185; the choices are for Mike's review.
+- **23 November 2026, a tenant's routes from the credential, the runbook.** The paid proofs of 23
+  November were run on P8's branch, where a tenant's admin called the paths that name its tenant on the
+  public listener, and the evidence records those paths. Here every command of the runbook uses the
+  form its listener serves: a tenant's own routes on the public listener, and the paths that name a
+  tenant on the private one, with `--no-deps` on the private listener's curl as before. The rewritten
+  commands follow the routes the unit tests pin and have not been run against a stack. Whether the
+  proofs are run once more on these paths is for Mike.

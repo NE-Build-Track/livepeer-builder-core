@@ -33,6 +33,7 @@ goes through ``TenantWire``, which holds the engine to one tenant:
   answer: it is in no error, no log line and no store.
 """
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any
 
@@ -75,6 +76,9 @@ class TenantWire:
     def __init__(self, wire: ClearinghouseWire) -> None:
         self._wire = wire
         self._confirmed = False
+        self._asking = asyncio.Lock()  # one read of the key's grant at a time
+        self._asked = 0  # how many such reads have ended
+        self._refused: Exception | None = None  # what the last one failed with
 
     @classmethod
     def over(cls, wire: "ClearinghouseWire | TenantWire") -> "TenantWire":
@@ -88,28 +92,52 @@ class TenantWire:
 
     async def confirm(self) -> None:
         """Know that the key is this tenant's, or refuse (403). The key's grant is read until one read
-        has answered for this tenant, and never after."""
-        if not self._confirmed:
+        has answered for this tenant, and not again while every answer agrees with it.
+
+        Requests that arrive together share one read (#185 review): each read has the clearinghouse read
+        the grant's balances, and a read for each request of a cold start made them time out. Those that
+        waited for a read that failed fail with it, and the next request reads again."""
+        if self._confirmed:
+            return
+        asked = self._asked
+        async with self._asking:
+            if self._confirmed:
+                return
+            if self._asked != asked and self._refused is not None:  # the read this one waited for
+                raise self._refused
             await self.grant()
 
     async def grant(self) -> TenantGrant:
         """The grant of the key's tenant, which must be this tenant: the read that says whose key it is."""
-        grant = raised(_of(self.tenant_id, await self._wire.read_as(TenantGrant, GRANT_PATH), None))
-        self._confirmed = True
+        try:
+            grant = self._held(await self._wire.read_as(TenantGrant, GRANT_PATH), None)
+        except Exception as error:
+            self._asked, self._refused = self._asked + 1, error
+            raise
+        self._asked, self._refused, self._confirmed = self._asked + 1, None, True
         return grant
 
     async def read_as[T: BaseModel](
         self, model: type[T], path: str, params: Mapping[str, str] | None = None
     ) -> T:
         await self.confirm()
-        return raised(_of(self.tenant_id, await self._wire.read_as(model, path, params), None))
+        return self._held(await self._wire.read_as(model, path, params), None)
 
     async def write_as[T: BaseModel](
         self, model: type[T], path: str, body: Mapping[str, Any] | None = None
     ) -> T:
         await self.confirm()
         command = path.rpartition(_ALLOCATION)[2]
-        return raised(_of(self.tenant_id, await self._wire.write_as(model, path, body), command))
+        return self._held(await self._wire.write_as(model, path, body), command)
+
+    def _held[T: BaseModel](self, answer: T, command: str | None) -> T:
+        """``answer``, held to this tenant. One that states another ends what was known of the key: the
+        clearinghouse said it was this tenant's and now answers for another, and an answer that states no
+        tenant, a usage page or the runner list, must not be taken on the earlier word (#185 review)."""
+        checked = _of(self.tenant_id, answer, command)
+        if isinstance(checked, ProviderError):
+            self._confirmed = False
+        return raised(checked)
 
 
 def own_tenant(wire: TenantWire, tenant_id: str) -> None:

@@ -8,10 +8,9 @@ store holds wei; the management API serves each amount as ``..._eth``, a decimal
 ``confirmed_through_block`` as a decimal string too (``internal/app/presentation.go``).
 """
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from livepeer_builder.adapters.batteries_usage_rows import decimal_or_none
 from livepeer_builder.contracts import EscrowAccount, Money
 from livepeer_builder.errors import ProviderError
 
@@ -43,12 +42,20 @@ def _text(item: dict[str, Any], key: str) -> str:
     return value
 
 
+def _decimal(text: str) -> Decimal | None:
+    """A decimal string as a ``Decimal``, or ``None`` for one that is no number (``""``, ``[error]``)."""
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        return None
+
+
 def _eth(item: dict[str, Any], key: str) -> Decimal:
     """A decimal string of ETH. A number, ``""`` and ``[error]`` (what Batteries serves for an amount it
     could not convert) are not amounts, and neither is one below zero: a deposit or a reserve is never
     negative, so the report says nothing the engine can pass on as a balance."""
     value = item.get(key)
-    amount = decimal_or_none(value) if isinstance(value, str) else None
+    amount = _decimal(value) if isinstance(value, str) else None
     if amount is None or not amount.is_finite() or amount < 0:
         raise ProviderError(200, f"Batteries answered an escrow account with no usable {key}")
     return amount

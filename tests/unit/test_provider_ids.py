@@ -20,7 +20,7 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from livepeer_builder.adapters.batteries import BatteriesClient
-from livepeer_builder.contracts import AllotRequest, Money, TopUpRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, Money, TopUpRequest
 from livepeer_builder.contracts.common import GrantId
 from livepeer_builder.http import create_app
 from livepeer_builder.http.bodies import AllotBody
@@ -135,6 +135,37 @@ async def test_rest_refuses_such_a_tenant_id_with_422_before_the_ledger_and_the_
         retried = await client.request(method, TENANT.format("grant_1") + route, json=body, headers=admin)
         assert retried.status_code == accepted, (route, retried.text)
         assert "Idempotent-Replayed" not in retried.headers
+
+
+@pytest.mark.parametrize("tenant_id", ["..", ".", "a/b", "a?b", "a#b", "100%", "a\\b", "a\nb"])
+@pytest.mark.parametrize("route", ["/grant", "/usage"])
+async def test_a_credential_whose_tenant_is_no_grant_id_reaches_no_provider_path(
+    make_engine: EngineFactory, manager: FakeAllocationManager, tenant_id: str, route: str
+) -> None:
+    """A tenant's own routes take the tenant from the credential (#165), and a key may carry a tenant id
+    a grant id may not: the routes that name the tenant read it as a grant id, and these read it as it
+    was. Such a key is refused (403) before the provider is asked (John, #185 review)."""
+    manager.add_grant("grant_1")
+    engine = await make_engine()
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
+    assert engine.keys is not None
+    key = await engine.keys.issue(
+        operator, kind="tenant_admin", actor_id="desk", tenant_id=tenant_id, operation_ref="key-desk"
+    )
+    good = await engine.keys.issue(
+        operator, kind="tenant_admin", actor_id="desk", tenant_id="grant_1", operation_ref="key-good"
+    )
+    app = create_app(engine, manage_lifecycle=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
+        calls = list(manager.calls)
+        refused = await client.get(
+            "/v1/clearinghouse" + route, headers={"Authorization": f"Bearer {key.token}"}
+        )
+        assert refused.status_code == 403, refused.text
+        assert "is no grant's id" in refused.json()["error"]
+        assert manager.calls == calls  # nothing was asked of the provider
+        taken = await client.get("/v1/clearinghouse/grant", headers={"Authorization": f"Bearer {good.token}"})
+        assert taken.status_code == 200, taken.text
 
 
 async def test_rest_uses_a_padded_tenant_id_without_its_padding(

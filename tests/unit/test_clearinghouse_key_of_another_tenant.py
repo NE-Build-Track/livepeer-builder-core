@@ -17,6 +17,7 @@ has an actor ``alice``. The engine allotted its own alice while its key was righ
 again with the other tenant's key.
 """
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable
 from datetime import UTC, datetime
@@ -385,6 +386,87 @@ async def test_a_read_answered_for_another_tenant_is_refused_and_nothing_is_sent
     assert error.status_code == 403 and definite_refusal(error) and SAYS in error.message
     assert ports.sent("POST") == [] and at_the_provider(ports) == before.provider
     assert await ports.engine.store.list_actors(ports.tenant_id) == [before.mine]
+
+
+async def test_an_answer_for_another_tenant_ends_what_the_engine_knew_of_its_key(
+    ports: Ports,
+) -> None:
+    """The clearinghouse said the key was this tenant's, and then answered a read for another. What the
+    engine knew of its key is gone with that answer: it asks again before anything else. It kept the
+    first answer for the life of the process, so the next usage page, which states no tenant, was asked
+    for and taken as this tenant's (John, #185 review)."""
+    assert ports.transport is not None
+    await given_another_tenants_key(ports)
+    ports.transport.grant_says = ports.tenant_id  # the clearinghouse says the key is this tenant's
+    top_up = TopUpRequest(amount=usd(3), operation_ref="t-1")
+    await refused(ports.engine.payments.top_up(ports.admin, ports.tenant_id, "alice", top_up))
+    ports.transport.grant_says = None  # and now says whose it is
+    ports.requests.clear()
+
+    error = await refused(ports.usage.page(None))
+
+    assert error.status_code == 403 and SAYS in error.message
+    assert ports.sent("GET") == [GRANT]  # the grant was read again, and the page was not asked for
+
+
+async def test_the_first_requests_of_a_process_share_one_read_of_the_keys_grant() -> None:
+    """Requests that arrive together before the key's grant has been read wait for one read of it. Each
+    started a read of its own, and each of those has the clearinghouse read its balances: a burst at a
+    cold start made healthy requests time out (John, #185 review)."""
+    async with open_ports("remote") as ports:
+        assert ports.transport is not None
+        ports.started_again_with(ports.token)
+        ports.requests.clear()
+        ports.transport.takes = lambda request: 0.05 if request.url.path == GRANT else 0
+
+        pages = await asyncio.gather(*(ports.usage.page(None) for _ in range(5)))
+
+        assert len(pages) == 5
+        assert ports.sent("GET").count(GRANT) == 1
+        assert ports.sent("GET").count("/v1/clearinghouse/usage") == 5
+
+
+async def test_a_read_of_the_keys_grant_that_fails_fails_those_that_waited_and_is_made_again() -> None:
+    """The requests that waited for a read that failed fail with it, at once and without a read each. The
+    next request reads the grant again."""
+    async with open_ports("remote") as ports:
+        assert ports.transport is not None
+        ports.started_again_with(ports.token)
+        ports.requests.clear()
+        ports.transport.takes = lambda request: 0.05 if request.url.path == GRANT else 0
+        ports.lose_the_answer_to("/grant")
+
+        ended = await asyncio.gather(*(ports.usage.page(None) for _ in range(5)), return_exceptions=True)
+
+        assert [type(end) for end in ended] == [ProviderUnavailable] * 5
+        assert ports.sent("GET") == [GRANT]  # one read, and no page
+        await ports.usage.page(None)
+        assert ports.sent("GET") == [GRANT, GRANT, "/v1/clearinghouse/usage"]
+
+
+async def test_the_runner_list_s_deadline_covers_the_question_of_whose_key_it_is() -> None:
+    """Discovery gives a read five seconds. The question came before that clock started, so a slow
+    answer to it held a refresh for the clearinghouse's own timeout and then discovery's (John, #185
+    review). The deadline covers both."""
+    asked: list[str] = []
+
+    async def slow_to_say() -> None:
+        asked.append("whose key")
+        await asyncio.sleep(5)
+
+    def never(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no list is read before the key's tenant is known")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(never))
+    reader = HttpDiscoverySource(
+        RUNNER_LIST, client=client, bearer="lpk_x", confirm=slow_to_say, timeout_s=0.1
+    )
+    started = asyncio.get_running_loop().time()
+    with pytest.raises(Exception) as ended:  # noqa: PT011 - the kind is asserted below
+        await asyncio.wait_for(reader.fetch(), timeout=3)
+    assert asyncio.get_running_loop().time() - started < 1
+    assert asked == ["whose key"] and isinstance(ended.value, ProviderUnavailable | TimeoutError)
+    assert not isinstance(ended.value, asyncio.CancelledError)
 
 
 # -- lpb payments check ---------------------------------------------------------------------------------

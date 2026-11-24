@@ -21,6 +21,7 @@ on the attempt. A debit whose manifest was never signed is unattributed on the a
 """
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -61,10 +62,11 @@ from livepeer_builder.services.cost_classes import ENDED as _ENDED
 from livepeer_builder.services.cost_classes import classify as classify  # the names stay importable here
 from livepeer_builder.services.cost_classes import fees_of as fees_of
 from livepeer_builder.services.cost_window import summary_window
-from livepeer_builder.services.failure_codes import STORE_ERROR, source_failure
+from livepeer_builder.services.failure_codes import STORE_ERROR, from_source, raised_by_source, source_failure
 from livepeer_builder.services.ownership import check_owner, sees_every_actor
 from livepeer_builder.services.reconciliation import PaidAttempts, current_allocation
 from livepeer_builder.services.usage_intake import SetAsideRecorder, count_set_aside, sort_page
+from livepeer_builder.utils import CursorTrail
 
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
@@ -87,21 +89,20 @@ class CostSyncWorker:
         self._store = store
         self._aside = SetAsideRecorder(store)
         self._filters = dict(filters or {})
-        self.source_error: Exception | None = None  # what the usage source last raised: its health code
 
     async def sync_once(self) -> tuple[SyncReport, list[UsageRow]]:
         checkpoint = await self._store.cost_checkpoint()
         cursor = checkpoint.resume_cursor if checkpoint and checkpoint.filters == self._filters else None
         pages = rows_seen = set_aside = 0
         new_rows: list[UsageRow] = []
-        restarted = False
+        restarted, trail = False, CursorTrail(cursor)
         while True:
             try:
-                page = await self._page(cursor)
+                page = await self._page(cursor, trail)
             except CursorMismatch:
                 if restarted:
                     raise
-                restarted, cursor = True, None
+                restarted, cursor, trail = True, None, CursorTrail(None)
                 await self._store.apply_usage((), SyncCheckpoint(resume_cursor=None, filters=self._filters))
                 continue
             rows, aside = sort_page(page)  # a row the engine cannot read or store never stops the sync
@@ -119,14 +120,14 @@ class CostSyncWorker:
                 return report, new_rows
             cursor = page.next_cursor
 
-    async def _page(self, cursor: str | None) -> UsagePage:
+    async def _page(self, cursor: str | None, trail: CursorTrail) -> UsagePage:
         try:
             page = await self._source.page(cursor, limit=1000)
-            if page.next_cursor and page.next_cursor == cursor:  # asking again would never end
+            if page.next_cursor and trail.repeats(page.next_cursor):  # following it would never end
                 raise ProviderError(200, "the usage cursor did not advance")
             return page
         except Exception as error:
-            self.source_error = error
+            from_source(error)  # noted on the error: its health code is the source's, for this run
             raise
 
     async def _set_aside(self, rows: Sequence[SetAsideUsage]) -> int:
@@ -169,10 +170,23 @@ class CostService:
         self.set_aside_rows: int | None = None  # every usage row left out so far, as of the last sync
 
     async def sync_once(self) -> SyncReport:
+        """One sync, for the background loop and for an admin's ``sync_now`` alike. A failure is raised
+        and noted for health either way (#158): the code in ``last_error``, the text in the log (#113, C7)."""
         if self._worker is None:
             raise ProviderUnavailable("no usage source is configured")
         try:
-            report, new_rows = await self._worker.sync_once()
+            return await self._sync(self._worker)
+        except Exception as exc:
+            code: FailureCode = source_failure(exc) if raised_by_source(exc) else STORE_ERROR
+            self.last_error = code
+            _LOG.warning(
+                "cost sync failed", extra={"event": "costs.sync_failed", "code": code, "error": str(exc)}
+            )
+            raise
+
+    async def _sync(self, worker: CostSyncWorker) -> SyncReport:
+        try:
+            report, new_rows = await worker.sync_once()
         except Exception:  # the pages before the failure may have set rows aside: the table has them
             self.set_aside_rows = await count_set_aside(self._store, self.set_aside_rows)
             raise
@@ -194,16 +208,8 @@ class CostService:
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             if self._worker is not None:
-                try:
+                with contextlib.suppress(Exception):  # keep syncing: sync_once noted the failure
                     await self.sync_once()
-                except Exception as exc:  # keep syncing; health shows a code, the log the text (#113, C7)
-                    from_source = self._worker.source_error is exc
-                    code: FailureCode = source_failure(exc) if from_source else STORE_ERROR
-                    self.last_error = code
-                    _LOG.warning(
-                        "cost sync failed",
-                        extra={"event": "costs.sync_failed", "code": code, "error": str(exc)},
-                    )
             try:
                 await asyncio.wait_for(stop.wait(), timeout=self._interval_s)
             except TimeoutError:

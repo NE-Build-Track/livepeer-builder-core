@@ -6,6 +6,10 @@ from urllib.parse import unquote
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # C0, DEL and C1
 _ENCODED_SEPARATOR = re.compile(r"%(?:2f|5c)", re.IGNORECASE)  # an escaped "/" or "\"
 _SURROGATE = re.compile(r"[\ud800-\udfff]")  # in a str, always a lone one: nothing can encode it
+# What a header value may hold (RFC 9110): a tab, a space, visible ASCII and the bytes 0x80 to 0xFF, each
+# of them here as the Latin-1 character an HTTP server writes back as that byte.
+_HEADER_VALUE = re.compile(r"[\t\x20-\x7e\x80-\xff]+")
+OCTET_STREAM = "application/octet-stream"
 
 # Transport/payment credentials and framing are owned by the transport, not a job payload.
 _RESERVED = frozenset(
@@ -31,6 +35,18 @@ _RESERVED = frozenset(
         "accept-encoding",
     }
 )
+
+
+def response_content_type(value: str) -> str:
+    """A runner's content type as the engine keeps it (#113, C27): ``value`` when a response header can
+    hold it, and ``application/octet-stream`` when it cannot. The rule is one for every transport (#158).
+    The SDK transport hands in the header's bytes read as Latin-1, so a control character, which aiohttp
+    lets through, is replaced. A supplied transport hands in its own text: a character Latin-1 cannot
+    encode or a lone surrogate was a 500 when the answer was sent, after the job ran, and a line break
+    went out as written. A value that begins or ends with a space or a tab is replaced too: the server
+    cannot write that header, so the job ran and its answer was lost. Whitespace inside a value is kept."""
+    held = _HEADER_VALUE.fullmatch(value) and value == value.strip(" \t")
+    return value if held else OCTET_STREAM
 
 
 def request_headers(value: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:

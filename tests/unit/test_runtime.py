@@ -86,7 +86,6 @@ async def test_batteries_without_a_grants_token_starts_without_the_grant_desk() 
         batteries_token="t",
         secret_key=generate_secret_key(),  # per_actor with a provider needs it (#112, C2)
         log_json=False,
-        discovery_url="http://127.0.0.1:9/discovery",
     )
     async with contextlib.AsyncExitStack() as stack:
         parts = await default_parts(settings, stack)
@@ -130,7 +129,6 @@ async def test_grants_token_wires_a_separate_grants_client() -> None:
         batteries_grants_token="operator",
         secret_key=generate_secret_key(),
         log_json=False,
-        discovery_url="http://127.0.0.1:9/discovery",
     )
     async with contextlib.AsyncExitStack() as stack:
         parts = await default_parts(settings, stack)
@@ -215,9 +213,7 @@ async def test_cleanup_failures_are_logged_not_raised(
 
     # Fault injection on builder-core's own store: there is no seam for an engine-owned resource.
     monkeypatch.setattr(SqlStore, "close", fails)
-    engine = await BuilderEngine.create(
-        EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery")
-    )
+    engine = await BuilderEngine.create(EngineSettings(database_url=MEMORY, log_json=False))
     with caplog.at_level(logging.ERROR):
         await engine.stop()  # does not raise
     failures = [r for r in caplog.records if getattr(r, "event", "") == "engine.close_failed"]
@@ -247,7 +243,6 @@ async def test_a_failure_part_way_through_construction_closes_what_it_opened(
         database_url=MEMORY,
         secret_key="not-a-fernet-key",
         log_json=False,
-        discovery_url="http://127.0.0.1:9/discovery",
     )
     with pytest.raises(ValueError, match="Fernet key"):
         await BuilderEngine.create(settings)
@@ -256,7 +251,7 @@ async def test_a_failure_part_way_through_construction_closes_what_it_opened(
 
 async def test_stop_twice_is_safe_and_a_stopped_engine_cannot_restart() -> None:
     engine = await BuilderEngine.create(
-        EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery"),
+        EngineSettings(database_url=MEMORY, log_json=False),
         supply=EngineSupply(),
     )
     await engine.stop()  # before start, as CLI commands do
@@ -289,7 +284,6 @@ async def test_purge_and_revision_go_to_the_store_maintenance(clock: FixedClock)
             log_json=False,
             retention_jobs_days=30,
             retention_usage_days=7,
-            discovery_url="http://127.0.0.1:9/discovery",
         ),
         supply=EngineSupply(
             store=NotSql(),  # type: ignore[arg-type]
@@ -309,7 +303,7 @@ async def test_purge_and_revision_without_store_maintenance(clock: FixedClock) -
             return None
 
     engine = await BuilderEngine.create(
-        EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery"),
+        EngineSettings(database_url=MEMORY, log_json=False),
         supply=EngineSupply(
             store=NotSql(),  # type: ignore[arg-type]
             clock=clock,
@@ -542,7 +536,7 @@ async def test_a_failure_in_assemble_closes_what_create_opened(monkeypatch: pyte
 
     with pytest.raises(AttributeError):
         await BuilderEngine.create(
-            EngineSettings(database_url=MEMORY, log_json=False, discovery_url="http://127.0.0.1:9/discovery"),
+            EngineSettings(database_url=MEMORY, log_json=False),
             supply=QUIET,
             decorate=broken,
         )

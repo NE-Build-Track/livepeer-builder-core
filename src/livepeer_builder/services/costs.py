@@ -23,7 +23,7 @@ on the attempt. A debit whose manifest was never signed is unattributed on the a
 import asyncio
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Protocol
 from uuid import UUID
 
@@ -60,6 +60,7 @@ from livepeer_builder.protocols import (
 from livepeer_builder.services.cost_classes import ENDED as _ENDED
 from livepeer_builder.services.cost_classes import classify as classify  # the names stay importable here
 from livepeer_builder.services.cost_classes import fees_of as fees_of
+from livepeer_builder.services.cost_window import summary_window
 from livepeer_builder.services.failure_codes import STORE_ERROR, source_failure
 from livepeer_builder.services.ownership import check_owner, sees_every_actor
 from livepeer_builder.services.reconciliation import PaidAttempts, current_allocation
@@ -68,15 +69,6 @@ from livepeer_builder.services.usage_intake import SetAsideRecorder, count_set_a
 _LOG = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _FAR_FUTURE = datetime(9999, 1, 1, tzinfo=UTC)
-SUMMARY_WINDOW = timedelta(days=30)  # a summary with no start covers this long before its end
-
-
-def summary_window(now: datetime, start: datetime | None, end: datetime | None) -> tuple[datetime, datetime]:
-    """The summary's ``[start, end)``: ``end`` defaults to ``now``; ``start`` to ``SUMMARY_WINDOW`` before
-    ``end``. The window is half-open, so a job created at ``now`` itself is not in it yet."""
-    end = end or now
-    return start or end - SUMMARY_WINDOW, end
-
 
 COST_CLASSES: tuple[CostClass, ...] = ("delivered", "failed_after_payment", "uncertain", "pending")
 

@@ -299,7 +299,6 @@ async def test_readyz_is_503_before_the_first_discovery(make_engine: EngineFacto
         EngineSettings(
             database_url="sqlite+aiosqlite:///:memory:",
             log_json=False,
-            discovery_url="http://127.0.0.1:9/discovery",
         )
     )
     app = create_app(engine, manage_lifecycle=False)

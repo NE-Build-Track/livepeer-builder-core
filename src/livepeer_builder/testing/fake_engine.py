@@ -40,7 +40,8 @@ from livepeer_builder.contracts import (
     Runner,
 )
 from livepeer_builder.errors import NotFound
-from livepeer_builder.services.costs import classify, summarize, summary_window
+from livepeer_builder.services.cost_window import summary_window
+from livepeer_builder.services.costs import classify, summarize
 from livepeer_builder.services.ownership import sees_every_actor
 from livepeer_builder.testing.fake_jobs import FakeJobs, FakeStreaming
 from livepeer_builder.testing.fake_parts import FakeAllowance, FakeDiscovery

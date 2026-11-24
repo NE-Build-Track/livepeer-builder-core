@@ -64,6 +64,7 @@ WORK = {
     "services/admission.py",
     "services/async_jobs.py",  # the worker that runs queued jobs (ISS-26)
     "services/cost_classes.py",  # the cost class of each attempt, a pure function
+    "services/cost_window.py",
     "services/costs.py",
     "services/discovery.py",
     "services/dispatch.py",  # the paid call, which every way of running a job goes through (ISS-26)

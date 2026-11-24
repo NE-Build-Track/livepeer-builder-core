@@ -31,6 +31,7 @@ from datetime import datetime, timedelta
 from uuid import UUID
 
 from livepeer_builder.contracts import ActorContext, Attempt, Failure, Job, JobRequest, ResultRef, RunnerReply
+from livepeer_builder.contracts.http import response_content_type
 from livepeer_builder.errors import JobFailed, NoCapacity
 from livepeer_builder.protocols import Clock, JobRepo
 from livepeer_builder.services.admission import AdmissionLimiter
@@ -318,7 +319,7 @@ class AsyncJobWorker:
         size = len(reply.content) if reply.size_bytes is None else reply.size_bytes
         shape = ResultRef(
             storage="stored",
-            content_type=reply.content_type,
+            content_type=response_content_type(reply.content_type),  # one rule (#158)
             size_bytes=size,
             sha256=reply.sha256 or hashlib.sha256(reply.content).hexdigest(),
         )

@@ -18,6 +18,31 @@ of an engine in its `both` role, each tagged with its half. The routes of an eng
 into [../generated/openapi-clearinghouse.json](../generated/openapi-clearinghouse.json) (#169): its
 public and its private listener's routes in one document, each tagged with its listener.
 
+## Upgrading to the discovery address checked at start (#154)
+
+On 21 November 2026 the check that an engine has a discovery address moved from reading settings to
+starting the engine. Nothing changes for a deployment that sets `LPB_DISCOVERY_URL`, and an engine
+still does not start without it (D63).
+
+| What | Before | Now | What an embedder does |
+| --- | --- | --- | --- |
+| `EngineSettings.discovery_url` | `str`, required | `str \| None`, `None` when unset | Code that reads it handles `None`, or calls `settings.require_discovery_url()`, which returns the address or raises |
+| Settings without the address | `EngineSettings(...)` and `EngineSettings.from_env()` raise pydantic's `ValidationError` (`discovery_url`: field required), before any database is opened | They are read. `BuilderEngine.create` builds the engine: it opens the database, and migrates it when `LPB_AUTO_MIGRATE` is `true`. `start()` raises a `ValueError` that names `LPB_DISCOVERY_URL`, before it polls or writes anything, and stops the engine | An application that relied on reading settings to fail without the address checks `settings.discovery_url` itself, or lets `start()` refuse. One that starts its own engine calls `settings.require_discovery_url()` before `create` |
+| `EngineSettings.from_env` | Takes `defaults=` | Takes the environment only | For a value the environment leaves unset, give `from_env` a mapping with your values under the environment's: `EngineSettings.from_env({"LPB_SIGNER_URL": url, **os.environ})`. Every rule of the settings runs on them. An empty variable in the environment is unset and hides your value, where `defaults=` kept it: leave empty variables out of the mapping to keep yours. `model_copy(update=...)` runs no rule, so it is only for a value that is valid by construction |
+| `lpb serve`, `serve` and `build_app` without the address | `lpb serve` exits with code 1, `ValidationError` | They raise the `ValueError` naming the variable before the database is opened; `lpb serve` exits with code 1 | Nothing |
+| `lpb purge`, `lpb bootstrap-admin` without the address | Run, with a placeholder address they never polled | Run, with no address | Nothing |
+
+**Before you start the new release:** an application that builds its engine with
+`BuilderEngine.create` and then starts it should call `settings.require_discovery_url()` first. Without
+that call, a deployment that lost its address migrates the database to this release's revision and
+then refuses to start, and the release before it does not start on that revision
+([embedded mode](../guides/embedded-mode.md#1-construct-and-start-the-engine-once)). `lpb serve`,
+`serve` and `build_app` make the call themselves.
+
+A malformed address is refused when settings are read, as before, and an empty `LPB_DISCOVERY_URL` is
+unset, as before. An engine whose `decorate` stage replaces the discovery source still needs the
+address to start, as it did before ([discovery.md](discovery.md#what-the-engine-reads)).
+
 ## Upgrading to the M4 hardening (#112 to #115)
 
 - **An empty `operation_ref` is refused** (#113, C19). A job or session request that sends
@@ -292,8 +317,7 @@ at the clearinghouse's signer itself ([payments.md](payments.md#the-remote-adapt
 | --- | --- | --- |
 | Settings | | `LPB_CLEARINGHOUSE_URL` (a scheme, a host and an optional port, and nothing after them), `LPB_CLEARINGHOUSE_TOKEN` and `LPB_CLEARINGHOUSE_TENANT_ID`, set together or not at all, and `LPB_CLEARINGHOUSE_TIMEOUT_S` (20; `LPB_OPERATION_STALE_S` must be at least six times it). Refused at startup beside `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` or `LPB_BATTERIES_GRANTS_TOKEN` ([payments.md](payments.md#the-remote-adapters)) |
 | `LPB_SIGNER_URL` | The engine's own signer | The same setting. An engine that uses a clearinghouse sets it to the clearinghouse's published signer. Unset, the engine does not pay, as before |
-| `LPB_DISCOVERY_URL` | Required | Required unless `LPB_CLEARINGHOUSE_URL` is set: it then defaults to the clearinghouse's runner list, and the reader carries the tenant admin key there |
-| `EngineSettings.from_env(defaults=...)` | A default fills a field the environment leaves unset | The same, except that with a clearinghouse set the discovery address is its runner list before any default |
+| `LPB_DISCOVERY_URL` | Required to start | The same, and with `LPB_CLEARINGHOUSE_URL` set and no address given it is the clearinghouse's runner list, where the reader carries the tenant admin key. An address of your own, in the environment or in the mapping you give `from_env`, is kept |
 | `EngineSupply`, `EngineParts` | | `credentials` (`CredentialResolver`) and `allowances` (`AllowanceReader`). Unset, or `None`: the engine's own records, as before |
 | Optional protocols | | `AllocationsByActor` (an allocation manager): `for_actor(tenant_id, actor_id, operation_ref=None)`. `OneKeyPerAllocation` (an allocation manager whose provider keeps one key for an allocation and hands it over once): `holds_key(allocation_id, api_key_id)`. `ReadyBeforeCommands` (an allocation manager that must learn something of its provider before any command, #165): `ready_for_commands()`, awaited before a command's operation record is begun. A supplied manager without them is called as before |
 | Errors | | `ProviderOutcomeUnknown`, a `ProviderUnavailable` (503): a command left and no answer says whether it applied |

@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from livepeer_builder import cli
+from livepeer_builder import BuilderEngine, EngineSettings, cli, generate_secret_key
 from livepeer_builder.contracts import Job
 from livepeer_builder.store import SqlStore, create_engine, upgrade
 from livepeer_builder.testing import FixedClock
@@ -142,15 +142,63 @@ def test_store_only_commands_read_only_the_database_setting(
 def test_engine_commands_that_never_serve_need_no_discovery_address(
     db: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#112 C23: purge, bootstrap-admin and smoke build an engine without LPB_DISCOVERY_URL; serve, and
-    any engine an application starts from its settings, still require it."""
+    """#112 C23, #154: purge and bootstrap-admin build an engine and never start it, so they need no
+    LPB_DISCOVERY_URL and are given no address in its place. smoke starts one, at an address of its own."""
+    built: list[EngineSettings] = []
+    create = BuilderEngine.create
+
+    async def recording_create(settings: EngineSettings) -> BuilderEngine:
+        built.append(settings)
+        return await create(settings)
+
+    monkeypatch.setattr(BuilderEngine, "create", recording_create)
     monkeypatch.delenv("LPB_DISCOVERY_URL")
     assert run("bootstrap-admin") == 0
     assert run("purge") == 0
-    assert run("smoke") == 0
+    assert [settings.discovery_url for settings in built] == [None, None]
     capsys.readouterr()
-    with pytest.raises(ValidationError, match="discovery_url"):
+    assert run("smoke") == 0
+    assert built[2].discovery_url == "http://127.0.0.1:9/discovery"
+    assert output(capsys)["ok"] is True
+
+
+def test_smoke_polls_the_configured_discovery_address_when_one_is_set(
+    db: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built: list[EngineSettings] = []
+    create = BuilderEngine.create
+
+    async def recording_create(settings: EngineSettings) -> BuilderEngine:
+        built.append(settings)
+        return await create(settings)
+
+    monkeypatch.setattr(BuilderEngine, "create", recording_create)
+    monkeypatch.setenv("LPB_DISCOVERY_URL", "http://127.0.0.1:9/configured")
+    assert run("smoke") == 0
+    assert [settings.discovery_url for settings in built] == ["http://127.0.0.1:9/configured"]
+    capsys.readouterr()
+
+
+@pytest.mark.parametrize("address", [None, ""], ids=["unset", "empty"])
+def test_serve_without_the_discovery_address_fails_at_startup(
+    db: Path, monkeypatch: pytest.MonkeyPatch, address: str | None
+) -> None:
+    """D63, #154: serve starts an engine, and an engine does not start without the address. The refusal
+    names the setting, is raised before the database is opened, and no server runs. An empty variable is
+    unset. It is not pydantic's error: settings without the address are read."""
+    import uvicorn
+
+    async def never(self: uvicorn.Server) -> None:
+        pytest.fail("the server must not run without the address")
+
+    monkeypatch.setattr(uvicorn.Server, "serve", never)
+    monkeypatch.delenv("LPB_DISCOVERY_URL")
+    if address is not None:
+        monkeypatch.setenv("LPB_DISCOVERY_URL", address)
+    with pytest.raises(ValueError, match="LPB_DISCOVERY_URL is required to start the engine") as refused:
         run("serve")
+    assert not isinstance(refused.value, ValidationError)
+    assert not db.exists()
 
 
 def test_engine_commands_that_never_allot_need_no_secret_key(
@@ -170,6 +218,29 @@ def test_engine_commands_that_never_allot_need_no_secret_key(
     for command in ("smoke", "serve"):
         with pytest.raises(ValueError, match="LPB_SECRET_KEY is required with a payment provider"):
             run(command)
+
+
+def test_engine_commands_that_never_allot_use_the_secret_key_that_is_set(
+    db: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The key for this run only is a stand-in for a key that is not set, never for one that is."""
+    built: list[EngineSettings] = []
+    create = BuilderEngine.create
+
+    async def recording_create(settings: EngineSettings) -> BuilderEngine:
+        built.append(settings)
+        return await create(settings)
+
+    monkeypatch.setattr(BuilderEngine, "create", recording_create)
+    configured = generate_secret_key()
+    monkeypatch.setenv("LPB_SECRET_KEY", configured)
+    assert run("purge") == 0
+    monkeypatch.delenv("LPB_SECRET_KEY")
+    assert run("purge") == 0
+    capsys.readouterr()
+    with_key, without = (settings.secret_key for settings in built)
+    assert with_key is not None and with_key.get_secret_value() == configured
+    assert without is not None and without.get_secret_value() != configured
 
 
 def test_gen_docs_writes_then_checks(db: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -63,6 +63,22 @@ async def test_a_stored_result_is_read_back_with_its_bytes_and_its_type(
     assert (parsed.content, parsed.data) == (b'{"answer": 42}', {"answer": 42})  # as run answers it
 
 
+async def test_a_stored_result_keeps_only_a_content_type_a_header_can_hold(
+    make_engine: EngineFactory, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    """The one rule for a runner's content type (#158) holds for a stored result as for an immediate
+    one: a type no response header can hold is ``application/octet-stream``, on the job's record and
+    when the result is read back, where it becomes the answer's own header."""
+    engine = await make_engine()
+    await allot(engine, alice)
+    transport.steps = [ScriptedTransport.ok(PNG).model_copy(update={"content_type": "text/plain\r\nx: y"})]
+
+    result = await engine.jobs.result(alice, await finished(engine, alice))
+    assert result.job.result is not None
+    assert (result.content_type, result.job.result.content_type) == ("application/octet-stream",) * 2
+    assert result.content == PNG
+
+
 async def test_a_job_that_has_not_ended_has_no_result_yet(
     make_engine: EngineFactory, alice: ActorContext, transport: ScriptedTransport
 ) -> None:

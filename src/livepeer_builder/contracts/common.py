@@ -1,7 +1,8 @@
 """Base model and shared value types for every contract that crosses the engine boundary."""
 
+from collections.abc import Mapping
 from decimal import Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
@@ -110,3 +111,19 @@ def _unsigned(money: Money) -> Money:
 TopUpAmount = Annotated[Money, AfterValidator(_provider_amount)]
 # Allotment: zero or more (zero sets up an identity with no money), within the same format and bound.
 AllotAmount = Annotated[Money, AfterValidator(_unsigned), AfterValidator(_provider_amount)]
+
+
+HIDDEN_INPUT = "[hidden]"  # what a refusal's errors() and json() say was given
+
+
+def without_input(detail: Mapping[str, Any]) -> Any:  # one of pydantic's InitErrorDetails
+    """A refused value as pydantic reported it, with ``HIDDEN_INPUT`` for what was given: the settings
+    hold secrets, and no form of their refusal repeats one (``config.py``). A rule's exception in the
+    context becomes its message, so the refusal's words stay the rule's own."""
+    line = {"type": detail["type"], "loc": detail["loc"], "input": HIDDEN_INPUT}
+    if "ctx" in detail:
+        line["ctx"] = {
+            name: str(value) if isinstance(value, BaseException) else value
+            for name, value in detail["ctx"].items()
+        }
+    return line

@@ -78,7 +78,8 @@ async def serve(
 
     To stop it from your own code, cancel the task that runs it. That does not wait for requests in
     flight, with one listener or two: each listener is closed and hangs up on its callers, the requests
-    still running are cancelled, the engine is stopped, and the cancellation is raised."""
+    still running are cancelled, the app's shutdown handlers run, the engine is stopped, and the
+    cancellation is raised."""
     import uvicorn
 
     configure_logging(json_lines=settings.log_json)
@@ -124,7 +125,9 @@ async def _run(server: "uvicorn.Server", sockets: list[socket.socket] | None = N
     a caller does not end a handler that awaits a runner, and ``serve()`` would stop the engine under it
     (#181 review). So a request still running is cancelled, as uvicorn cancels one that outlasts its own
     shutdown timeout, and waited for: a job cut off this way writes its end as a cancelled job does,
-    before the engine closes its store."""
+    before the engine closes its store. Then the app is told to shut down, which a forced exit skips:
+    left to uvicorn, its lifespan task waits for the rest of the process, with the app and the engine
+    it closes over (#184 review)."""
     try:
         await (server.serve() if sockets is None else server.serve(sockets=sockets))
     except SystemExit as asked:  # NOSONAR - returned for the caller to raise, once the servers have ended
@@ -134,6 +137,8 @@ async def _run(server: "uvicorn.Server", sockets: list[socket.socket] | None = N
         request.cancel()
     if left:
         await asyncio.wait(left)
+    if server.force_exit and server.started:  # in order, uvicorn has shut the app down itself
+        await server.lifespan.shutdown()
     # uvicorn before 0.50 returns from a start that failed, where later ones exit: never a server that served.
     return None if server.started else SystemExit(_STARTUP_FAILURE)
 
@@ -312,11 +317,11 @@ async def _ended(
     """Wait until every server has ended, or the first one with ``first_only``. A server asked to end
     waits for its open connections. One forced to exit does not wait for its callers: ``force_exit``
     is uvicorn's forced exit, with no wait for open connections or for requests in flight, and no
-    lifespan shutdown. It is not enough by itself: from Python 3.12 the listening server's
-    ``wait_closed()``, which uvicorn awaits last, returns only once every connection is gone. So each
-    open connection of a forced server is hung up, again on every tick until it has ended: one may
-    still be accepted before a server closes its listening socket. A request in flight sees its
-    caller disconnect, as when a caller hangs up."""
+    lifespan shutdown (``_run`` ends the requests and the lifespan). It is not enough by itself: from
+    Python 3.12 the listening server's ``wait_closed()``, which uvicorn awaits last, returns only once
+    every connection is gone. So each open connection of a forced server is hung up, again on every
+    tick until it has ended: one may still be accepted before a server closes its listening socket. A
+    request in flight sees its caller disconnect, as when a caller hangs up."""
     running = {task for task in tasks if not task.done()}
     while running and not (first_only and len(running) < len(tasks)):
         for server in servers:

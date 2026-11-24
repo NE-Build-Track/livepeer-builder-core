@@ -34,6 +34,7 @@ from tests.conftest import allot
 from tests.unit.test_listener_serving import (  # noqa: F401 - the two fixtures are used by name
     both_listen,
     free_port,
+    lifespan_tasks,
     listening,
     signals,
     the_root_logger_as_it_was,
@@ -128,7 +129,7 @@ class Served:
             self.serving.cancel()
             await asyncio.wait([self.serving], timeout=10)
         left = request_tasks()
-        self.still_running = len(left)
+        self.still_running, self.lifespans_waiting = len(left), len(lifespan_tasks())
         for task in left:
             task.cancel()
         if left:
@@ -169,6 +170,7 @@ async def test_a_cancelled_serve_ends_the_request_in_flight_before_it_stops_the_
     assert ended, "serve() had not returned 10 s after it was cancelled"
     assert served.serving.cancelled()  # the caller sees its own cancellation
     assert served.still_running == 0, "a request was still running after serve() returned"
+    assert served.lifespans_waiting == 0, "the app's lifespan was still waiting after serve() returned"
     assert not any(listening(port) for port in ports)
     # the job's end was written before the engine closed its database: paid, and its outcome unknown
     assert await served.stored() == UNCERTAIN
@@ -193,4 +195,5 @@ async def test_a_second_interrupt_ends_the_request_in_flight_before_it_stops_the
     assert ended, "serve() had not returned 10 s after the second interrupt"
     assert served.serving.exception() is None
     assert served.still_running == 0, "a request was still running after serve() returned"
+    assert served.lifespans_waiting == 0, "an app's lifespan was still waiting after serve() returned"
     assert await served.stored() == UNCERTAIN

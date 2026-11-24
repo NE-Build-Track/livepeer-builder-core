@@ -547,6 +547,18 @@ async def test_a_page_with_a_byte_order_mark_is_salvaged_as_the_decoder_reads_it
         assert len(page.set_aside) == set_aside_rows
 
 
+async def test_a_page_that_is_not_text_is_no_page_whatever_its_items() -> None:
+    """Bytes that are no UTF-8 are not a page the decoder reads, with an oversized item in it or not."""
+    body = page_text(item("u1"), PAST_THE_DECODER["a 5000-digit integer"]).encode().replace(b"u1", b"u\xff")
+    client = httpx.AsyncClient(
+        base_url="https://batteries.test",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, content=body)),
+    )
+    with pytest.raises(ProviderError) as refused:
+        await BatteriesUsageSource("https://batteries.test", "t", client=client).page(None)
+    assert refused.value.status_code == 200
+
+
 STILL_NO_PAGE = {
     "a page cut short": page_text(item("u1"), PAST_THE_DECODER["a deeply nested field"])[:-30],
     "an item that is not JSON": page_text(item("u1"), '{"id": "u-bad", "offset": 12x}'),

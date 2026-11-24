@@ -14,6 +14,11 @@ from pydantic import BaseModel
 from livepeer_builder import protocols
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
+from livepeer_builder.adapters.clearinghouse import (
+    ClearinghouseAllocations,
+    ClearinghouseAllowances,
+    ClearinghouseUsage,
+)
 from livepeer_builder.adapters.clock import SystemClock
 from livepeer_builder.adapters.jwt import JwtBearerAuthenticator
 from livepeer_builder.adapters.runner_call import SdkRunnerStream
@@ -66,12 +71,14 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "StreamingRunnerTransport": (SdkRunnerTransport,),
     "RunnerStream": (SdkRunnerStream,),
     "CredentialResolver": (PaymentsService,),
-    "AllocationManager": (BatteriesClient,),
-    "UsageSource": (BatteriesUsageSource,),
+    "AllocationManager": (BatteriesClient, ClearinghouseAllocations),
+    "AllocationsByActor": (ClearinghouseAllocations,),
+    "OneKeyPerAllocation": (ClearinghouseAllocations,),
+    "UsageSource": (BatteriesUsageSource, ClearinghouseUsage),
     "TenantUsageSource": (BatteriesUsageSource,),
     "EscrowSource": (BatteriesClient,),
     "SignerProbe": (SdkRunnerTransport,),
-    "AllowanceReader": (PaymentsService,),
+    "AllowanceReader": (PaymentsService, ClearinghouseAllowances),
     "EngineStore": (SqlStore,),
     "StoreMaintenance": (SqlMaintenance,),
     "ActorCommandRepo": (SqlStore,),

@@ -57,6 +57,7 @@ class Net:
     headers: list[CIMultiDict[str]] = field(default_factory=list)  # ... and its request headers
     targets: list[str] = field(default_factory=list)  # ... and its request target, as sent (raw_path)
     signer_requests: list[dict[str, Any]] = field(default_factory=list)
+    signer_headers: list[CIMultiDict[str]] = field(default_factory=list)  # of each signer request, both paths
     release: asyncio.Event = field(default_factory=asyncio.Event)  # ends every hang at teardown
     on_challenge: Callable[[], Awaitable[None]] | None = None  # runs before each 402 challenge is sent
     _challenges: int = 0
@@ -84,6 +85,7 @@ class Net:
 
     async def _sign_info(self, request: web.Request) -> web.Response:
         self.log.append("signer info")
+        self.signer_headers.append(CIMultiDict(request.headers))
         step = self.info.pop(0) if self.info else "ok"
         if isinstance(step, float):
             await self.hang(step)
@@ -105,6 +107,7 @@ class Net:
     async def _generate(self, request: web.Request) -> web.StreamResponse:
         payload = await request.json()
         self.signer_requests.append(payload)
+        self.signer_headers.append(CIMultiDict(request.headers))
         manifest = payload["ManifestID"]
         step = self.sign.pop(0) if self.sign else "ok"
         self.log.append(f"sign {manifest}")

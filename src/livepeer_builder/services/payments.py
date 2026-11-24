@@ -12,7 +12,6 @@ Every provider write that moves money carries an idempotency key derived from
 (engine_id, operation, step), so a retried command never applies twice.
 """
 
-import logging
 from typing import Any
 
 from pydantic import TypeAdapter
@@ -20,6 +19,7 @@ from pydantic import TypeAdapter
 from livepeer_builder.contracts import (
     ActorAllocation,
     ActorContext,
+    AllocationRead,
     AllocationStatus,
     AllotRequest,
     Allowance,
@@ -29,7 +29,6 @@ from livepeer_builder.contracts import (
     Operation,
     PaymentKey,
     ResourceRef,
-    SeenActor,
     TopUpRequest,
 )
 from livepeer_builder.errors import (
@@ -37,30 +36,29 @@ from livepeer_builder.errors import (
     InvalidRequest,
     NotFound,
     NotProvisioned,
-    ProviderError,
     ProviderUnavailable,
 )
 from livepeer_builder.protocols import (
     AccessPolicy,
     ActorRepo,
     AllocationManager,
+    AllocationsByActor,
+    AllowanceReader,
     Clock,
     SecretStore,
 )
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.allocation_delivery import DeliverySecrets, delivered
+from livepeer_builder.services.allocation_read import for_a_builder, known, with_allowance
 from livepeer_builder.services.grants import allotted_from_grant, idempotency_key
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 from livepeer_builder.services.payment_keys import BEGAN_ON, PREVIOUS_CUSTODY, PaymentKeys, recorded_secret
 from livepeer_builder.services.tenant_usage import TenantUsage
 from livepeer_builder.services.tenants import TenantDesk
 from livepeer_builder.services.wallet import Wallet
-from livepeer_builder.utils import BODY_LIMIT
 
-_LOG = logging.getLogger(__name__)
 _ACTOR = TypeAdapter(ActorAllocation)
 _NOTHING = TypeAdapter(type(None))
-_UNREADABLE = "the allowance could not be read"  # what a builder reads when the provider fails (D58)
 _SENT_LABEL = "sent_label"  # in an allotment's record, from the moment it begins: the label its runs send
 
 
@@ -79,6 +77,7 @@ class PaymentsService:
         usage: TenantUsage | None = None,
         wallet: Wallet | None = None,
         currency: Currency = "USD",
+        allowances: AllowanceReader | None = None,
     ) -> None:
         self._store = store
         self._writes = ActorWrites(store, clock)
@@ -93,6 +92,7 @@ class PaymentsService:
         self.usage = usage  # None: no source reads one tenant's usage (#166)
         self.wallet = wallet  # None: a part cannot report the escrow or probe the signer (#167)
         self._currency = currency
+        self._allowances = allowances  # None: the engine's own records and its provider
 
     # -- delivering commands (D85 point 1, D87 point 1) ----------------------------------------------
     #
@@ -136,10 +136,14 @@ class PaymentsService:
     # -- AllowanceReader --------------------------------------------------------------------------
 
     async def allocation_for(self, tenant_id: str, actor_id: str) -> str | None:
+        if self._allowances is not None:
+            return await self._allowances.allocation_for(tenant_id, actor_id)
         allotted = await self._store.get_actor(tenant_id, actor_id)
         return allotted.allocation_id if allotted else None
 
     async def read_allowance(self, allocation_id: str) -> Allowance:
+        if self._allowances is not None:
+            return await self._allowances.read_allowance(allocation_id)
         return await self._require_manager().read_allocation(allocation_id)
 
     # -- admin commands (Operation.ADMIN_ALLOCATIONS) ---------------------------------------------
@@ -163,7 +167,8 @@ class PaymentsService:
         )
         if request.amount.currency != self._currency:
             raise InvalidRequest(f"amount must be in {self._currency}")
-        manager = self._require_manager()  # refused before the ledger: nothing was sent
+        # refused before the ledger: nothing was sent. A manager that keeps a ledger by reference is told it
+        manager = self._manager_for(request.tenant_id, request.actor_id, request.operation_ref)
 
         async def steps(run: RunningOperation) -> ActorAllocation:
             return await self._allot(run, admin, manager, request, keys)
@@ -286,13 +291,13 @@ class PaymentsService:
         self._policy.check(admin, Operation.ADMIN_READ, resource)
         allocations = {(a.tenant_id, a.actor_id): a for a in await self._store.list_actors(scope)}
         sightings = {(s.tenant_id, s.actor_id): s for s in await self._store.list_sightings(scope)}
-        known = [
-            _known(key, allocations.get(key), sightings.get(key))
+        listed = [
+            known(key, allocations.get(key), sightings.get(key))
             for key in sorted(allocations.keys() | sightings.keys())
         ]
         return [
             actor
-            for actor in known
+            for actor in listed
             if (allotted is None or actor.allotted == allotted)
             and (status is None or (actor.allocation is not None and actor.allocation.status == status))
         ][:limit]
@@ -305,6 +310,10 @@ class PaymentsService:
             raise NotFound(f"actor {actor_id!r} has no allocation")
         return actor
 
+    async def get_allocation(self, admin: ActorContext, tenant_id: str, actor_id: str) -> AllocationRead:
+        """The actor's record with the amounts the provider reports for its allocation (#168)."""
+        return await with_allowance(await self.get_actor(admin, tenant_id, actor_id), self.read_allowance)
+
     async def top_up(
         self, admin: ActorContext, tenant_id: str, actor_id: str, request: TopUpRequest
     ) -> ActorAllocation:
@@ -312,7 +321,7 @@ class PaymentsService:
         actor = await self._require_actor(tenant_id, actor_id)
         if request.amount.currency != actor.currency or request.amount.amount <= 0:
             raise InvalidRequest(f"a top-up must be a positive amount in {actor.currency}")
-        manager = self._require_manager()
+        manager = self._manager_for(tenant_id, actor_id)
 
         async def steps(_: RunningOperation) -> ActorAllocation:
             await manager.top_up_allocation(
@@ -352,7 +361,7 @@ class PaymentsService:
         if status not in ("active", "paused"):
             raise InvalidRequest("status must be active or paused; use revoke to revoke")
         actor = await self._require_actor(tenant_id, actor_id)
-        await self._require_manager().set_allocation_status(actor.allocation_id, status)
+        await self._manager_for(tenant_id, actor_id).set_allocation_status(actor.allocation_id, status)
         written = await self._writes.status(actor, status)
         if written is None:  # revoked while this command was at the provider: it stays revoked (#115, C4)
             raise NotFound(f"actor {actor_id!r} has no allocation")
@@ -373,7 +382,7 @@ class PaymentsService:
         if (done := await self._store.get_actor(tenant_id, actor_id)) and done.status == "revoked":
             return done
         actor = await self._require_actor(tenant_id, actor_id)
-        await self._require_manager().revoke_allocation(actor.allocation_id)
+        await self._manager_for(tenant_id, actor_id).revoke_allocation(actor.allocation_id)
         await self._forget(actor)
         revoked = await self._writes.status(actor, "revoked")
         if revoked is None:  # another revoke wrote it first: answer as a repeat does
@@ -415,7 +424,7 @@ class PaymentsService:
         previous = {"previous_api_key_id": actor.api_key_id, "previous_secret_ref": actor.secret_ref.ref}
         previous[BEGAN_ON] = actor.allocation_id
         previous[PREVIOUS_CUSTODY] = actor.credential_custody
-        manager = self._require_manager()
+        manager = self._manager_for(tenant_id, actor_id)
 
         async def steps(run: RunningOperation) -> ActorAllocation:
             return await self._rotate(run, manager, tenant_id, actor_id, operation_ref, keys)
@@ -445,9 +454,8 @@ class PaymentsService:
         actor = await keys.began_on(run, await self._require_actor(tenant_id, actor_id))
         sent_as = idempotency_key(self._engine_id, f"rotate:{actor.allocation_id}:{operation_ref}", "api-key")
         await keys.require_writable(run, sent_as, actor)
-        key = await manager.create_key(  # the provider replays it on a resume
-            actor.allocation_id, f"{tenant_id}/{actor_id}", sent_as
-        )
+        # the provider replays it on a resume, or the engine reads back the one it was handed once
+        key = await keys.rotation_key(run, manager, actor, f"{tenant_id}/{actor_id}", sent_as)
         return await keys.rotated(run, manager, actor, key, sent_as)
 
     async def allowance(self, actor: ActorContext, actor_id: str | None = None) -> Allowance:
@@ -460,15 +468,7 @@ class PaymentsService:
         allocation_id = await self.allocation_for(actor.tenant_id, target)
         if allocation_id is None:
             raise NotFound(f"no allocation pays for actor {target!r}")
-        try:
-            return await self.read_allowance(allocation_id)
-        except (ProviderError, ProviderUnavailable) as error:  # a builder's read: provider words to the log
-            status = error.status_code if isinstance(error, ProviderError) else None
-            extra = {"provider_status": status, "detail": str(error)[:BODY_LIMIT]}
-            _LOG.warning("allowance read failed", extra={"event": "payments.allowance_failed", **extra})
-            if status is None:  # httpx's text can name the provider's host (D58)
-                raise ProviderUnavailable(f"{_UNREADABLE}: the provider is unavailable") from error
-            raise ProviderError(status, _UNREADABLE) from error
+        return await for_a_builder(self.read_allowance, allocation_id)
 
     async def _require_actor(self, tenant_id: str, actor_id: str) -> ActorAllocation:
         actor = await self._store.get_actor(tenant_id, actor_id)
@@ -481,20 +481,18 @@ class PaymentsService:
             raise ProviderUnavailable("the payment provider's management API is not configured")
         return self._manager
 
+    def _manager_for(
+        self, tenant_id: str, actor_id: str, operation_ref: str | None = None
+    ) -> AllocationManager:
+        """The manager for a command about one actor's allocation. A provider that names an actor and not
+        an allocation id, as a payment clearinghouse does, is told which (``AllocationsByActor``, #168),
+        and an allotment's ``operation_ref`` with it."""
+        manager = self._require_manager()
+        if isinstance(manager, AllocationsByActor):
+            return manager.for_actor(tenant_id, actor_id, operation_ref)
+        return manager
+
 
 def _allocation(tenant_id: str, actor_id: str) -> ResourceRef:
     """What an allocation command acts on, for the policy: a tenant admin is confined by it (#165)."""
     return ResourceRef(kind="allocation", tenant_id=tenant_id, owner_actor_id=actor_id)
-
-
-def _known(key: tuple[str, str], allocation: ActorAllocation | None, seen: SeenActor | None) -> KnownActor:
-    name = seen.name if seen is not None and seen.name else None
-    return KnownActor(
-        tenant_id=key[0],
-        actor_id=key[1],
-        label=(allocation.label if allocation is not None else "") or name or "",
-        name=name if seen is not None else None,
-        allocation=allocation,
-        first_seen_at=seen.first_seen_at if seen is not None else None,
-        last_seen_at=seen.last_seen_at if seen is not None else None,
-    )

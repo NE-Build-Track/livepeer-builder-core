@@ -27,7 +27,7 @@ from livepeer_builder.contracts import (
     SecretRef,
     SeenActor,
 )
-from livepeer_builder.docs_gen import render_openapi
+from livepeer_builder.docs_gen import _of_both_listeners, render_openapi
 from livepeer_builder.errors import AccessDenied, NotFound, NotProvisioned, OperationConflict
 from livepeer_builder.http.app import create_app, shared_app
 from livepeer_builder.http.clearinghouse import mount_clearinghouse_routes
@@ -1059,3 +1059,20 @@ async def test_the_clearinghouse_roles_spec_is_published_too() -> None:
     assert "/v1/clearinghouse/wallet" in spec["paths"]
     # and the default spec is still the both role's, which is a different document
     assert await render_openapi() != rendered
+
+
+def test_two_listeners_that_describe_one_route_differently_are_not_put_together() -> None:
+    """What both listeners serve (the runner list, health, a model both answer with) is described once in
+    the published document. If the two apps ever described it differently, keeping either side would
+    publish something one listener does not serve: the generator stops and names it."""
+    shared = {"get": {"summary": "Discovery"}}
+    public = {"paths": {"/v1/clearinghouse/discovery": shared}, "components": {"schemas": {"A": {}}}}
+    private = {
+        "paths": {"/v1/clearinghouse/discovery": {"get": {"summary": "Another"}}},
+        "components": {"schemas": {"A": {}}},
+    }
+    with pytest.raises(ValueError, match="the same path differently") as differing:
+        _of_both_listeners(public, private)
+    assert "/v1/clearinghouse/discovery" in str(differing.value)
+    merged = _of_both_listeners(public, private | {"paths": {"/readyz": {}}})
+    assert set(merged["paths"]) == {"/v1/clearinghouse/discovery", "/readyz"} and merged["tags"] == []

@@ -19,8 +19,11 @@ goes through ``TenantWire``, which holds the engine to one tenant:
   (``confirm``). Another tenant than the setting's is a refusal of whatever was asked (403), and nothing
   of it is sent. This is what keeps an answer that states no tenant, a usage page or the runner list,
   from being another tenant's. A read that fails says nothing about the key: its error is the caller's,
-  and the next request asks again. A process asks once more only until one read has answered: the key
-  of a process does not change. A command on the operation ledger does not wait for its first request
+  and the next request asks again. Once one read has answered for this tenant, no other is made while
+  every answer agrees with it. An answer that states another tenant ends that: the next request reads
+  the grant again first, a read of the grant that was already on its way does not count, and an answer
+  that states no tenant and was on its way is not taken. Requests that arrive together share one read.
+  A command on the operation ledger does not wait for its first request
   to ask: the payments service awaits ``ready_for_commands`` of the allocation manager before it begins
   the command's record (``ReadyBeforeCommands``), which is ``confirm``, so the read spends none of the
   ledger's budget, which is sized for the command's own calls. Asked through the port alone, the
@@ -40,7 +43,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from livepeer_builder.adapters.batteries import segment
-from livepeer_builder.adapters.clean_errors import raised
+from livepeer_builder.adapters.clean_errors import bare, raised
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import TenantGrant
 from livepeer_builder.errors import ProviderError
@@ -76,9 +79,10 @@ class TenantWire:
     def __init__(self, wire: ClearinghouseWire) -> None:
         self._wire = wire
         self._confirmed = False
+        self._questioned = 0  # how many answers have stated another tenant: it only grows
         self._asking = asyncio.Lock()  # one read of the key's grant at a time
         self._asked = 0  # how many such reads have ended
-        self._refused: Exception | None = None  # what the last one failed with
+        self._refused: Exception | None = None  # what the last one failed with, as an error with no frames
 
     @classmethod
     def over(cls, wire: "ClearinghouseWire | TenantWire") -> "TenantWire":
@@ -104,40 +108,76 @@ class TenantWire:
             if self._confirmed:
                 return
             if self._asked != asked and self._refused is not None:  # the read this one waited for
-                raise self._refused
+                raise _again(self._refused)
             await self.grant()
+            if not self._confirmed:  # an answer for another tenant arrived while the grant was read
+                raise _in_question(self.tenant_id)
 
     async def grant(self) -> TenantGrant:
-        """The grant of the key's tenant, which must be this tenant: the read that says whose key it is."""
+        """The grant of the key's tenant, which must be this tenant: the read that says whose key it is.
+        It says so only if no answer stated another tenant while it was read: such a read is older word
+        than the contradiction, and the next request reads again."""
+        questioned = self._questioned
         try:
-            grant = self._held(await self._wire.read_as(TenantGrant, GRANT_PATH), None)
+            grant = raised(self._held(await self._wire.read_as(TenantGrant, GRANT_PATH), None, questioned))
         except Exception as error:
-            self._asked, self._refused = self._asked + 1, error
+            self._asked, self._refused = self._asked + 1, _again(error)
             raise
-        self._asked, self._refused, self._confirmed = self._asked + 1, None, True
+        self._asked, self._refused = self._asked + 1, None
+        self._confirmed = self._questioned == questioned
         return grant
 
     async def read_as[T: BaseModel](
         self, model: type[T], path: str, params: Mapping[str, str] | None = None
     ) -> T:
         await self.confirm()
-        return self._held(await self._wire.read_as(model, path, params), None)
+        questioned = self._questioned
+        return raised(self._held(await self._wire.read_as(model, path, params), None, questioned))
 
     async def write_as[T: BaseModel](
         self, model: type[T], path: str, body: Mapping[str, Any] | None = None
     ) -> T:
         await self.confirm()
-        command = path.rpartition(_ALLOCATION)[2]
-        return self._held(await self._wire.write_as(model, path, body), command)
+        questioned, command = self._questioned, path.rpartition(_ALLOCATION)[2]
+        return raised(self._held(await self._wire.write_as(model, path, body), command, questioned))
 
-    def _held[T: BaseModel](self, answer: T, command: str | None) -> T:
-        """``answer``, held to this tenant. One that states another ends what was known of the key: the
-        clearinghouse said it was this tenant's and now answers for another, and an answer that states no
-        tenant, a usage page or the runner list, must not be taken on the earlier word (#185 review)."""
+    def _held[T: BaseModel](self, answer: T, command: str | None, questioned: int) -> T | ProviderError:
+        """``answer``, held to this tenant, or the error it comes to, for ``raised``. ``questioned`` is
+        the count of contradictions when its request was sent.
+
+        The error is returned and never raised here: this frame holds the answer, which for an allotment
+        or a rotation holds a handed key, and a frame an error passed through stays reachable from it
+        (review of ``f71101e``).
+
+        An answer that states another tenant ends what was known of the key. One that states none, a
+        usage page, is taken on that knowledge alone: if it was contradicted while the answer was on its
+        way, the answer was sent for with the key that has just failed, and it is not taken, whatever a
+        later read of the grant has said since."""
         checked = _of(self.tenant_id, answer, command)
         if isinstance(checked, ProviderError):
-            self._confirmed = False
-        return raised(checked)
+            self._confirmed, self._questioned = False, self._questioned + 1
+            return checked
+        if self._questioned != questioned and not hasattr(answer, "tenant_id"):
+            return _in_question(self.tenant_id)
+        return checked
+
+
+def _in_question(own: str) -> ProviderError:
+    return ProviderError(
+        403,
+        f"whose key LPB_CLEARINGHOUSE_TOKEN is came into question while this was asked: the clearinghouse "
+        f"answered another request for another tenant than {own!r} (LPB_CLEARINGHOUSE_TENANT_ID). Nothing "
+        "of this answer is used. The key's grant is read again before the next request",
+    )
+
+
+def _again(error: BaseException) -> Exception:
+    """``error`` as a new error of its kind and words, with no traceback: what a failed read of the
+    grant is kept as for those that waited for it, and what each of them is given. An error that was
+    raised keeps every frame it passed through, and each raise adds to them."""
+    if isinstance(error, ProviderError):
+        return ProviderError(error.status_code, error.message)
+    return bare(error)
 
 
 def own_tenant(wire: TenantWire, tenant_id: str) -> None:

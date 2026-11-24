@@ -28,6 +28,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import BaseModel, SecretStr
 
 from livepeer_builder.adapters.clearinghouse import ClearinghouseAllocations
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
@@ -62,6 +63,12 @@ def held(value: object) -> str:
         seen += [repr(dict(value.headers)), value.content.decode(errors="replace")]
     if isinstance(value, dict | list | tuple):
         seen += [held(item) for item in (value.values() if isinstance(value, dict) else value)]
+    # An answer the engine parsed: its repr hides a key, and the object still holds it. A tracker that
+    # records a frame's locals has the object (John, #185 review).
+    if isinstance(value, SecretStr):
+        seen.append(value.get_secret_value())
+    if isinstance(value, BaseModel):
+        seen += [held(item) for item in dict(value).values()]
     return "\n".join(seen)
 
 

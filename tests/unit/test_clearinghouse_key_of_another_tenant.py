@@ -409,6 +409,86 @@ async def test_an_answer_for_another_tenant_ends_what_the_engine_knew_of_its_key
     assert ports.sent("GET") == [GRANT]  # the grant was read again, and the page was not asked for
 
 
+async def answered_for_another_tenant(ports: Ports) -> None:
+    """A read the clearinghouse answers for the other tenant: the top-up's read of alice's allocation."""
+    top_up = TopUpRequest(amount=usd(3), operation_ref="t-1")
+    await refused(ports.engine.payments.top_up(ports.admin, ports.tenant_id, "alice", top_up))
+
+
+async def test_a_read_of_the_grant_that_was_in_flight_does_not_bring_the_keys_tenant_back(
+    ports: Ports,
+) -> None:
+    """A grant read is made beside other requests (the tenant desk reads the grant by itself). One that
+    was sent before an answer for another tenant, and comes back after it naming this tenant, is older
+    word than the contradiction: it set the key right again, and the next usage page was taken without a
+    new read (review of ``f71101e``)."""
+    assert ports.transport is not None
+    await given_another_tenants_key(ports)
+    ports.transport.grant_says = ports.tenant_id
+    wire = ports.manager._wire  # type: ignore[attr-defined]
+    await wire.confirm()
+    ports.transport.takes = lambda request: 0.2 if request.url.path == GRANT else 0
+    in_flight = asyncio.create_task(wire.grant())
+    await asyncio.sleep(0.05)
+    await answered_for_another_tenant(ports)
+    assert (await in_flight).tenant_id == ports.tenant_id  # its own caller has the answer it asked for
+    ports.transport.takes = None
+    ports.requests.clear()
+
+    await ports.usage.page(None)
+
+    assert ports.sent("GET") == [GRANT, "/v1/clearinghouse/usage"]  # asked again before the page
+
+
+@pytest.mark.parametrize("then", ["nothing more", "the key is confirmed again"])
+async def test_a_usage_page_in_flight_when_the_keys_tenant_came_into_question_is_not_taken(
+    ports: Ports, then: str
+) -> None:
+    """A usage page states no tenant: it is taken on what the engine knows of its key. One that was asked
+    for before an answer for another tenant, and arrives after it, was sent with the key that has just
+    failed the check, and its rows are that tenant's payments. It is not taken, whatever the engine has
+    learned since: another request may have read the grant again by then (John, #185 review)."""
+    assert ports.transport is not None
+    await given_another_tenants_key(ports)
+    ports.transport.grant_says = ports.tenant_id
+    wire = ports.manager._wire  # type: ignore[attr-defined]
+    await wire.confirm()
+    ports.transport.takes = lambda request: 0.2 if request.url.path.endswith("/usage") else 0
+    page = asyncio.create_task(ports.usage.page(None))
+    await asyncio.sleep(0.05)
+    await answered_for_another_tenant(ports)
+    if then == "the key is confirmed again":
+        await wire.confirm()
+
+    error = await refused(page)
+
+    assert error.status_code == 403 and "came into question" in error.message
+    assert "/v1/clearinghouse/usage" in ports.sent("GET")  # it was asked for, and its answer dropped
+
+
+async def test_a_first_read_of_the_grant_that_was_contradicted_on_its_way_confirms_nothing(
+    ports: Ports,
+) -> None:
+    """The same for the read a first request waits for: it comes back naming this tenant, after another
+    read of the grant was answered for the other one. The request that waited is refused, and nothing
+    of it is sent."""
+    assert ports.transport is not None
+    await given_another_tenants_key(ports)
+    wire = ports.manager._wire  # type: ignore[attr-defined]
+    slow_once = [0.2]
+    ports.transport.takes = lambda request: slow_once.pop() if slow_once and request.url.path == GRANT else 0
+    ports.requests.clear()
+    page = asyncio.create_task(ports.usage.page(None))  # its read of the grant is on its way
+    await asyncio.sleep(0.05)
+    assert (await refused(wire.grant())).status_code == 403  # a second read says whose key it is
+    ports.transport.grant_says = ports.tenant_id  # and the first comes back with the older word
+
+    error = await refused(page)
+
+    assert error.status_code == 403 and "came into question" in error.message
+    assert ports.sent("GET") == [GRANT, GRANT]  # no page was asked for
+
+
 async def test_the_first_requests_of_a_process_share_one_read_of_the_keys_grant() -> None:
     """Requests that arrive together before the key's grant has been read wait for one read of it. Each
     started a read of its own, and each of those has the clearinghouse read its balances: a burst at a

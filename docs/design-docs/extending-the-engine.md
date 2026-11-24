@@ -21,7 +21,7 @@ shown below, wires it into a real engine, and proves the behavior in CI.
 | `SecretStore` | `RoutingSecretStore` (the Fernet-encrypted DB store, with `LPB_SECRET_KEY`) | `AuditedVaultSecretStore`: HashiCorp Vault, AWS/GCP secret manager, HSM | supply `secret_store=` |
 | `WritableSecretStore` (optional `writable()` beside `put`) | `RoutingSecretStore` (`False` without `LPB_SECRET_KEY`) | A vault that is sealed, or a token without write access. Allotment and key rotation ask it just before the provider is called, and `False` refuses them (#112, C2); a repeat of a finished command, or a resume whose key is stored, is not asked. Without it, the store is not asked. A decorator that wraps the built-in store must forward `writable`, or the store escapes both this check and the one at startup | supply `secret_store=` |
 | `SelectionPolicy` | `MostCapacityFirst` | `CheapestReadyFirst`: price-aware. Or latency-ranked, region-pinned, SLA-weighted | supply `selection=` |
-| `DiscoverySource` | `HttpDiscoverySource` (reads `LPB_DISCOVERY_URL`, required) | `ApprovedOrchestratorsOnly`: an allow-list wrapper around the HTTP source | decorate (wrap `parts.discovery_source`) |
+| `DiscoverySource` | `HttpDiscoverySource` (reads `LPB_DISCOVERY_URL`, required to start) | `ApprovedOrchestratorsOnly`: an allow-list wrapper around the HTTP source | decorate (wrap `parts.discovery_source`) |
 | `RunnerTransport` | `SdkRunnerTransport` (Live Runner via the SDK), signing at `LPB_SIGNER_URL`. With a payment clearinghouse it is the same transport, and that address is the clearinghouse's published signer (#168) | Another network transport, or a recording proxy for audit | supply or decorate `transport=` |
 | `StreamingRunnerTransport` (optional `open` beside `call`) | `SdkRunnerTransport` | The same transport, streaming. Without `open`, `jobs.streaming` is `None` and the REST streaming route answers 400 (D33) | supply `transport=` |
 | `AllocationManager` / `UsageSource` | `BatteriesClient` / `BatteriesUsageSource` | Another payment provider, or a hosted operator's API (Mode B) | supply `allocation_manager=` / `usage_source=` |
@@ -184,9 +184,9 @@ This block is the tested example: `scripts/check_docs.py` fails if it drifts fro
 `tests/unit/test_extension_examples.py`. Then:
 
 ```python
-engine = await BuilderEngine.create(
-    EngineSettings.from_env(), supply=enterprise_supply(), decorate=enterprise_decorations
-)
+settings = EngineSettings.from_env()
+settings.require_discovery_url()  # refuse before the database is opened and migrated
+engine = await BuilderEngine.create(settings, supply=enterprise_supply(), decorate=enterprise_decorations)
 await engine.start()
 ```
 
@@ -208,6 +208,9 @@ The same engine serves both integration modes: call it in-process with your own 
   stops it (a failed start stops it too), so the host must run that lifespan, as any ASGI server does.
   To hold the engine yourself, build it with `BuilderEngine.create` and pass it to
   `livepeer_builder.http.create_app`. Logging is left to the host.
+
+Both refuse without `LPB_DISCOVERY_URL` before they build the engine, so the database is not opened or
+migrated for an engine that would not start (#154).
 
 **Two listeners (#167).** With `LPB_HTTP_PRIVATE_PORT` set, `serve` runs a public and a private
 listener over the one engine, each with an app of its own
@@ -267,14 +270,21 @@ asyncio.run(
 
 ## Discovery
 
-Which runners exist is decided outside the engine. `LPB_DISCOVERY_URL` is required and points at a
+Which runners exist is decided outside the engine. `LPB_DISCOVERY_URL` points at a
 `GET /discovery` document that follows livepeer/node's contract
-([contract](../contracts/discovery.md)). The reference implementation is livepeer/node's
+([contract](../contracts/discovery.md)), and an engine does not start without it: `start()` refuses,
+naming the variable (#154). The reference implementation is livepeer/node's
 `livepeer-discovery`. This package does not ship a discovery process.
 
 To change who the engine calls without replacing that process, wrap `HttpDiscoverySource` through
 `decorate`. Raising from the wrapper keeps the last good snapshot. To replace the inventory entirely,
 serve the same document from another process and point `LPB_DISCOVERY_URL` at it.
+
+The `decorate` stage receives the built-in reader when the address is set. An engine built without the
+address holds a source that reads nothing, and that is what `decorate` receives. An engine whose
+`decorate` stage replaces the discovery source still needs `LPB_DISCOVERY_URL` to start, as it did while
+settings required it. Whether such an engine should start without it is left open and is not changed
+by #154.
 
 ## Rules every implementation must keep
 

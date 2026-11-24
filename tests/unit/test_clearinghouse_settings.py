@@ -10,8 +10,6 @@ where the engine signs itself with each actor's own key (D85 point 1, as amended
 does not pay, as today.
 """
 
-from typing import Any
-
 import pytest
 from pydantic import ValidationError
 
@@ -31,9 +29,9 @@ WORK = {"LPB_ROLE": "work"} | THREE
 DISCOVERY = {"LPB_DISCOVERY_URL": "http://discovery:8939/discovery"}
 
 
-def refused(env: dict[str, str], **defaults: Any) -> str:
+def refused(env: dict[str, str]) -> str:
     with pytest.raises(ValidationError) as error:
-        EngineSettings.from_env(env, defaults=defaults or None)
+        EngineSettings.from_env(env)
     assert carried(error.value, TOKEN) == [], "the tenant admin key is in no form of a refusal"
     return str(error.value)
 
@@ -194,17 +192,21 @@ def test_the_key_goes_to_the_clearinghouse_runner_list_and_to_no_other_address(e
     assert settings.clearinghouse_runner_list_token is None
 
 
-def test_an_engine_without_a_clearinghouse_still_needs_a_discovery_address() -> None:
-    assert "discovery_url" in refused({})
+def test_an_engine_without_a_clearinghouse_still_needs_a_discovery_address_to_start() -> None:
+    """Its settings are read without one (#154): only an engine that starts needs the address."""
+    settings = EngineSettings.from_env({})
+    assert settings.discovery_url is None and settings.clearinghouse_runner_list_token is None
+    with pytest.raises(ValueError, match="LPB_DISCOVERY_URL is required to start the engine"):
+        settings.require_discovery_url()
 
 
 def test_a_command_that_serves_nothing_still_reads_the_clearinghouse_runner_list_by_default() -> None:
-    """``lpb`` commands that serve nothing give the discovery address a default of their own (#112, C23).
-    For an engine that uses a clearinghouse, the clearinghouse's list comes first."""
-    settings = EngineSettings.from_env(WORK, defaults={"discovery_url": "http://127.0.0.1:9/discovery"})
-    assert settings.discovery_url == URL + "/v1/clearinghouse/discovery"
-    alone = EngineSettings.from_env({}, defaults={"discovery_url": "http://127.0.0.1:9/discovery"})
-    assert alone.discovery_url == "http://127.0.0.1:9/discovery"
+    """``lpb`` commands that serve nothing give no discovery address (#154). For an engine that uses a
+    clearinghouse the address is still the clearinghouse's list, as for one that starts; an address the
+    caller puts under the environment's values is a discovery of its own, and stays."""
+    assert EngineSettings.from_env(WORK).discovery_url == URL + "/v1/clearinghouse/discovery"
+    own = {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery"}
+    assert EngineSettings.from_env(own | WORK).discovery_url == "http://127.0.0.1:9/discovery"
 
 
 # -- the operation ledger's stale window ----------------------------------------------------------------

@@ -117,7 +117,7 @@ Cross-cutting concerns enter only through `livepeer_builder.protocols`:
 | `Authenticator` | `ApiKeyAuthenticator`, and `JwtBearerAuthenticator` with `LPB_AUTH=jwt` (D45), in an `AuthenticatorChain` | use SSO, mTLS, another token scheme |
 | `AccessPolicy` | `DefaultPolicy` (permissions + ownership) | add teams, org admins, RBAC |
 | `SecretStore` | `RoutingSecretStore` (settings + Fernet-encrypted DB) | use Vault or a cloud secret manager |
-| `DiscoverySource` | `HttpDiscoverySource` (`LPB_DISCOVERY_URL`, required) | read another service that serves the same contract, by wrapping the source through `decorate` ([contract](docs/contracts/discovery.md)) |
+| `DiscoverySource` | `HttpDiscoverySource` (`LPB_DISCOVERY_URL`, required to start) | read another service that serves the same contract, by wrapping the source through `decorate` ([contract](docs/contracts/discovery.md)) |
 | `SelectionPolicy` | `MostCapacityFirst` | rank by price or latency |
 | `RunnerTransport` | `SdkRunnerTransport` | add another network transport |
 | `AllocationManager`, `UsageSource` | `BatteriesClient`, `BatteriesUsageSource` | use another payment provider |

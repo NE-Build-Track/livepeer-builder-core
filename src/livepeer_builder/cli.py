@@ -1,7 +1,9 @@
 """``lpb``: operator commands (docs/RELIABILITY.md#operations). ``migrate``, ``revision``, ``backup`` and
 ``restore`` read only ``LPB_DATABASE_URL``; ``purge``, ``bootstrap-admin``, ``smoke`` and ``serve`` read the
-LPB_* settings, and only ``serve`` requires ``LPB_DISCOVERY_URL`` (#112, C23). With a payment provider,
-``purge`` and ``bootstrap-admin``, which never allot, do not require ``LPB_SECRET_KEY`` (#106 review).
+LPB_* settings. Only an engine that starts needs ``LPB_DISCOVERY_URL``, so only ``serve`` requires it:
+``purge`` and ``bootstrap-admin`` build an engine and never start it, and ``smoke`` starts one at an
+address of its own (#112, C23; #154). With a payment provider, ``purge`` and ``bootstrap-admin``, which
+never allot, do not require ``LPB_SECRET_KEY`` (#106 review).
 
 lpb migrate            apply packaged migrations (production runs this before start)
 lpb revision           show the database revision and the package head
@@ -26,9 +28,12 @@ import asyncio
 import json
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+
+from pydantic import SecretStr
 
 from livepeer_builder import EngineError, EngineSettings, generate_secret_key
 from livepeer_builder.runtime import BuilderEngine, check_payments, package_version
@@ -81,13 +86,30 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-# Commands that build an engine but serve nothing need no discovery address. Without LPB_DISCOVERY_URL they
-# get this one: purge and bootstrap-admin never poll it, and smoke's one poll is refused (#112, C23).
-NO_DISCOVERY_URL = "http://127.0.0.1:9/discovery"
-
-
 def _emit(payload: Any) -> None:
     print(json.dumps(payload, indent=2, default=str))
+
+
+@asynccontextmanager
+async def _open_store() -> AsyncIterator[SqlStore]:
+    """The store at ``LPB_DATABASE_URL``, as it is: not migrated here, and closed on the way out. The
+    store-only commands read that setting and nothing else."""
+    store = await SqlStore.connect(_database_url(), migrate=False)
+    try:
+        yield store
+    finally:
+        await store.close()
+
+
+@asynccontextmanager
+async def _built_engine(settings: EngineSettings) -> AsyncIterator[BuilderEngine]:
+    """An engine built from ``settings`` and not started, stopped on the way out: what it opened is
+    closed, whether or not the command started it."""
+    engine = await BuilderEngine.create(settings)
+    try:
+        yield engine
+    finally:
+        await engine.stop()
 
 
 def _database_url() -> str:
@@ -95,35 +117,27 @@ def _database_url() -> str:
     return EngineSettings.database_url_from_env()
 
 
-def _engine_settings(**stand_ins: Any) -> EngineSettings:
-    """The LPB_* settings for an engine that serves nothing: the discovery address is optional, and so is
-    each setting ``stand_ins`` gives a value for the environment leaves unset."""
-    return EngineSettings.from_env(defaults={"discovery_url": NO_DISCOVERY_URL, **stand_ins})
-
-
 def _settings_that_allot_nothing() -> EngineSettings:
-    """purge and bootstrap-admin never allot, so they keep no payment key. Without LPB_SECRET_KEY they get a
-    key for this run only, as they get a discovery address, and the engine's check that a payment
-    provider's keys can be kept is met (#106 review). smoke gets none: it proves the engine starts as
-    serve would."""
-    return _engine_settings(secret_key=generate_secret_key())
+    """The LPB_* settings for purge and bootstrap-admin. They never allot, so they keep no payment key:
+    without LPB_SECRET_KEY they get a key for this run only, and the engine's check that a payment
+    provider's keys can be kept is met (#106 review). They never start the engine either, so they need no
+    discovery address and get none (#154). smoke gets no key: it proves the engine starts as serve would."""
+    settings = EngineSettings.from_env()
+    if settings.secret_key is not None:
+        return settings
+    # A new key is valid by construction, so the copy needs no second validation.
+    return settings.model_copy(update={"secret_key": SecretStr(generate_secret_key())})
 
 
 async def _migrate(_: argparse.Namespace) -> None:
-    store = await SqlStore.connect(_database_url(), migrate=False)
-    try:
+    async with _open_store() as store:
         await upgrade(store.engine)
         _emit({"revision": await current_revision(store.engine)})
-    finally:
-        await store.close()
 
 
 async def _revision(_: argparse.Namespace) -> int:
-    store = await SqlStore.connect(_database_url(), migrate=False)
-    try:
+    async with _open_store() as store:
         current, head = await current_revision(store.engine), head_revision()
-    finally:
-        await store.close()
     _emit({"database": current, "package_head": head, "up_to_date": current == head})
     return 0 if current == head else 2
 
@@ -146,22 +160,16 @@ async def _verify(args: argparse.Namespace) -> None:
 
 
 async def _purge(_: argparse.Namespace) -> None:
-    engine = await BuilderEngine.create(_settings_that_allot_nothing())
-    try:
+    async with _built_engine(_settings_that_allot_nothing()) as engine:
         _emit((await engine.purge()).model_dump())
-    finally:
-        await engine.stop()
 
 
 async def _bootstrap(args: argparse.Namespace) -> None:
-    engine = await BuilderEngine.create(_settings_that_allot_nothing())
-    try:
+    async with _built_engine(_settings_that_allot_nothing()) as engine:
         if engine.keys is None:
             raise SystemExit("API keys are disabled in this deployment")
         issued = await engine.keys.bootstrap_admin(args.label)
         _emit({"key_id": issued.key.key_id, "token": issued.token, "note": "shown once; store it now"})
-    finally:
-        await engine.stop()
 
 
 async def _gen_secret_key(_: argparse.Namespace) -> None:
@@ -177,18 +185,26 @@ async def _smoke(_: argparse.Namespace) -> int:
     The engine is built in the role the environment names (``LPB_ROLE``, #169), from that deployment's
     settings, so it also proves the settings load and the role has the parts it needs. Starting it polls
     discovery once and, outside the ``clearinghouse`` role, may read one page of usage; it writes
-    nothing anywhere but the throwaway database."""
+    nothing anywhere but the throwaway database.
+
+    An engine does not start without a discovery address (D63). Without ``LPB_DISCOVERY_URL`` smoke
+    starts its engine at an address nothing listens on: its one poll is refused, and the engine starts
+    as it does when discovery is down (#154)."""
     with tempfile.TemporaryDirectory(prefix="lpb-smoke-") as directory:
         database = f"sqlite+aiosqlite:///{Path(directory) / 'smoke.db'}"
-        # Both values are valid by construction, so the copy needs no second validation.
-        settings = _engine_settings().model_copy(update={"database_url": database, "auto_migrate": True})
-        engine = await BuilderEngine.create(settings)
-        try:
+        configured = EngineSettings.from_env()
+        # Each value is valid by construction, so the copy needs no second validation.
+        settings = configured.model_copy(
+            update={
+                "database_url": database,
+                "auto_migrate": True,
+                "discovery_url": configured.discovery_url or "http://127.0.0.1:9/discovery",
+            }
+        )
+        async with _built_engine(settings) as engine:
             await engine.start()
             health = engine.health()
             revision = await engine.schema_revision()
-        finally:
-            await engine.stop()
     ok = revision == head_revision()
     report = {"ok": ok, "role": health.role, "version": health.version, "schema_revision": revision}
     _emit(report | {"health": health.model_dump()})
@@ -209,7 +225,7 @@ async def _payments_check(_: argparse.Namespace) -> int:
     every probe passed, 1 when one was refused or failed, 2 when the settings themselves are refused. The
     report names settings and never holds a credential, an address or the other side's own words."""
     try:
-        settings = _engine_settings()
+        settings = EngineSettings.from_env()
     except ValueError as refused:  # pydantic's, which names the settings and echoes no value
         print(json.dumps({"error": str(refused), "type": "InvalidSettings"}), file=sys.stderr)
         return 2

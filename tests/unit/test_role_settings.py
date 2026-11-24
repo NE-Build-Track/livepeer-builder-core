@@ -17,8 +17,6 @@ What a ``clearinghouse`` engine needs of its parts (Batteries, the tenant desk) 
 it will run with, when it is built (tests/unit/test_roles.py).
 """
 
-from typing import Any
-
 import pytest
 from pydantic import ValidationError
 
@@ -44,9 +42,9 @@ PRIVATE = {"LPB_HTTP_PRIVATE_PORT": "8081"}
 SECRETS = (TOKEN, "not-to-be-shown", "clearinghouse.example", "grant_7")
 
 
-def refused(env: dict[str, str], **defaults: Any) -> str:
+def refused(env: dict[str, str]) -> str:
     with pytest.raises(ValidationError) as error:
-        EngineSettings.from_env(env, defaults=defaults or None)
+        EngineSettings.from_env(env)
     assert carried(error.value, *SECRETS) == [], "a refusal names settings and echoes no value, in any form"
     return str(error.value)
 

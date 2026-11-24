@@ -528,6 +528,25 @@ async def test_two_items_the_decoder_cannot_read_on_one_page_are_each_set_aside_
     assert page.set_aside[0].id == page.set_aside[2].id != page.set_aside[1].id  # a digest of its text
 
 
+async def test_a_page_with_a_byte_order_mark_is_salvaged_as_the_decoder_reads_it() -> None:
+    """The decoder takes a UTF-8 page that begins with a byte order mark. The salvage decoded the bytes
+    itself and kept the mark, which the decoder then refused as text: a page the ordinary reader takes
+    failed on every pass once it held one oversized item, and the cursor never moved (John, #189 review)."""
+    plain = b"\xef\xbb\xbf" + page_text(item("u1"), next_cursor="p1").encode()
+    marked = (
+        b"\xef\xbb\xbf"
+        + page_text(item("u1"), PAST_THE_DECODER["a 5000-digit integer"], next_cursor="p1").encode()
+    )
+    for body, set_aside_rows in ((plain, 0), (marked, 1)):
+        client = httpx.AsyncClient(
+            base_url="https://batteries.test",
+            transport=httpx.MockTransport(lambda _, body=body: httpx.Response(200, content=body)),
+        )
+        page = await BatteriesUsageSource("https://batteries.test", "t", client=client).page(None)
+        assert ([row.id for row in page.items], page.next_cursor) == (["u1"], "p1")
+        assert len(page.set_aside) == set_aside_rows
+
+
 STILL_NO_PAGE = {
     "a page cut short": page_text(item("u1"), PAST_THE_DECODER["a deeply nested field"])[:-30],
     "an item that is not JSON": page_text(item("u1"), '{"id": "u-bad", "offset": 12x}'),
@@ -544,6 +563,22 @@ STILL_NO_PAGE = {
     + PAST_THE_DECODER["a 5000-digit integer"] + '], "next_cursor": "p2"}',
     "a cursor named twice": '{"items": [' + PAST_THE_DECODER["a 5000-digit integer"] + '], "next_cursor": "p1", '
     + '"next_cursor": "p2"}',
+    # The decoder stops at the first limit it meets and never reads on: an item that is not JSON after its
+    # oversized integer, or after its nesting, was cut out as if it were one, and the page was checkpointed
+    # (John, #189 review). What is left out must be JSON the decoder only refuses for its size.
+    "an oversized integer that hides a syntax error after it": page_text(
+        item("u1"), '{"id": "u-bad", "offset": ' + "9" * 5000 + ', "then": oops}'
+    ),
+    "an oversized integer in an item with a key that is no string": page_text(
+        item("u1"), '{"id": "u-bad", "offset": ' + "9" * 5000 + ", 7: 1}"
+    ),
+    "deep nesting that hides a syntax error after it": page_text(
+        item("u1"), '{"id": "u-bad", "extra": ' + DEEP + ', "then": oops}'
+    ),
+    "deep nesting whose brackets do not match": page_text(
+        item("u1"), '{"id": "u-bad", "extra": ' + "[" * 100_000 + "}" * 100_000 + "}"
+    ),
+    "an oversized integer with a leading zero": page_text(item("u1"), '{"id": "u-bad", "offset": 0' + "9" * 5000 + "}"),
     # and with no item past the decoder, where the decoder took the page and the first list's row was gone
     "items named twice, and nothing past the decoder": '{"items": [' + json.dumps(item("u-good"))
     + '], "items": [], "next_cursor": "p2"}',

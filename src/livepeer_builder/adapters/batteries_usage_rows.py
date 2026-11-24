@@ -44,8 +44,8 @@ def page_past_the_decoder(content: bytes) -> tuple[dict[str, Any], list[SetAside
     cannot read is no object in the page's ``items``. Such a page is still no page. So is one whose own
     object names a key twice: the decoder keeps the last, so a first ``items`` list was dropped with
     its rows while the item cut from the second accounted for every marker (#189 review)."""
-    try:
-        text = content.decode()
+    try:  # as the decoder reads bytes: UTF-8, 16 or 32, without the byte order mark a page may begin with
+        text = content.decode(json.detect_encoding(content))
     except UnicodeDecodeError:
         return None
     marker = secrets.token_hex(16)  # a key no item has: it marks where an item was cut out
@@ -120,14 +120,107 @@ def _item_spans(text: str) -> Iterator[tuple[int, int]]:
 
 
 def _past_the_decoder(item: str) -> bool:
-    """Whether ``item`` is refused by the decoder's limits and not for being no JSON."""
+    """Whether ``item`` is refused by the decoder's limits and not for being no JSON. The decoder stops
+    at the first limit it meets and reads no further, so what it stopped in is read here to its end: an
+    item that is no JSON after its long integer, or inside its deep nesting, is no item to leave out, and
+    its page is still no page (#189 review)."""
     try:
         json.loads(item)
     except json.JSONDecodeError:
         return False
     except (ValueError, RecursionError):  # the digit limit of an integer, the depth of the nesting
-        return True
+        return is_json(item)
     return False
+
+
+# One JSON token, as the decoder reads it by default: no control character in a string, no leading zero,
+# ASCII digits, and the three names it takes for numbers that are none.
+_JSON_TOKEN = re.compile(
+    r"""[ \t\n\r]*(?:
+        (?P<string>"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*")
+      | (?P<scalar>-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?|true|false|null|NaN|-?Infinity)
+      | (?P<open>[\[{]) | (?P<close>[\]}]) | (?P<comma>,) | (?P<colon>:) | (?P<end>\Z)
+    )""",
+    re.VERBOSE,
+)
+_CLOSES = {"]": "[", "}": "{"}
+
+
+def is_json(text: str) -> bool:
+    """Whether ``text`` is one JSON value by the decoder's grammar, read token by token with a list of
+    the brackets that are open: no recursion and no number is built, so neither of the decoder's limits
+    is met, whatever the nesting and however long an integer."""
+    opened: list[str] = []
+    expects, position = "value", 0
+    while expects not in ("nothing more", "no JSON"):
+        token = _JSON_TOKEN.match(text, position)
+        if token is None or token.lastgroup is None:
+            return False
+        position = token.end()
+        expects = _NEXT[expects](token.lastgroup, token.group(token.lastgroup), opened)
+    return expects == "nothing more"
+
+
+def _closed(opened: list[str]) -> str:
+    """What follows a value that has just ended."""
+    return "comma or close" if opened else "end"
+
+
+def _value(kind: str, text: str, opened: list[str], *, may_close: bool = False) -> str:
+    if kind in ("string", "scalar"):
+        return _closed(opened)
+    if kind == "open":
+        opened.append(text)
+        return "first value" if text == "[" else "first key"
+    if kind == "close" and may_close and text == "]":  # an empty list
+        opened.pop()
+        return _closed(opened)
+    return "no JSON"
+
+
+def _first_value(kind: str, text: str, opened: list[str]) -> str:
+    return _value(kind, text, opened, may_close=True)
+
+
+def _key(kind: str, text: str, opened: list[str], *, may_close: bool = False) -> str:
+    if kind == "string":
+        return "colon"
+    if kind == "close" and may_close and text == "}":  # an empty object
+        opened.pop()
+        return _closed(opened)
+    return "no JSON"
+
+
+def _first_key(kind: str, text: str, opened: list[str]) -> str:
+    return _key(kind, text, opened, may_close=True)
+
+
+def _colon(kind: str, text: str, opened: list[str]) -> str:
+    return "value" if kind == "colon" else "no JSON"
+
+
+def _comma_or_close(kind: str, text: str, opened: list[str]) -> str:
+    if kind == "comma":
+        return "value" if opened[-1] == "[" else "key"
+    if kind == "close" and _CLOSES[text] == opened[-1]:
+        opened.pop()
+        return _closed(opened)
+    return "no JSON"
+
+
+def _end(kind: str, text: str, opened: list[str]) -> str:
+    return "nothing more" if kind == "end" else "no JSON"
+
+
+_NEXT = {
+    "value": _value,
+    "first value": _first_value,
+    "key": _key,
+    "first key": _first_key,
+    "colon": _colon,
+    "comma or close": _comma_or_close,
+    "end": _end,
+}
 
 
 def read_usage_item(item: dict[str, Any]) -> UsageRow | SetAsideUsage:

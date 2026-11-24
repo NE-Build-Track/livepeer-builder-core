@@ -1,29 +1,57 @@
 """Generators for docs/generated. CI runs ``lpb gen-docs --check`` so committed docs never drift."""
 
 import json
+from typing import TYPE_CHECKING, Any, Literal
 
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.runtime import BuilderEngine
 from livepeer_builder.store.schema import metadata
 
+if TYPE_CHECKING:
+    from livepeer_builder.http.listeners import ListenerName
 
-async def render_openapi() -> str:
+# The roles a schema is published for. ``work`` has none of its own: it serves the work routes of the
+# ``both`` role's document and nothing else.
+PublishedRole = Literal["both", "clearinghouse"]
+
+
+async def render_openapi(role: PublishedRole = "both") -> str:
+    """The schema of the app ``lpb serve`` runs for an engine in ``role``, built the same way.
+
+    ``both``, the default, is ``openapi.json``: every route, on one listener. Its allotment and rotation
+    answer the allocation alone, because that engine stores each key for its own jobs.
+    ``clearinghouse`` is ``openapi-clearinghouse.json``: the routes of a payment clearinghouse, on its
+    private listener, which serves every route of the role. Its allotment and rotation answer the
+    allocation with its key (``allocation_api_key``, ``replayed``, ``resumed``), which only that role
+    hands over (#169). An engine in its ``work`` role serves the work routes of ``openapi.json`` and
+    nothing else, so it has no file of its own."""
     from livepeer_builder.http.app import create_app
+    from livepeer_builder.http.listeners import delivers_allocation_keys
     from livepeer_builder.runtime.assembly import EngineSupply
-    from livepeer_builder.testing import FakeAllocationManager
+    from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource
 
     # Every optional capability on (API keys by default; the tenant desk needs a grants manager),
     # so the committed spec documents the whole API. A deployment without one lacks those routes.
+    values: dict[str, Any] = {}
+    supply = EngineSupply(grants_manager=FakeAllocationManager())
+    standalone = delivers_allocation_keys(role)
+    if standalone:  # a clearinghouse has two listeners, allots, and serves each tenant's usage
+        provider = FakeAllocationManager()
+        values = {"role": role, "http_private_port": 8081}
+        supply = EngineSupply(
+            allocation_manager=provider, grants_manager=provider, usage_source=FakeUsageSource()
+        )
     settings = EngineSettings(
         database_url="sqlite+aiosqlite:///:memory:",
         log_json=False,
         discovery_url="http://127.0.0.1:9/discovery",
+        **values,
     )
-    engine = await BuilderEngine.create(settings, supply=EngineSupply(grants_manager=FakeAllocationManager()))
+    engine = await BuilderEngine.create(settings, supply=supply)
     try:
         # The app ``lpb serve`` runs, built the same way, so the spec documents what ships (#186 review).
-        # Handing allocation keys over belongs to the clearinghouse role, which #169 mounts.
-        schema = create_app(engine, manage_lifecycle=False).openapi()
+        listener: ListenerName = "private" if standalone else "only"
+        schema = create_app(engine, manage_lifecycle=False, listener=listener).openapi()
     finally:
         await engine.stop()
     schema["info"]["version"] = "generated"  # keep the file stable across dev versions

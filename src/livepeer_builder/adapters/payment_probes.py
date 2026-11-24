@@ -6,7 +6,8 @@ touches the HTTP client, sends no body and follows no redirect, so a credential 
 setting names and to no other. ``tests/unit/test_payments_check.py`` records every request and reads
 this file to hold that.
 
-Every engine that pays signs at its signer itself, so both configurations probe:
+The engine's role says what is probed (``LPB_ROLE``, #169), and the report names it. Every engine that
+pays signs at its signer itself, so every role probes:
 
 - **the signer**, at the root of ``LPB_SIGNER_URL`` as the SDK reads it (scheme, host and port). The
   signer's identity call is not a GET, so it cannot be made here. ``GET /sign-orchestrator-info`` is
@@ -14,18 +15,23 @@ Every engine that pays signs at its signer itself, so both configurations probe:
   only, so a signer answers 405 and names the method it takes in ``Allow``. That says an HTTP server
   is at the address and has the signer's identity route. It does not say the signer signs, that its
   wallet is funded, or that it is ready: only a payment, or the signer's own ``/readyz`` on its metrics
-  listener, says those. No credential is sent.
+  listener, says those. No credential is sent. An engine in its ``clearinghouse`` role signs nothing,
+  and is asked all the same: it runs the signer its tenants' engines sign at, and this is the address
+  its wallet report reads. The probe does not say the signer is reachable at its published address.
 
-A self-hosted engine also probes:
+An engine that reaches Batteries itself, in its ``both`` or its ``clearinghouse`` role, also probes:
 
 - **Batteries** with the engine's credential: ``GET /v1/usage?limit=1``, the read cost sync makes;
-- **Batteries** with the grants credential, when one is set: ``GET /v1/grants?limit=1``.
+- **Batteries** with the grants credential, when one is set: ``GET /v1/grants?limit=1``. An engine in
+  its ``clearinghouse`` role cannot onboard a tenant without that credential, so there the probe is
+  always made, and says so when the credential is not set.
 
-An engine that uses a payment clearinghouse probes the clearinghouse instead, with its tenant admin
+An engine in its ``work`` role probes the payment clearinghouse it uses instead, with its tenant admin
 key: its grant (who it is there), one page of its usage, and the runner list when that is its discovery
 address. Every one is a clearinghouse route: no work route is called. Its signer is the clearinghouse's
 published one, at ``LPB_SIGNER_URL``, and is asked there, never at the clearinghouse's address: a
-clearinghouse's engine serves no signer path (D85 point 1, as amended).
+clearinghouse's engine serves no signer path (D85 point 1, as amended). With ``LPB_SIGNER_URL`` unset
+the probe is ``not_configured`` and the check fails: such an engine runs its jobs unpaid.
 
 Nothing the other side says is repeated: a probe reports a status and the engine's own words.
 """
@@ -44,12 +50,21 @@ from livepeer_builder.contracts import (
     PaymentConfiguration,
     PaymentProbe,
     ProbeOutcome,
+    Role,
     TenantGrant,
 )
 
 TIMEOUT_S = 5.0
 SIGNER_IDENTITY = "/sign-orchestrator-info"
 _NOT_SET = "{setting} is not set"
+# No role is refused at startup for a missing signer address, so this is where each is told what follows.
+_UNPAID = "LPB_SIGNER_URL is not set: this engine runs its jobs unpaid"
+_NO_SIGNER: dict[Role, str] = {
+    "both": _UNPAID,
+    "work": f"{_UNPAID}. Set it to the address of the signer its payment clearinghouse publishes",
+    "clearinghouse": "LPB_SIGNER_URL is not set: the wallet report cannot say whether the signer answers. "
+    "Set it to the address this engine reaches the signer at",
+}
 Answer = httpx.Response | None  # None: no answer came
 
 
@@ -90,15 +105,16 @@ async def _get(
 
 async def _self_hosted(settings: EngineSettings, client: httpx.AsyncClient) -> PaymentCheck:
     probes = [await _signer(settings, client), await _batteries(settings, client)]
-    if settings.batteries_grants_token is not None:
+    # optional for self-hosted payments; a clearinghouse onboards its tenants with it
+    if settings.batteries_grants_token is not None or not settings.runs_jobs:
         probes.append(await _batteries_grants(settings, client))
-    return _checked("self_hosted", probes)
+    return _checked(settings, "self_hosted", probes)
 
 
 async def _signer(settings: EngineSettings, client: httpx.AsyncClient) -> PaymentProbe:
     name, setting = "signer", "LPB_SIGNER_URL"
     if settings.signer_url is None:
-        return _probe(name, setting, None, "not_configured", _NOT_SET.format(setting=setting))
+        return _probe(name, setting, None, "not_configured", _NO_SIGNER[settings.role])
     url = settings.signer_url if "://" in settings.signer_url else f"https://{settings.signer_url}"
     parts = urlsplit(url)
     request = f"GET {SIGNER_IDENTITY}"
@@ -146,7 +162,9 @@ async def _batteries_grants(settings: EngineSettings, client: httpx.AsyncClient)
         return _probe(
             name, "LPB_BATTERIES_URL", None, "not_configured", _NOT_SET.format(setting="LPB_BATTERIES_URL")
         )
-    token = settings.batteries_grants_token.get_secret_value() if settings.batteries_grants_token else ""
+    if settings.batteries_grants_token is None:
+        return _probe(name, setting, None, "not_configured", _NOT_SET.format(setting=setting))
+    token = settings.batteries_grants_token.get_secret_value()
     return await _batteries_list(settings, client, name, setting, "/v1/grants", token)
 
 
@@ -196,7 +214,7 @@ async def _clearinghouse(settings: EngineSettings, client: httpx.AsyncClient) ->
     ]
     if settings.clearinghouse_runner_list_token is not None:  # the list is this engine's discovery address
         probes.append(await _runner_list(client, settings.discovery_url, headers))
-    return _checked("clearinghouse", probes, grant)
+    return _checked(settings, "clearinghouse", probes, grant)
 
 
 async def _tenant_grant(
@@ -307,9 +325,13 @@ def _probe(
 
 
 def _checked(
-    configuration: PaymentConfiguration, probes: list[PaymentProbe], tenant: TenantGrant | None = None
+    settings: EngineSettings,
+    configuration: PaymentConfiguration,
+    probes: list[PaymentProbe],
+    tenant: TenantGrant | None = None,
 ) -> PaymentCheck:
     return PaymentCheck(
+        role=settings.role,
         configuration=configuration,
         ok=all(probe.outcome == "ok" for probe in probes),
         probes=tuple(probes),

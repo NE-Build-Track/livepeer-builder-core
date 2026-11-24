@@ -13,6 +13,10 @@ private listener.
 
 Reconciliation, cost sync and the engine's own access keys are work routes
 (tests/unit/test_work_route_paths.py).
+
+Since #169 the engine's role (``LPB_ROLE``) says which of the two sets an app mounts: both, the work set
+alone, or the clearinghouse set alone on a public and a private listener. The last section pins the
+exact set of each role.
 """
 
 from collections.abc import Callable
@@ -33,6 +37,7 @@ from livepeer_builder.http.clearinghouse import (
 )
 from livepeer_builder.http.work import mount_work_routes
 from tests.conftest import EngineFactory
+from tests.unit.role_engines import in_role
 from tests.unit.test_assembly import HeaderAuthenticator
 
 ALLOCATION = "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation"
@@ -253,3 +258,63 @@ async def test_the_routes_that_took_a_tenant_or_a_grant_in_a_query_or_a_body_are
         for method, path in REMOVED:
             assert path not in paths
             assert (await client.request(method, path, json={}, headers=admin)).status_code == 404, path
+
+
+# -- the role chooses the set (#169) ---------------------------------------------------------------------
+
+# What a tenant's own admin or auditor calls, with every optional group on: the public listener's routes
+# of the clearinghouse half.
+TENANT_SET = TENANT_ROUTES | TENANT_KEYS | GRANT_READ | USAGE_READ | RUNNER_LIST
+# What only a clearinghouse admin does: the private listener's own routes.
+ADMIN_SET = ADMIN_ROUTES | TENANT_DESK | WALLET
+
+
+async def test_the_both_role_mounts_both_sets_as_before(make_engine: EngineFactory) -> None:
+    """The default, and what self-hosted payments runs: nothing a deployment served is gone, and
+    nothing is new. With a private listener it is the deployment of #167."""
+    engine = await in_role(make_engine, "both")
+    assert engine.role == "both"
+    everything = HEALTH | WORK | KEYS | TENANT_SET | ADMIN_SET
+    assert served(create_app(engine, manage_lifecycle=False)) == everything
+    assert served(create_app(engine, manage_lifecycle=False, listener="private")) == everything
+    assert served(create_app(engine, manage_lifecycle=False, listener="public")) == everything - ADMIN_SET
+
+
+async def test_the_work_role_mounts_the_work_set_and_nothing_else(make_engine: EngineFactory) -> None:
+    """Health, the work routes and the engine's own access keys. No tenant route, nothing a
+    clearinghouse admin does, no wallet and no runner list, on any listener."""
+    engine = await in_role(make_engine, "work")
+    work = HEALTH | WORK | KEYS
+    assert served(create_app(engine, manage_lifecycle=False)) == work
+    # A work engine may have a private listener too (#167): it has no private group, so both serve the
+    # work set, and the listener's rule about kinds still holds (its own admin on the private one).
+    assert served(create_app(engine, manage_lifecycle=False, listener="public")) == work
+    assert served(create_app(engine, manage_lifecycle=False, listener="private")) == work
+
+
+async def test_the_clearinghouse_role_mounts_the_clearinghouse_set_on_two_listeners(
+    make_engine: EngineFactory,
+) -> None:
+    """Health and the clearinghouse half. The public listener has the tenants' own routes; the private
+    one has those and what only a clearinghouse admin does. No job route, no catalog, no cost route, no
+    allowance read, none of the engine's own key routes, and no signer path: its tenants' engines sign
+    at the signer themselves."""
+    engine = await in_role(make_engine, "clearinghouse")
+    public = served(create_app(engine, manage_lifecycle=False, listener="public"))
+    private = served(create_app(engine, manage_lifecycle=False, listener="private"))
+    assert public == HEALTH | TENANT_SET
+    assert private == HEALTH | TENANT_SET | ADMIN_SET
+    assert not (private - HEALTH) & (WORK | KEYS)
+    under_the_prefix = {path for _, path in private - HEALTH}
+    assert all(path.startswith("/v1/clearinghouse/") for path in under_the_prefix)
+
+
+async def test_the_three_roles_serve_every_route_between_them_and_the_halves_share_health_alone(
+    make_engine: EngineFactory,
+) -> None:
+    whole = served(create_app(await in_role(make_engine, "both"), manage_lifecycle=False))
+    work = served(create_app(await in_role(make_engine, "work"), manage_lifecycle=False))
+    house = await in_role(make_engine, "clearinghouse")
+    clearinghouse = served(create_app(house, manage_lifecycle=False, listener="private"))
+    assert work | clearinghouse == whole
+    assert work & clearinghouse == HEALTH

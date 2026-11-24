@@ -98,6 +98,15 @@ DOCUMENTS = (
     ROOT / "deploy" / "dev-stack" / ".env.example",
     ROOT / "deploy" / "dev-stack" / "compose.yaml",
     ROOT / "deploy" / "dev-stack" / "config" / "init-secrets.py",
+    ROOT / "deploy" / "README.md",
+    *sorted((ROOT / "deploy" / "clearinghouse").glob("*.md")),
+    *sorted((ROOT / "deploy" / "clearinghouse").glob("*.yaml")),
+    ROOT / "deploy" / "clearinghouse" / ".env.example",
+    ROOT / "deploy" / "clearinghouse" / "config" / "init-secrets.py",
+    *sorted((ROOT / "deploy" / "enterprise").glob("*.md")),
+    *sorted((ROOT / "deploy" / "enterprise").glob("*.yaml")),
+    ROOT / "deploy" / "enterprise" / ".env.example",
+    ROOT / "deploy" / "enterprise" / "allot.py",
 )
 
 

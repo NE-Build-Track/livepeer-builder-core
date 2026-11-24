@@ -138,6 +138,7 @@ async def test_readyz_without_a_credential_serves_codes_not_exception_text(
     for leak in (SECRET, "INSERT", "discovery:8939", "UNIQUE"):
         assert leak not in answer.text
     assert set(health) == {
+        "role",  # which half of the engine this deployment runs (#169)
         "ready",
         "discovery_fresh",
         "discovery_observed_at",

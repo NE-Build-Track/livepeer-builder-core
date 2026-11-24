@@ -10,6 +10,9 @@ With ``LPB_HTTP_PRIVATE_PORT`` set, ``serve`` runs two listeners over the one en
 of its own (``http/listeners.py``, #167): the public one on ``LPB_HTTP_HOST`` and ``LPB_HTTP_PORT``, the
 private one on ``LPB_HTTP_PRIVATE_HOST`` and that port. ``extend`` runs once for each app, and
 ``app.state.listener.name`` says which it has: ``"public"`` or ``"private"``.
+
+Each app has the routes of the engine's role (``LPB_ROLE``, #169). An engine in its ``clearinghouse``
+role always serves two listeners: its settings do not load without ``LPB_HTTP_PRIVATE_PORT``.
 """
 
 import asyncio

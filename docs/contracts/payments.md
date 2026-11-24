@@ -383,10 +383,11 @@ provider itself returned, or one an in-process caller passed, cannot name anothe
 actor is saved, so a store that cannot keep the key would leave a funded allocation with no record. Two
 checks stop that:
 
-- **At startup.** An engine with a payment provider and the built-in secret store refuses to start
-  when that store cannot write, which is when `LPB_SECRET_KEY` is not set, and the error names the
-  setting; `lpb purge` and `lpb bootstrap-admin`, which never allot, give the store a key for their run
-  only (#106 review). The check runs on the parts the engine will run with, after `decorate`: a
+- **At startup.** An engine that stores allocation keys, one in its `both` or its `work` role, with a
+  payment provider and the built-in secret store refuses to start when that store cannot write, which
+  is when `LPB_SECRET_KEY` is not set, and the error names the setting. An engine in its
+  `clearinghouse` role stores none and is not asked (#169); `lpb purge` and `lpb bootstrap-admin`,
+  which never allot, give the store a key for their run only (#106 review). The check runs on the parts the engine will run with, after `decorate`: a
   decorator that turns the provider off, or installs a store of its own, is not refused, and one that
   adds a provider is. Only the built-in store is asked at startup. A supplied store that cannot write
   at boot, such as a sealed vault, still starts and is asked per request.
@@ -571,18 +572,22 @@ no signer path (D85 point 1 and D87 point 1, as Mike amended them on 19 and 23 N
 
 The engine that runs an actor's jobs keeps that actor's key:
 
-| | Self-hosted payments | A standalone clearinghouse |
+| | Self-hosted payments: the `both` role | A standalone clearinghouse: the `clearinghouse` role |
 | --- | --- | --- |
 | Keeps the key | The engine, in its `SecretStore` | The enterprise's engine. The clearinghouse keeps none |
 | The commands | `payments.allot`, `payments.rotate_payment_key` | `payments.allot_for_delivery`, `payments.rotate_for_delivery` |
 | They answer | `ActorAllocation` | `DeliveredAllocation`: the allocation, and `allocation_api_key`, `replayed` and `resumed` |
 | `credential_custody` on the allocation | `secret_store` | `work_engine` |
-| The routes are mounted by | `create_app`, the app `lpb serve` runs, which passes `deliver_allocation_keys=False` for one listener and for each of two ([access.md](access.md#listeners)) | `mount_clearinghouse_routes(app, engine, deliver_allocation_keys=True)`. The keyword is required: it has no default |
+| The routes are mounted by | `create_app`, the app `lpb serve` runs, with `deliver_allocation_keys=False`, for one listener and for each of two ([access.md](access.md#listeners)) | `create_app` too, with `deliver_allocation_keys=True`, for each of its two listeners. A caller that mounts the routes itself says which: `mount_clearinghouse_routes(app, engine, deliver_allocation_keys=...)` has no default |
+| The published schema | [openapi.json](../generated/openapi.json) | [openapi-clearinghouse.json](../generated/openapi-clearinghouse.json) |
 | Signs at the signer | The engine, with the stored key | The enterprise's engine, with the key it was handed |
 
-`lpb serve` runs the combined app, so its allotment and rotation store the key and answer none. The role
-setting that serves a clearinghouse by itself is #169. The enterprise's engine that stores a handed key
-and pays with it is built (#168): [the remote adapters](#the-remote-adapters).
+The engine's role chooses the column (`LPB_ROLE`, #169): `delivers_allocation_keys(role)` in
+`http/listeners.py` is the one place that decides, and `create_app` passes its answer to every app it
+builds. An engine in its `work` role mounts none of these routes: it is the enterprise's engine, which
+stores a handed key and pays with it ([the remote adapters](#the-remote-adapters), #168). A clearinghouse
+needs no `LPB_SECRET_KEY`, since it stores no allocation's key; the storing commands, which only an
+embedding caller reaches there, are refused before the provider is called when its store cannot write.
 
 - **Custody is recorded, never read from a reference.** `ActorAllocation.credential_custody`
   (`lpb_actors.credential_custody`, migration 0015) says who holds the key that `secret_ref` names.
@@ -1131,7 +1136,19 @@ The design is the [ISS-31 guide](../design-docs/m4-guides/iss-31-payment-configu
 | Configuration | Who runs Batteries, the signer and the wallet | State |
 | --- | --- | --- |
 | Self-hosted payments | The enterprise, for itself: one deployment with one tenant | Built (M3, ISS-13). The rest of this contract describes it |
-| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, which reaches the clearinghouse for allotment, the allowance, usage and the runner list, and signs at the clearinghouse's signer itself | Built but for the role setting and the two Compose projects that prove it (#169). M4 builds it as #162 to #169 |
+| Payment clearinghouse | A clearinghouse, for many enterprise apps. Its engine does payments only and never runs jobs. Each enterprise app runs its jobs in its own engine, which reaches the clearinghouse for allotment, the allowance, usage and the runner list, and signs at the clearinghouse's signer itself | Built (M4, #162 to #169). The two Compose projects that run it on one host are in [deploy/](../../deploy/README.md) |
+
+**The engine's role says which side a deployment is** (`LPB_ROLE`, D84, #169):
+
+| `LPB_ROLE` | Configuration | Routes | Allotment and rotation | Payment ports | Signs |
+| --- | --- | --- | --- | --- | --- |
+| `both`, the default | Self-hosted payments | The work routes and the clearinghouse routes | The engine stores each key for its own jobs and returns none | Batteries and its signer | At its signer |
+| `work` | The enterprise's side of a payment clearinghouse | The work routes | No route allots. The engine's own commands store the key the clearinghouse hands over | The clearinghouse, for allocations, the allowance and usage; its own store for keys | At the clearinghouse's published signer, `LPB_SIGNER_URL` |
+| `clearinghouse` | The clearinghouse | The clearinghouse routes, on a public and a private listener | Each key is handed to the caller once, and none is stored | Batteries | Nothing: it never runs a job |
+
+A deployment that sets nothing new is in its `both` role, and nothing it served or wired changed. What
+each role needs, refuses and starts is in [RELIABILITY.md](../RELIABILITY.md#roles), and the routes of
+each role are in [access.md](access.md#listeners).
 
 Both use `per_actor` allocations ([Allocation modes](#allocation-modes)) and the tenant rules
 ([Tenants](#tenants)). What an enterprise's engine calls at a clearinghouse is built (#166): allotment
@@ -1146,7 +1163,9 @@ a tenant's actors and their allocations, and a tenant's access keys and usage, a
 `/v1/clearinghouse/discovery`. The
 **work routes** are everything else: jobs, runners and the catalog, the cost reads with reconciliation
 (`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`), the allowance read, and an
-engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets. The
+engine's own access keys (`/v1/keys`). With self-hosted payments one deployment serves both sets; an
+engine in its `work` role serves the work routes alone, and one in its `clearinghouse` role the
+clearinghouse routes alone (#169). The
 old paths of the routes that moved are under
 [Upgrading to the work routes and the clearinghouse routes](index.md#upgrading-to-the-work-routes-and-the-clearinghouse-routes).
 
@@ -1175,8 +1194,8 @@ changed with it is under
 
 An engine that uses a payment clearinghouse (#168, D84) reaches the clearinghouse, in place of Batteries,
 for allotment, the allowance and usage. It keeps each actor's key itself and signs at the clearinghouse's
-signer itself ([payment keys](#payment-keys)). Three settings select the clearinghouse, set together or
-not at all:
+signer itself ([payment keys](#payment-keys)). It is an engine in its `work` role: `LPB_ROLE=work`
+selects the remote adapters (#169), and three settings, set together, say which clearinghouse:
 
 | Setting | Meaning |
 | --- | --- |
@@ -1186,10 +1205,14 @@ not at all:
 
 - **`LPB_SIGNER_URL` names the clearinghouse's signer.** It is set as on any engine that pays, and it is
   a second address: the clearinghouse's engine serves no signer path, and its address never stands in for
-  the signer's. With it unset the engine does not pay, as a self-hosted engine without it.
+  the signer's. With it unset the engine does not pay, as a self-hosted engine without it, and
+  [`lpb payments check`](#lpb-payments-check) fails.
 - **A half setting is refused at startup**, and so is any of the three beside `LPB_BATTERIES_URL`,
   `LPB_BATTERIES_TOKEN` or `LPB_BATTERIES_GRANTS_TOKEN`: only the clearinghouse's own engine reaches
   Batteries. The refusal names the settings and echoes no value.
+- **The role and the three settings go together** (#169). `LPB_ROLE=work` without them is refused, and
+  so are they with `LPB_ROLE` unset, `both` or `clearinghouse`: the role is the one switch, and the
+  three settings alone do not turn an engine into a clearinghouse's tenant.
 - **`LPB_SECRET_KEY` is required**, as with Batteries: the engine keeps each actor's key.
 - **`LPB_CLEARINGHOUSE_TIMEOUT_S`** (20) bounds each request. `LPB_OPERATION_STALE_S` must be at least
   six times it. The ledger cancels a run at half the stale window
@@ -1424,28 +1447,39 @@ while signing is the signer's own, and is read as a self-hosted engine reads it
 
 ### `lpb payments check`
 
-A read-only command (D87): it prints what this engine's payments need and whether each answered.
-**Every request it makes is a GET**, it builds no engine and it opens no database.
+A read-only command (D87): it prints the engine's role, what that role needs for payments and whether
+each answered (#169). **Every request it makes is a GET**, it builds no engine and it opens no database.
+An engine in its `both` or its `clearinghouse` role reaches Batteries itself, so its configuration is
+`self_hosted`; an engine in its `work` role has the configuration `clearinghouse`. Every role probes the
+signer at `LPB_SIGNER_URL`: the `both` and the `work` role sign there, and a clearinghouse runs the
+signer its tenants' engines sign at and reads its readiness there for the
+[wallet report](#the-wallet-report).
 
 | Configuration | Probe | Request | Passes when |
 | --- | --- | --- | --- |
 | Both | `signer` | `GET /sign-orchestrator-info` at the root of `LPB_SIGNER_URL`, with no credential | The answer is 405 |
 | Self-hosted | `batteries` | `GET /v1/usage?limit=1` with `LPB_BATTERIES_TOKEN` | A Batteries list is answered |
-| Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered |
+| Self-hosted | `batteries_grants`, when `LPB_BATTERIES_GRANTS_TOKEN` is set, and always in the `clearinghouse` role | `GET /v1/grants?limit=1` with that credential | A Batteries list is answered. A clearinghouse onboards its tenants with this credential, so without it the probe is `not_configured` and the check fails |
 | Clearinghouse | `clearinghouse_grant` | `GET /v1/clearinghouse/tenants/{t}/grant` with the tenant admin key | The tenant's own grant is answered. It is printed as `tenant` |
 | Clearinghouse | `clearinghouse_usage` | `GET /v1/clearinghouse/tenants/{t}/usage?limit=1` | A usage page is answered |
 | Clearinghouse | `clearinghouse_runner_list`, when it is the discovery address | `GET /v1/clearinghouse/discovery` | A list is answered |
 
 - **Exit codes:** 0 when every probe passed, 1 when one was refused or failed, 2 when the settings
-  themselves are refused. Nothing is sent in the last case.
-- **Output:** one JSON object on standard output: `configuration`, `ok`, `probes` (each with `name`,
+  themselves are refused, a role without what it needs included. Nothing is sent in the last case.
+- **Output:** one JSON object on standard output: `role`, `configuration`, `ok`, `probes` (each with `name`,
   `setting`, `request`, `outcome`, `status_code` and `detail`) and `tenant`. `outcome` is `ok`,
   `refused`, `unavailable`, `unexpected` or `not_configured`.
 - **Never printed:** a credential, an address, or anything the other side said. A probe names the
   setting to look at.
 - **An engine that uses a clearinghouse probes the clearinghouse and its signer.** The signer is asked
   at `LPB_SIGNER_URL`, as a self-hosted engine asks its own, and never at the clearinghouse's address.
-  With `LPB_SIGNER_URL` unset the probe is `not_configured` and the check fails: the engine cannot pay.
+- **A missing signer address fails the check in every role, and the probe says what follows.** No role
+  is refused at startup for it, so this is where it is said. `both`: the engine runs its jobs unpaid.
+  `work`: the same, and the address to set is the signer its clearinghouse publishes. `clearinghouse`:
+  the wallet report cannot say whether the signer answers. Nothing is sent for the probe.
+- **A clearinghouse's own check does not test the published signer.** It asks the signer where its own
+  engine reaches it, which may be an address inside its network. Whether enterprise engines can reach
+  the published address is what their own check shows.
 - **No work route is called,** and the tenant admin key is sent to the tenant's routes and the runner
   list only, never to the signer.
 - **What the signer probe proves.** The signer's identity call is a `POST`, so it cannot be made here.

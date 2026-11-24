@@ -1,7 +1,10 @@
 # Dev stack
 
 An optional local stack for driving the engine against real Livepeer payment components. It is not
-part of CI. **Orchestrators and runners are assumed to exist on the network**, so the stack runs the
+part of CI. Its engine is in the `both` role, the default: self-hosted payments, as one deployment with
+one listener. A payment clearinghouse and an enterprise that uses it are the two projects beside this
+one ([../README.md](../README.md)); there the upstream program this stack calls `clearinghouse` is the
+service `batteries`, and "payment clearinghouse" means the engine in its `clearinghouse` role. **Orchestrators and runners are assumed to exist on the network**, so the stack runs the
 payment side, node's discovery and the engine:
 
 | Service | What it is |

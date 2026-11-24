@@ -11,7 +11,12 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 to P5 are merged into `releases/m4`. P6 and P7 are built and in review. P8 follows.
+- **Progress:** P1 to P5 are merged into `releases/m4`. P6, P7 and P8 are built and in review. The paid
+  proofs of P8 were run on 19 November 2026 on the signer proxy, which was withdrawn that day:
+  [the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md) says which still
+  stand. The proofs through a clearinghouse were run again on 23 November 2026, on the direct-signer
+  path, from the runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook):
+  [the evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md).
 
 ## Goal
 
@@ -60,7 +65,8 @@ Funded evidence for both configurations is ISS-36, not this plan.
 - [ ] **P7 (#168).** Remote adapters for the payment ports that reach the clearinghouse, the payment keys
   an enterprise's engine is handed, and `lpb payments check`. Built and in review:
   [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
-- [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it.
+- [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it. Built and in
+  review: [#183](https://github.com/NE-Build-Track/livepeer-builder-core/pull/183).
 
 Each pull request ticks its own line here in the same change.
 
@@ -128,6 +134,18 @@ Each pull request ticks its own line here in the same change.
   closed); an engine that uses a clearinghouse serves neither the signer's two paths nor a wallet
   report; an allocation an actor no longer holds still cannot be read through a clearinghouse (T40).
   Source: Mike (the two decisions, as dated notes on #168); the rest for his review.
+- **19 November 2026, P8.** The role is the one switch: `LPB_ROLE=work` selects the remote adapters,
+  and the three clearinghouse settings say which clearinghouse. So those settings without
+  `LPB_ROLE=work` are refused at startup, where #168 let them select the adapters by themselves; nothing
+  released used them. Built where the guide is silent: `GET /v1/offerings` and `/v1/keys` are work
+  routes, so a clearinghouse serves neither; `/livez` and `/readyz` are served in every role, and
+  `/readyz` names the role; an engine in its `clearinghouse` role also needs a signer, Batteries and the
+  grants credential, judged on the parts it runs with, and refuses to run a job for an embedding caller
+  too; an engine in its `work` role may still have a private listener; one committed schema documents
+  the three roles, each route tagged with its half. The two Compose projects publish the public
+  listener without the guide's proxy (T43), and the enterprise project allots through the embedded
+  API, because an engine server in its `work` role serves no route that allots (T41). Source: D84, D87
+  and the guide's table of roles; the rest for Mike's review.
 - **23 November 2026, D87 point 1.** A resumed allotment or rotation hands the key over whenever
   Batteries returns it again: Batteries replays the original success, the secret included, for a
   matching idempotency key, and never expires it. A repeat of a finished command answers without the key
@@ -178,3 +196,27 @@ Each pull request ticks its own line here in the same change.
   the engine's store. The stale window of an engine that uses a clearinghouse is six timeouts of a
   call, for the three calls of an overtaken rotation, and the default timeout is 20 seconds so that the
   defaults meet it. This replaces what the entry above says of `revoke_key`.
+- **23 November 2026, P8, carried forward.** The direct-signer design is merged into P8's branch, and
+  the role follows it. Only an engine in its `clearinghouse` role hands allocation keys over, on both
+  of its listeners; an engine in its `both` role keeps them, on one listener or two; one function
+  decides (`delivers_allocation_keys`). Built where the amended decisions are silent, for Mike's
+  review: a clearinghouse needs no `LPB_SECRET_KEY`, since it stores no allocation's key; it is given
+  no transport that could pay, only the signer's identity call for its wallet report; no role is
+  refused at startup for a missing `LPB_SIGNER_URL`, and `lpb payments check` fails for it and says
+  what follows in each role; the wallet report and a clearinghouse's own check read the signer where
+  the clearinghouse's engine reaches it, never at its published address; the `clearinghouse` role's
+  schema is published as a second generated file, which closes T48; and the clearinghouse project
+  publishes the signer through a TCP relay of its one port, because the signer shares Batteries'
+  network namespace and nothing of Batteries is published. The paid proofs of 19 November through a
+  clearinghouse ran on the withdrawn signer proxy and are to be run again from the rewritten runbook;
+  the proof of the `both` role stands. Source: #169 as amended on 19 November 2026, D84 point 2, D85
+  point 1 and D87 point 1.
+- **23 November 2026, P8, the paid proofs.** Proofs (a) and (b) were run again from the runbook, on the
+  direct-signer path, from new volumes: an allotment from the enterprise's engine left the key in its
+  store and none at the clearinghouse; a fixed-price image job, a refused fixed-price job and three jobs
+  priced by the second were signed at the published signer and accounted to tenant one alone; an actor
+  with an empty allocation was refused by the signer with nothing signed. $0.021248 was charged. The run found that the
+  runbook's helper for the private listener recreated the clearinghouse's engine once the enterprise
+  project had rebuilt the shared image; the helper now runs with `--no-deps`. The proof of the `both`
+  role was not run again.
+  [The evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md).

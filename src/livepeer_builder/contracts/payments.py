@@ -155,10 +155,10 @@ SignerNotReady = Literal["not_configured", "unavailable", "no_identity"]
 
 class SignerReadiness(Contract):
     """Whether the signer answered its identity call just now (#167): the unauthenticated call every
-    payment begins with. ``ready`` says the signer is reachable where the engine calls it and signed
-    with the wallet's key. It does not say the wallet is funded, that the signer's price feed or event
-    stream is up, or that it can reach the payment provider: those are the signer's own ``/readyz``, on
-    a listener the engine is not given."""
+    payment begins with. ``ready`` says the signer is reachable where the engine calls it and answered
+    with an address and a signature, which the engine does not check. It does not say the wallet is
+    funded, that the signer's price feed or event stream is up, or that it can reach the payment
+    provider: those are the signer's own ``/readyz``, on a listener the engine is not given."""
 
     ready: bool
     reason: SignerNotReady | None = None  # None when ready

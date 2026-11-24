@@ -828,6 +828,7 @@ clearinghouse set.
 | `GET /v1/clearinghouse/discovery` | `runner_list.document` | livepeer/node's `/discovery` document, as the clearinghouse read it; only when `runner_list` is set |
 | `POST, GET /v1/clearinghouse/tenants`, `GET /v1/clearinghouse/tenants/{tenant}/grant`, `POST /v1/clearinghouse/tenants/{tenant}/status` | `payments.tenants.onboard`, `list_tenants`, `grant`, `set_status` | `OnboardedTenant`, `TenantGrant[]`, `TenantGrant`, `TenantState`; only when `payments.tenants` is set |
 | `POST /v1/clearinghouse/tenants/{tenant}/grant/top-up` | `payments.top_up_grant` | `204` |
+| `GET /v1/clearinghouse/wallet` | `payments.wallet.report` | `WalletReport`; only when `payments.wallet` is set. With two listeners, on the private one only (#167) |
 | `POST, GET /v1/clearinghouse/tenants/{tenant}/keys`, `GET .../keys/{id}`, `POST .../keys/{id}/rotate`, `POST .../keys/{id}/revoke` | `keys.*`, with the tenant from the path | only when `engine.keys` is set |
 
 The generated schema is [generated/openapi.json](../generated/openapi.json); CI fails when it drifts.
@@ -951,6 +952,7 @@ sequenceDiagram
     Op->>U: SIGTERM
     U->>LS: shutdown
     LS->>BE: stop()
+    Note over Srv,U: With LPB_HTTP_PRIVATE_PORT set, serve() builds two apps (public, private), binds both addresses,<br/>starts the engine once, runs a server for each, and stops the engine when both have ended (#167)
     U-->>Srv: returns
     Srv->>BE: stop() again in finally (idempotent, covers a server that never started)
 ```

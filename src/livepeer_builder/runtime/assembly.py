@@ -33,12 +33,14 @@ from livepeer_builder.protocols import (
     DiscoveryDocumentSource,
     DiscoverySource,
     EngineStore,
+    EscrowSource,
     EventFeed,
     KeyRepo,
     RunnerTransport,
     SecretStore,
     SelectionPolicy,
     SessionManager,
+    SignerProbe,
     TenantUsageSource,
     UsageSource,
 )
@@ -56,6 +58,7 @@ from livepeer_builder.services.sightings import SightingRecorder
 from livepeer_builder.services.streams import StreamLimits
 from livepeer_builder.services.tenant_usage import TenantUsage
 from livepeer_builder.services.tenants import TenantDesk
+from livepeer_builder.services.wallet import Wallet
 
 _LOG = logging.getLogger(__name__)
 
@@ -299,6 +302,11 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     usage: TenantUsage | None = None
     if isinstance(parts.usage_source, TenantUsageSource):  # otherwise no tenant's usage is served (#166)
         usage = TenantUsage(parts.usage_source, parts.policy)
+    wallet: Wallet | None = None
+    # otherwise no wallet report is served (#167): the grants manager reports the escrow and the grants,
+    # and the transport asks the signer it pays through
+    if isinstance(parts.grants_manager, EscrowSource) and isinstance(parts.transport, SignerProbe):
+        wallet = Wallet(parts.grants_manager, parts.grants_manager, parts.transport, parts.policy)
     payments = PaymentsService(
         store=parts.store,
         secrets=parts.secret_store,
@@ -309,6 +317,7 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         manager=parts.allocation_manager,
         tenants=tenants,
         usage=usage,
+        wallet=wallet,
         currency=settings.default_currency,
     )
     admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)

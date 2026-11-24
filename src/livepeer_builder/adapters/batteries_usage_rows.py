@@ -133,17 +133,28 @@ def _past_the_decoder(item: str) -> bool:
     return False
 
 
-# One JSON token, as the decoder reads it by default: no control character in a string, no leading zero,
-# ASCII digits, and the three names it takes for numbers that are none.
-_JSON_TOKEN = re.compile(
-    r"""[ \t\n\r]*(?:
-        (?P<string>"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*")
-      | (?P<scalar>-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?|true|false|null|NaN|-?Infinity)
-      | (?P<open>[\[{]) | (?P<close>[\]}]) | (?P<comma>,) | (?P<colon>:) | (?P<end>\Z)
-    )""",
-    re.VERBOSE,
+# The decoder's grammar, as it reads by default: no control character in a string, no leading zero, ASCII
+# digits, and the names it takes for numbers that are none. Each pattern is matched where a token starts.
+_SPACE = re.compile(r"[ \t\n\r]*")
+_STRING = re.compile(r'"[^"\\\x00-\x1f]*(?:\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})[^"\\\x00-\x1f]*)*"')
+_NUMBER = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?", re.ASCII)
+_NAMES = ("true", "false", "null", "NaN", "Infinity", "-Infinity")
+# the kinds of token
+_SCALAR, _TEXT, _OPEN, _CLOSE, _COMMA, _COLON, _END = (
+    "scalar",
+    "string",
+    "open",
+    "close",
+    "comma",
+    "colon",
+    "end",
 )
+_PUNCTUATION = {"[": _OPEN, "{": _OPEN, "]": _CLOSE, "}": _CLOSE, ",": _COMMA, ":": _COLON}
 _CLOSES = {"]": "[", "}": "{"}
+# what may come next
+_A_VALUE, _A_FIRST_VALUE, _A_KEY, _A_FIRST_KEY = "a value", "a first value", "a key", "a first key"
+_A_COLON, _A_COMMA_OR_CLOSE, _THE_END = "a colon", "a comma or a close", "the end"
+_NOTHING_MORE, _NO_JSON = "nothing more", "no JSON"
 
 
 def is_json(text: str) -> bool:
@@ -151,31 +162,45 @@ def is_json(text: str) -> bool:
     the brackets that are open: no recursion and no number is built, so neither of the decoder's limits
     is met, whatever the nesting and however long an integer."""
     opened: list[str] = []
-    expects, position = "value", 0
-    while expects not in ("nothing more", "no JSON"):
-        token = _JSON_TOKEN.match(text, position)
-        if token is None or token.lastgroup is None:
+    expects, position = _A_VALUE, 0
+    while expects not in (_NOTHING_MORE, _NO_JSON):
+        token = _token(text, position)
+        if token is None:
             return False
-        position = token.end()
-        expects = _NEXT[expects](token.lastgroup, token.group(token.lastgroup), opened)
-    return expects == "nothing more"
+        kind, value, position = token
+        expects = _NEXT[expects](kind, value, opened)
+    return expects == _NOTHING_MORE
+
+
+def _token(text: str, start: int) -> tuple[str, str, int] | None:
+    """The token at ``start``, after any space: its kind, its text and where it ends. None for none."""
+    at = _SPACE.match(text, start).end()  # type: ignore[union-attr]  # it matches no space too
+    if at == len(text):
+        return _END, "", at
+    if text[at] in _PUNCTUATION:
+        return _PUNCTUATION[text[at]], text[at], at + 1
+    for name in _NAMES:
+        if text.startswith(name, at):
+            return _SCALAR, name, at + len(name)
+    found = (_STRING if text[at] == '"' else _NUMBER).match(text, at)
+    return None if found is None else (_TEXT if text[at] == '"' else _SCALAR, found.group(), found.end())
 
 
 def _closed(opened: list[str]) -> str:
     """What follows a value that has just ended."""
-    return "comma or close" if opened else "end"
+    return _A_COMMA_OR_CLOSE if opened else _THE_END
 
 
 def _value(kind: str, text: str, opened: list[str], *, may_close: bool = False) -> str:
-    if kind in ("string", "scalar"):
+    if kind in (_TEXT, _SCALAR):
         return _closed(opened)
-    if kind == "open":
+    if kind == _OPEN:
         opened.append(text)
-        return "first value" if text == "[" else "first key"
-    if kind == "close" and may_close and text == "]":  # an empty list
+        return _A_FIRST_VALUE if text == "[" else _A_FIRST_KEY
+    if kind == _CLOSE and may_close and text == "]":  # an empty list
         opened.pop()
         return _closed(opened)
-    return "no JSON"
+    return _NO_JSON
 
 
 def _first_value(kind: str, text: str, opened: list[str]) -> str:
@@ -183,12 +208,12 @@ def _first_value(kind: str, text: str, opened: list[str]) -> str:
 
 
 def _key(kind: str, text: str, opened: list[str], *, may_close: bool = False) -> str:
-    if kind == "string":
-        return "colon"
-    if kind == "close" and may_close and text == "}":  # an empty object
+    if kind == _TEXT:
+        return _A_COLON
+    if kind == _CLOSE and may_close and text == "}":  # an empty object
         opened.pop()
         return _closed(opened)
-    return "no JSON"
+    return _NO_JSON
 
 
 def _first_key(kind: str, text: str, opened: list[str]) -> str:
@@ -196,30 +221,30 @@ def _first_key(kind: str, text: str, opened: list[str]) -> str:
 
 
 def _colon(kind: str, text: str, opened: list[str]) -> str:
-    return "value" if kind == "colon" else "no JSON"
+    return _A_VALUE if kind == _COLON else _NO_JSON
 
 
 def _comma_or_close(kind: str, text: str, opened: list[str]) -> str:
-    if kind == "comma":
-        return "value" if opened[-1] == "[" else "key"
-    if kind == "close" and _CLOSES[text] == opened[-1]:
+    if kind == _COMMA:
+        return _A_VALUE if opened[-1] == "[" else _A_KEY
+    if kind == _CLOSE and _CLOSES[text] == opened[-1]:
         opened.pop()
         return _closed(opened)
-    return "no JSON"
+    return _NO_JSON
 
 
 def _end(kind: str, text: str, opened: list[str]) -> str:
-    return "nothing more" if kind == "end" else "no JSON"
+    return _NOTHING_MORE if kind == _END else _NO_JSON
 
 
 _NEXT = {
-    "value": _value,
-    "first value": _first_value,
-    "key": _key,
-    "first key": _first_key,
-    "colon": _colon,
-    "comma or close": _comma_or_close,
-    "end": _end,
+    _A_VALUE: _value,
+    _A_FIRST_VALUE: _first_value,
+    _A_KEY: _key,
+    _A_FIRST_KEY: _first_key,
+    _A_COLON: _colon,
+    _A_COMMA_OR_CLOSE: _comma_or_close,
+    _THE_END: _end,
 }
 
 

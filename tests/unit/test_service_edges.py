@@ -107,10 +107,10 @@ async def test_allotment_needs_a_provider_and_the_tenants_grant(
     store: SqlStore, clock: FixedClock, admin: ActorContext
 ) -> None:
     secret_key = generate_secret_key()
-    no_provider = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False, discovery_url="http://127.0.0.1:9/discovery"), supply=EngineSupply(store=store, clock=clock))  # fmt: skip
+    no_provider = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False), supply=EngineSupply(store=store, clock=clock))  # fmt: skip
     with pytest.raises(ProviderUnavailable, match="management API"):
         await no_provider.payments.allot(admin, allot())
-    no_grant = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False, discovery_url="http://127.0.0.1:9/discovery"), supply=EngineSupply(store=store, clock=clock, allocation_manager=FakeAllocationManager(), grants_manager=FakeAllocationManager()))  # fmt: skip
+    no_grant = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False), supply=EngineSupply(store=store, clock=clock, allocation_manager=FakeAllocationManager(), grants_manager=FakeAllocationManager()))  # fmt: skip
     with pytest.raises(NotFound, match="tenant 'default' has no grant"):  # the provider holds no such grant
         await no_grant.payments.allot(admin, allot())
     with pytest.raises(ProviderUnavailable, match="management API"):
@@ -152,7 +152,7 @@ async def test_cost_service_guard_clauses(
 
 
 async def test_costs_without_a_provider(store: SqlStore, clock: FixedClock, admin: ActorContext) -> None:
-    engine = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False, discovery_url="http://127.0.0.1:9/discovery"), supply=EngineSupply(store=store, clock=clock))  # fmt: skip
+    engine = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False), supply=EngineSupply(store=store, clock=clock))  # fmt: skip
     with pytest.raises(ProviderUnavailable, match="no usage source"):
         await engine.costs.sync_once()
     await engine.stop()

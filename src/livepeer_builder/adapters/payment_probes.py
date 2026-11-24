@@ -212,7 +212,8 @@ async def _clearinghouse(settings: EngineSettings, client: httpx.AsyncClient) ->
         await _tenant_usage(client, base, tenant_path, headers),
         await _signer(settings, client),  # the clearinghouse's signer, asked as an engine asks its own
     ]
-    if settings.clearinghouse_runner_list_token is not None:  # the list is this engine's discovery address
+    # the list is this engine's discovery address: the key goes to that address and no other
+    if settings.discovery_url is not None and settings.clearinghouse_runner_list_token is not None:
         probes.append(await _runner_list(client, settings.discovery_url, headers))
     return _checked(settings, "clearinghouse", probes, grant)
 

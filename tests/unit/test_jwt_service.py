@@ -88,13 +88,12 @@ def bearer(token: str) -> dict[str, str]:
 
 
 def test_api_keys_stay_the_default() -> None:
-    assert EngineSettings(discovery_url="http://127.0.0.1:9/discovery").auth == ("api_keys",)
+    assert EngineSettings().auth == ("api_keys",)
 
 
 def test_jwt_settings_come_from_the_environment() -> None:
     settings = EngineSettings.from_env(
         {
-            "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
             "LPB_AUTH": "jwt, api_keys",
             "LPB_JWT_ISSUER": "https://idp.example.com/",
             "LPB_JWT_AUDIENCE": AUDIENCE,
@@ -144,11 +143,10 @@ def test_jwt_settings_come_from_the_environment() -> None:
 )
 def test_bad_auth_settings_fail_at_startup(values: dict[str, Any], complaint: str) -> None:
     with pytest.raises(ValidationError, match=complaint):
-        EngineSettings.model_validate({"discovery_url": "http://127.0.0.1:9/discovery", **values})
+        EngineSettings.model_validate(values)
 
 
 JWT = {
-    "discovery_url": "http://127.0.0.1:9/discovery",
     "auth": "jwt",
     "jwt_issuer": "https://idp.example/",
     "jwt_audience": AUDIENCE,
@@ -182,7 +180,7 @@ def test_either_source_alone_starts(tenant: dict[str, str]) -> None:
 
 
 def test_without_jwt_neither_tenant_source_is_needed_and_neither_has_a_default() -> None:
-    settings = EngineSettings(discovery_url="http://127.0.0.1:9/discovery")
+    settings = EngineSettings()
     assert (settings.jwt_tenant_claim, settings.jwt_tenant_id) == (None, None)
 
 
@@ -301,7 +299,6 @@ async def test_without_a_bearer_challenge_no_scheme_is_declared(idp: IdentityPro
 
 def test_review_defaults_are_strict() -> None:
     settings = EngineSettings(
-        discovery_url="http://127.0.0.1:9/discovery",
         auth=("jwt",),
         jwt_issuer="https://idp/",
         jwt_audience="a",
@@ -343,7 +340,6 @@ def test_review_defaults_are_strict() -> None:
 def test_risky_jwt_settings_fail_at_startup(values: dict[str, Any], complaint: str) -> None:
     """An admin scope every user token carries would make every user an admin (#50 review)."""
     base = {
-        "discovery_url": "http://127.0.0.1:9/discovery",
         "auth": "jwt",
         "jwt_issuer": "https://idp/",
         "jwt_audience": "a",
@@ -355,7 +351,6 @@ def test_risky_jwt_settings_fail_at_startup(values: dict[str, Any], complaint: s
 
 def test_token_types_are_read_as_a_lower_case_list() -> None:
     base = {
-        "discovery_url": "http://127.0.0.1:9/discovery",
         "auth": "jwt",
         "jwt_issuer": "https://idp/",
         "jwt_audience": "a",
@@ -367,7 +362,6 @@ def test_token_types_are_read_as_a_lower_case_list() -> None:
 
 def test_the_dev_override_allows_an_http_issuer() -> None:
     settings = EngineSettings(
-        discovery_url="http://127.0.0.1:9/discovery",
         auth=("jwt",),
         jwt_issuer="http://keycloak:8080/",
         jwt_audience="a",

@@ -138,15 +138,18 @@ and the private listener's default of `127.0.0.1`), which the system refuses onl
 listens. The engine starts once, before either listener accepts a request, and stops once, after both
 have ended. Neither serves without the other: SIGINT or SIGTERM ends both in order, each waiting for its
 open connections (a second Ctrl-C does not wait for them), and a listener that ends for a reason of its
-own ends the other. That other one does not wait: it hangs up on its open connections, so a request in
-flight sees its caller disconnect, and it skips its app's shutdown handlers, as after a second Ctrl-C;
+own ends the other. That other one does not wait: it hangs up on its open connections and skips its
+app's shutdown handlers, as after a second Ctrl-C. A request still running then is cancelled, and
+`serve()` waits for it before it stops the engine, so a paid job in flight ends as a cancelled job
+does (`uncertain`, its paid attempt kept) and is not left `running` under an engine that has stopped;
 the engine still stops in order. The process then ends, where it used to stay up for as long as one
 connection was held open, with a listener gone and nothing to restart it. `lpb serve` then
 exits 0. An application that runs `serve()` in a task of its own stops it by cancelling that task, and
 off the main thread, where no signal arrives, that is the only way. A cancel does not wait for requests
 in flight, with one listener or two: each listener is closed, hangs up on its open connections and skips
-its app's shutdown handlers, the engine stops in order, and the task ends with its cancellation,
-within a moment and not when the last request does. A cancel that arrives after a first signal, or a
+its app's shutdown handlers, the requests still running are cancelled and waited for, the engine stops
+in order, and the task ends with its cancellation, within a moment and not when the last request would
+have ended. A handler that does not end when it is cancelled holds `serve()`. A cancel that arrives after a first signal, or a
 second cancel, does the same. Whichever way `serve()` ends, every listener has ended, its port is free
 again, and the process has the signal handlers it had before. Both listeners answer `/livez` and `/readyz`, from the one
 engine, so a health check may use either. The log line `http.listeners_bound` names both addresses.

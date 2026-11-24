@@ -11,7 +11,8 @@ The sets register their routes on the app itself, as ``create_app`` always did, 
 ``include_router``: every route stays an ``APIRoute`` in ``app.routes``, which the structure tests read
 (tests/structure/test_route_params.py).
 
-The generated schema is committed at docs/generated/openapi.json and checked for drift in CI.
+The generated schema is committed at docs/generated/openapi.json, with the ``clearinghouse`` role's at
+docs/generated/openapi-clearinghouse.json, and both are checked for drift in CI.
 """
 
 from collections.abc import AsyncIterator
@@ -42,7 +43,7 @@ from livepeer_builder.errors import (
     ProviderUnavailable,
 )
 from livepeer_builder.http.limits import DEFAULT_MAX_REQUEST_BYTES, install_request_limit
-from livepeer_builder.http.listeners import ListenerName, mount_listener_routes
+from livepeer_builder.http.listeners import ListenerName, delivers_allocation_keys, mount_listener_routes
 from livepeer_builder.http.replies import JOB_ID_HEADER
 from livepeer_builder.http.unprocessable import install_unprocessable_handler
 
@@ -82,7 +83,10 @@ def create_app(
     ``manage_lifecycle`` on one of them at most, since an engine starts once. An engine in its
     ``clearinghouse`` role always has two: ``"only"`` raises ``ValueError`` for it."""
     app = shared_app(engine, manage_lifecycle=manage_lifecycle, max_request_bytes=max_request_bytes)
-    mount_listener_routes(app, engine, listener)
+    # By the role, for every listener: only a clearinghouse hands each allocation's key to the caller.
+    mount_listener_routes(
+        app, engine, listener, deliver_allocation_keys=delivers_allocation_keys(engine.role)
+    )
     return app
 
 

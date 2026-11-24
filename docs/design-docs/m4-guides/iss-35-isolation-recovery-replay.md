@@ -79,7 +79,7 @@ systems of record and must reproduce the incremental answer.**
 One table-driven test per surface: the FastAPI route table, the facade (`api.py`), and the MCP tool
 list (ISS-30). Principals: owner actor, other actor same tenant, actor of another tenant, auditor same
 tenant, auditor other tenant, tenant admin same tenant, tenant admin other tenant, clearinghouse admin on
-each listener, a payment key for another actor, revoked key, expired JWT, no credential.
+each listener, a payment key (a credential at the signer only), revoked key, expired JWT, no credential.
 Expected outcome per (operation kind, principal) from one table (200 / 403 / 404 per D44 / 401), run
 under `LPB_AUTH=api_keys`, `jwt` and `jwt,api_keys`. A new route or tool is covered without editing the
 test; one with no row fails. Includes job results, session proxy paths and async job reads.
@@ -266,7 +266,11 @@ The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configu
 isolation sweep. Recovery and replay are unchanged.
 
 - **New principals.** A tenant admin of the same tenant, a tenant admin of another tenant, a clearinghouse
-  admin on each listener, and a payment key for another actor. The list above is changed.
+  admin on each listener, and a payment key, which is a credential at the signer and 401 on every engine
+  route. The list above is changed.
+- **The payment key handover.** Allotment and rotation at a clearinghouse hand an actor's payment key to
+  that tenant's own admin, or to a clearinghouse admin, and to nobody else: another tenant's admin is 403
+  before any provider call (#166).
 - **New routes.** The clearinghouse routes join the sweep: another tenant in the path is 403, and the
   private routes are 404 on the public listener (#165, #167).
 - **Usage isolation.** The usage route returns one tenant's records (#166).

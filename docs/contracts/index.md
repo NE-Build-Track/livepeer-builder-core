@@ -12,7 +12,10 @@ the contract is fixed but the implementation is scheduled later; calling it answ
 | [persistence.md](persistence.md): store, migrations, retention, backup | ISS-06 | Implemented |
 | [discovery.md](discovery.md): livepeer/node's `/discovery` contract | ISS-09, #45, D63 | `HttpDiscoverySource` reads `LPB_DISCOVERY_URL`. This repository ships no discovery process; a clearinghouse's engine serves the document it read (#166) |
 
-The REST surface is generated into [../generated/openapi.json](../generated/openapi.json).
+The REST surface is generated into [../generated/openapi.json](../generated/openapi.json): every route
+of an engine in its `both` role, each tagged with its half. The routes of an engine in its
+`clearinghouse` role, whose allotment and rotation answer the allocation with its key, are generated
+into [../generated/openapi-clearinghouse.json](../generated/openapi-clearinghouse.json) (#169).
 
 ## Upgrading to the M4 hardening (#112 to #115)
 
@@ -165,70 +168,82 @@ key it has not seen:
 tenant's id for every allocation allotted from now on), `LPB_BATTERIES_GRANTS_TOKEN`,
 `EngineSupply.grants_manager`, the permission strings, and the words Batteries uses on its own API.
 
-## Upgrading to payment keys, a tenant's usage and the runner list
+## Upgrading to the payment key handover, a tenant's usage and the runner list
 
-On 19 November 2026 the clearinghouse gained what an enterprise's engine needs from it (D87, #166): a
-payment key for each actor, the signer's two paths that take one, the tenant's usage and the runner list.
-Two answers gained a field, one contract gained a required field, and four routes are new. No path, body
-or status code of an existing route changed.
+With #166 the clearinghouse gained what an enterprise's engine needs from it (D85 and D87, as Mike
+amended them on 19 and 23 November 2026): each actor's payment key, handed over once by allotment and
+rotation at a standalone clearinghouse, the tenant's usage and the runner list. Every allocation answer
+gained a field, one contract gained a required field, and two routes are new. No path, body or status
+code of an existing route changed.
 
 | What | Before | Now |
 | --- | --- | --- |
-| The answer to allotting an allocation | `201` `ActorAllocation` | `201` `KeyedAllocation`: every field of `ActorAllocation` where it was, and `payment_key`, `{token, replayed}`. The token (`lpp_...`) is shown once |
-| The answer to rotating a payment key | `200` `ActorAllocation` | `200` `KeyedAllocation`. The rotation still rotates the Batteries key, and now replaces the payment key too: the old one stops at once |
-| Allot and rotate, in embedded mode | `payments.allot`, `payments.rotate_payment_key` return `ActorAllocation` | They return `KeyedAllocation`, which is an `ActorAllocation`. It no longer compares equal to the stored record: compare `.allocation` |
+| `ActorAllocation` (every allocation answer and read, and each `KnownActor.allocation`) | | and `credential_custody`: `secret_store` (the engine's `SecretStore` holds the key) or `work_engine` (the key was handed to the enterprise's engine). It defaults to `secret_store` |
+| The answer to allotting an allocation and to rotating a payment key, on the app `lpb serve` runs (`create_app`) | `201` and `200` `ActorAllocation` | The same, with `credential_custody: secret_store` and `Cache-Control: no-store`. The engine stores the key and returns none, as before |
+| The same two answers, where the clearinghouse routes are mounted for a standalone clearinghouse | | The allocation, with `credential_custody: work_engine`, and `allocation_api_key` (the allocation's `lpg_` key, once), `replayed` and `resumed` ([payments.md](payments.md#payment-keys)) |
+| Mounting the clearinghouse routes | `mount_clearinghouse_routes(app, engine)`, `mount_tenant_routes(app, engine)` | Each requires the keyword `deliver_allocation_keys`, which has no default: a call without it is a `TypeError`. `True` is a standalone clearinghouse, which hands each key to the caller and stores none. `False` is an engine that also runs jobs, which stores the key: `create_app` passes it, and so does an app that mounts the set itself on such an engine. With `True` there, that actor's jobs fail `not_provisioned` |
+| Allot and rotate, in embedded mode | `payments.allot`, `payments.rotate_payment_key` return `ActorAllocation` and store the key | Unchanged. Beside them, `payments.allot_for_delivery` and `payments.rotate_for_delivery` return `DeliveredAllocation` and store no key. A command left unfinished is resumed only by the kind that began it: the other kind under that `operation_ref` is 409 `operation_conflict` ([payments.md](payments.md#payment-keys)) |
+| A command that resumed an unfinished run, in embedded mode | `OPERATION_REPLAYED` (`livepeer_builder.contracts`) marks a replay | and `OPERATION_RESUMED`, `True` right after a command that resumed a run an earlier attempt left unfinished |
 | `TenantGrant` (the tenant list, the grant read) | `tenant_id`, `name`, `status`, `total`, `unallocated` | and `spent`, required: what the tenant's allocations have spent |
 | A tenant's payment records | not served | `GET /v1/clearinghouse/tenants/{tenant_id}/usage` (`UsagePage`); `engine.payments.usage` |
 | The clearinghouse's runner list | not served | `GET /v1/clearinghouse/discovery`, livepeer/node's document; `engine.runner_list` |
-| Signing a payment for another engine | not served | `POST /sign-orchestrator-info` and `POST /generate-live-payment`, at the root, each with a payment key, on an engine with a signer (`LPB_SIGNER_URL`); `engine.payments.signing` |
 | A usage cursor the provider refuses, over REST | `CursorMismatch` had no status of its own | 400, `code: cursor_mismatch` |
-| The facade | `PaymentsAdminApi`, `ClearinghouseApi` | `PaymentsAdminApi.usage` (`TenantUsageApi \| None`), `PaymentsAdminApi.signing` (`PaymentSigningApi \| None`), `ClearinghouseApi.runner_list` (`RunnerListApi \| None`) |
+| The facade | `PaymentsAdminApi`, `ClearinghouseApi` | `PaymentsAdminApi.allot_for_delivery` and `rotate_for_delivery`, `PaymentsAdminApi.usage` (`TenantUsageApi \| None`), `ClearinghouseApi.runner_list` (`RunnerListApi \| None`). A facade of your own that stands in for `PaymentsAdminApi` adds them |
 | The `AllocationManager` port | `read_grant` and `grant_balances` return a `TenantGrant` | The same, and each states `spent` |
-| Optional protocols | | `PaymentKeyRepo` (a store), `TenantUsageSource` (a usage source), `DiscoveryDocumentSource` (a discovery source), `SignerForwarder` (a runner transport). A supplied part without one runs without what it serves |
+| `ActorCommandRepo.set_actor_key` (a supplied store's conditional key write) | `(tenant_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from)` | and the keyword `credential_custody`, which the engine always passes and the store writes with the key ([persistence.md](persistence.md#store)) |
+| Optional protocols | | `TenantUsageSource` (a usage source), `DiscoveryDocumentSource` (a discovery source). A supplied part without one runs without what it serves |
 | `FakeUsageSource` (`livepeer_builder.testing`) | `page` | and `tenant_page`, with `grant_of`, a map from an allocation to the grant it was allotted from |
-| The signer behind a clearinghouse, in a test | | `FakeSigningTransport` (`livepeer_builder.testing`): a scripted transport that also forwards signer calls and records each as a `ForwardedSignerCall` |
-| The published schema | | The two signer paths, with the security scheme `PaymentKey`. `lpb gen-docs` builds its engine with a signer address so they are in it |
-| Root exports | | `KeyedAllocation`, `IssuedPaymentKey`, `UsagePage`, `UsageRow`, `SetAsideUsage`, `SignerAnswer`, `SignerCall`, and the errors `SignerNotReached` and `SignerOutcomeUnknown` |
+| The published schema | | `ActorAllocation` has `credential_custody`. The schema is the combined app's (`create_app`), so it does not show the answer that hands a key over |
+| Root exports | | `DeliveredAllocation`, `UsagePage`, `UsageRow` and `SetAsideUsage`. From `livepeer_builder.contracts` also `CredentialCustody` and `OPERATION_RESUMED` |
 
 **Before you start the new release:**
 
 - **Migrate.** `lpb migrate` applies revision 0015, or the engine does at start with `LPB_AUTO_MIGRATE`
-  ([persistence.md](persistence.md#migrations)). It adds one table and changes no other.
+  ([persistence.md](persistence.md#migrations)). It adds one column, `lpb_actors.credential_custody`,
+  and every existing actor becomes `secret_store`.
 - **Nothing to finish first.** No command hashes or sends anything it did not before, so a command
-  recorded before the upgrade is replayed or resumed as it was.
-- **Existing allocations have no payment key.** With self-hosted payments none is needed. At a
-  clearinghouse, rotate an actor's payment key to issue its first
-  ([payments.md](payments.md#payment-keys)).
+  recorded before the upgrade is replayed or resumed as it was. A record that notes no custody is read
+  as `secret_store`: every secret then was the configured store's.
+- **Existing allocations need nothing.** With self-hosted payments the engine keeps holding each key in
+  its `SecretStore` and paying with it.
+- **A supplied store** takes `credential_custody` on `set_actor_key`, when it has the conditional
+  writes, and keeps `ActorAllocation.credential_custody` with the actor it saves and returns.
 - **A supplied `AllocationManager`** states `spent` on the `TenantGrant` it returns, or building one
   fails.
-- **Move the clients.** A client that reads the allocation from the two answers keeps working. One that
+- **Move the clients.** A client that reads the allocation from an answer keeps working. One that
   refuses unknown fields is generated again from the OpenAPI document.
-- **An engine with a signer serves two more paths, at the root.** A deployment whose proxy publishes the
-  engine publishes `POST /sign-orchestrator-info` and `POST /generate-live-payment` with it. They answer
-  a payment key only. With self-hosted payments nothing calls them, and a proxy may leave them out.
+- **A database that ran this work before it was released** is recreated. An earlier revision 0015
+  created a table `lpb_payment_keys`; it was never released, and it is deleted, not undone by a later
+  revision (Mike, 23 November 2026). The revision check will not tell you: that revision had the same
+  number, so such a database records 0015, the engine starts on it and `lpb migrate` changes nothing.
+  A database that has `lpb_payment_keys` is recreated. One at revision 0014 or earlier never ran that
+  work and is migrated as usual ([persistence.md](persistence.md#migrations)).
 
 **What a repeat gets.** The repeat of an allotment or a rotation recorded before the upgrade is answered
-from its record, with `payment_key` `{"token": null, "replayed": true}`: no key is issued by a replay.
-An allotment still `started` at the upgrade and resumed after it issues the actor's first payment key
-and shows it.
+from its record, as before, with `credential_custody: secret_store`. No repeat of a finished command
+hands a key over, on any app.
 
-**What keeps its name.** `PaymentKey`, what the work half's `CredentialResolver` returns: the key the
-runner call presents, which with self-hosted payments is the Batteries key. `pipeline` on a usage row,
-Batteries' word for the capability. The route and the command `rotate-payment-key`.
+**What keeps its name.** `PaymentKey`, what the work half's `CredentialResolver` returns: the
+allocation's Batteries key, which the runner call presents to the signer in both configurations.
+`pipeline` on a usage row, Batteries' word for the capability. The route and the command
+`rotate-payment-key`.
 
 ## Upgrading to a public and a private listener
 
 On 19 November 2026 the engine gained a private listener and the wallet report (D84, #167). A deployment
-that sets nothing new serves one listener, as before: no route, body, status code or stored record of an
-existing route changed, and no credential is refused that was accepted. There is no migration.
+that sets nothing new serves one listener, as before: no route, request body, status code or stored
+record of an existing route changed, and no credential is refused that was accepted. One answer gained a
+field, `TenantGrant`. There is no migration.
 
 | What | Before | Now |
 | --- | --- | --- |
 | Listeners | One, on `LPB_HTTP_HOST` and `LPB_HTTP_PORT` | The same, unless `LPB_HTTP_PRIVATE_PORT` is set. Then two: that address is the public listener, and `LPB_HTTP_PRIVATE_HOST` (`127.0.0.1`) with `LPB_HTTP_PRIVATE_PORT` is the private one ([access.md](access.md#listeners)) |
 | Onboarding, the tenant list, a grant's top-up and a tenant's status, with two listeners | | 404 on the public listener; served on the private one |
-| A clearinghouse admin credential, with two listeners | | 403 on every route of the public listener that takes an access credential; accepted on the private one |
+| A clearinghouse admin credential, with two listeners | | 403 on every route of the public listener; accepted on the private one |
 | A tenant admin, auditor, actor or service credential, with two listeners | | Accepted on the public listener as before; 403 on every route of the private one |
-| The signer's two paths (#166), with two listeners | | Served on both, to a payment key. An access key of any kind is 401 on them, as with one listener |
+| Allotment and payment key rotation, with two listeners | | As with one, on both: the engine stores the key and returns none ([access.md](access.md#listeners)) |
+| `TenantGrant` (the tenant list, the grant read) | `tenant_id`, `name`, `status`, `total`, `unallocated`, `spent` | and `allocated_unspent`, required: what the tenant's allocations still hold, each one's amount less what it spent and nothing for one that spent more ([payments.md](payments.md#tenants)). The wallet report sums it with `unallocated` |
+| The `AllocationManager` port | `read_grant` and `grant_balances` return a `TenantGrant` | The same, and each states `allocated_unspent` |
 | The wallet | not served | `GET /v1/clearinghouse/wallet` (`WalletReport`), a clearinghouse admin's; `engine.payments.wallet` ([payments.md](payments.md#the-wallet-report)) |
 | `create_app` | `create_app(engine, *, manage_lifecycle, max_request_bytes)` | and `listener`: `"only"` (the default), `"public"` or `"private"` |
 | `serve`, `lpb serve` | One server | Two servers over one engine when `LPB_HTTP_PRIVATE_PORT` is set. `extend` runs once for each app |
@@ -236,7 +251,7 @@ existing route changed, and no credential is refused that was accepted. There is
 | The published schema | | The routes of the private group carry the tag `private listener` |
 | The facade | `PaymentsAdminApi` | `PaymentsAdminApi.wallet` (`WalletApi \| None`) |
 | Optional protocols | | `EscrowSource` (a grants manager), `SignerProbe` (a runner transport). A supplied part without one runs without the wallet report |
-| `FakeAllocationManager`, `ScriptedTransport` (`livepeer_builder.testing`) | | `escrow` and `escrow_accounts`; `signer` and `signer_readiness` |
+| `FakeAllocationManager`, `ScriptedTransport` (`livepeer_builder.testing`) | | `escrow` and `escrow_accounts`; `signer` and `signer_readiness`. The fake's grants state `allocated_unspent` from its allocations: set `allocations[id].spent` above the allotted amount for an overdrawn one |
 | Root exports | | `WalletReport`, `EscrowAccount`, `UnspentGrants`, `SignerReadiness` |
 | The grants credential (`LPB_BATTERIES_GRANTS_TOKEN`) | `grants.read`, `grants.create`, `grants.fund`, `grants.status`, `allocations.read` | and `escrow.read`, for the wallet report |
 
@@ -250,83 +265,94 @@ existing route changed, and no credential is refused that was accepted. There is
   every use of a clearinghouse admin key to the private address: it is refused on the public one. Health
   checks may use either.
 - **A caller's own implementation of `PaymentsAdminApi`** states `wallet` (`None` serves no report).
+- **A supplied `AllocationManager`** states `allocated_unspent` on the `TenantGrant` it returns, or
+  building one fails: the sum of what each allocation of the grant holds less what it spent, counting an
+  allocation that spent more as zero. A test that builds a `TenantGrant` states it too.
+- **Move the clients.** A client that refuses unknown fields is generated again from the OpenAPI
+  document, for the new field of the tenant list and the grant read.
 - **An entrypoint that calls `build_app`** keeps `LPB_HTTP_PRIVATE_PORT` unset, or builds each app with
   `create_app(engine, listener=...)` over an engine it starts itself.
 
-**What a later release changed.** An engine in its `clearinghouse` role requires the private listener
+**What a later release changed.** An engine in its `clearinghouse` role requires the private listener,
+and it is that role which hands each allocation's key to the caller
 ([the engine's role setting](#upgrading-to-the-engines-role-setting)). In its other two roles two
 listeners are a deployment's choice.
 
 ## Upgrading to an engine that uses a payment clearinghouse
 
-On 19 November 2026 the engine gained the remote adapters of the payment ports and
-`lpb payments check` (D84, D87, #168). A deployment that sets nothing new runs self-hosted payments as
-before, and there is no migration. One route's answer gained a field (the allocation read, below). An
-engine that uses a clearinghouse signs there with the gateway SDK's transport and its actors' payment
-keys ([payments.md](payments.md#what-signs-for-an-engine-that-uses-a-clearinghouse)).
+The engine gained the remote adapters of the payment ports and `lpb payments check` (D84, D87, #168). A
+deployment that sets nothing new runs self-hosted payments as before, and there is no migration. One
+route's answer gained a field (the allocation read, below). An engine that uses a clearinghouse keeps
+each actor's key, handed over once at allotment and rotation, in its own secret store, and signs with it
+at the clearinghouse's signer itself ([payments.md](payments.md#the-remote-adapters)).
 
 | What | Before | Now |
 | --- | --- | --- |
-| Settings | | `LPB_CLEARINGHOUSE_URL` (a scheme, a host and an optional port, and nothing after them), `LPB_CLEARINGHOUSE_TOKEN` and `LPB_CLEARINGHOUSE_TENANT_ID`, set together or not at all, and `LPB_CLEARINGHOUSE_TIMEOUT_S` (30). Refused at startup beside `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`, `LPB_BATTERIES_GRANTS_TOKEN` or `LPB_SIGNER_URL` ([payments.md](payments.md#the-remote-adapters)) |
+| Settings | | `LPB_CLEARINGHOUSE_URL` (a scheme, a host and an optional port, and nothing after them), `LPB_CLEARINGHOUSE_TOKEN` and `LPB_CLEARINGHOUSE_TENANT_ID`, set together or not at all, and `LPB_CLEARINGHOUSE_TIMEOUT_S` (20; `LPB_OPERATION_STALE_S` must be at least six times it). Refused at startup beside `LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN` or `LPB_BATTERIES_GRANTS_TOKEN` ([payments.md](payments.md#the-remote-adapters)) |
+| `LPB_SIGNER_URL` | The engine's own signer | The same setting. An engine that uses a clearinghouse sets it to the clearinghouse's published signer. Unset, the engine does not pay, as before |
 | `LPB_DISCOVERY_URL` | Required | Required unless `LPB_CLEARINGHOUSE_URL` is set: it then defaults to the clearinghouse's runner list, and the reader carries the tenant admin key there |
 | `EngineSettings.from_env(defaults=...)` | A default fills a field the environment leaves unset | The same, except that with a clearinghouse set the discovery address is its runner list before any default |
 | `EngineSupply`, `EngineParts` | | `credentials` (`CredentialResolver`) and `allowances` (`AllowanceReader`). Unset, or `None`: the engine's own records, as before |
-| Optional protocols | | `AllocationsByActor` (an allocation manager): `for_actor(tenant_id, actor_id)`. A supplied manager without it is called as before |
+| Optional protocols | | `AllocationsByActor` (an allocation manager): `for_actor(tenant_id, actor_id, operation_ref=None)`. `OneKeyPerAllocation` (an allocation manager whose provider keeps one key for an allocation and hands it over once): `holds_key(allocation_id, api_key_id)`. A supplied manager without them is called as before |
 | Errors | | `ProviderOutcomeUnknown`, a `ProviderUnavailable` (503): a command left and no answer says whether it applied |
-| Adapters | | `ClearinghouseAllocations`, `ClearinghouseAllowances`, `ClearinghouseUsage`, `ClearinghouseCredentials` (`livepeer_builder.adapters.clearinghouse`) |
-| `SdkRunnerTransport` | `SdkRunnerTransport(signer_url, max_payment_challenge_retries)` | and `signer_is_clearinghouse` (false unless said): the address is a clearinghouse's, whose `signer_not_reached` is then read as `signer_unavailable`. The engine says it from its settings |
-| A job met by a clearinghouse that could not reach its signer, while signing | | `failed`, `payment` / `signer_unavailable`, nothing paid. Every other 5xx while signing is `uncertain`, as with a signer |
-| An engine that uses a clearinghouse | | Serves neither the signer's two paths nor the wallet report: `payments.signing` and `payments.wallet` are `None` |
+| Adapters | | `ClearinghouseAllocations`, `ClearinghouseAllowances`, `ClearinghouseUsage` (`livepeer_builder.adapters.clearinghouse`). `CredentialResolver` and signing have none: they are the engine's own |
 | `HttpDiscoverySource` | `HttpDiscoverySource(discovery_url, *, client, timeout_s)` | and `bearer`, a credential for the discovery address |
 | CLI | | `lpb payments check`: exit 0, 1 or 2 ([payments.md](payments.md#lpb-payments-check)) |
 | `livepeer_builder.runtime` | | `check_payments(settings)` |
 | Root exports | | `PaymentCheck`, `PaymentProbe`, `ProviderOutcomeUnknown`, `AllocationRead` |
 | `GET /v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation` | The allocation's record (`ActorAllocation`) | `AllocationRead`: every field of the record where it was, and `allowance`, what `GET /v1/allowance` answers for that actor, or `null` when the provider could not be read ([payments.md](payments.md#allowance)) |
 | The facade | `PaymentsAdminApi` | `PaymentsAdminApi.get_allocation`, which a caller's own implementation of the facade must state. `get_actor` still returns the record alone |
-| An allotment's answer at an engine that uses a clearinghouse | | `payment_key: null`: the engine issues none of its own and shows the clearinghouse's to nobody |
+| An allotment or a rotation at an engine that uses a clearinghouse | | Answers the allocation, with `credential_custody: secret_store`: the engine's own store holds the key it was handed. An answer of the clearinghouse that carries no key is a refusal at the engine, never a success ([payments.md](payments.md#the-key-an-enterprises-engine-is-handed)) |
 
 **Before you start the new release:**
 
 - **Nothing, for self-hosted payments.** Leave the clearinghouse settings unset.
 - **To use a clearinghouse,** set the three settings from what the clearinghouse admin handed over at
-  onboarding (the address of the public listener, the tenant admin key and the tenant's id), keep
-  `LPB_SECRET_KEY`, and unset every Batteries and signer setting. The address is a scheme, a host and
-  an optional port: a path is refused, because the signer's two paths are called at its root. Run
-  `lpb payments check`.
+  onboarding (the address of the public listener, the tenant admin key and the tenant's id), set
+  `LPB_SIGNER_URL` to the clearinghouse's published signer, keep `LPB_SECRET_KEY`, and unset every
+  Batteries setting. The clearinghouse's address is a scheme, a host and an optional port: a path is
+  refused. Run `lpb payments check`.
+- **The clearinghouse must hand keys over.** It is an engine in its `clearinghouse` role
+  ([the engine's role setting](#upgrading-to-the-engines-role-setting),
+  [payments.md](payments.md#payment-keys)). An engine in its `both` role keeps each key with itself and
+  hands none over: an enterprise's engine pointed at one allots there and cannot use the answer, which
+  carries no key.
 - **A caller's own implementation of `PaymentsAdminApi`** states `get_allocation`.
 - **A reader of the allocation route** that refuses a field it does not know meets `allowance`.
 - **Put every actor in the tenant.** `LPB_JWT_TENANT_ID` or the tenant claim, the `tenant_id` of the
   access keys the engine issues, and the `ActorContext` an embedding app builds all carry the tenant's
   id at the clearinghouse. An actor in another tenant is refused there.
-- **Allot each actor again.** An actor allotted with self-hosted payments holds a Batteries key, which
-  is never sent to a clearinghouse: its jobs fail `not_provisioned`. Nothing is rewritten (T30).
+- **Revoke each actor before the move, and allot it again after.** An actor allotted with self-hosted
+  payments holds a key of the deployment's own Batteries and an allocation the clearinghouse does not
+  know. Nothing is rewritten (T30): its commands are refused, and its jobs present the old key to the
+  clearinghouse's signer, which refuses it.
 - **A caller's own allocation manager** changes nothing.
 
 ## Upgrading to the engine's role setting
 
-On 19 November 2026 the engine gained its role setting and the two Compose projects that run a payment
-clearinghouse and an enterprise that uses it (D84, D87, #169). A deployment that sets nothing new is in
-its `both` role and serves, wires and starts what it did: self-hosted payments, as one deployment.
-There is no migration. Two things changed for deployments that had set something new: an engine that
-names a clearinghouse now needs `LPB_ROLE=work`, and it no longer serves clearinghouse routes of its
-own.
+The engine has a role setting, and two Compose projects run a payment clearinghouse and an enterprise
+that uses it (D84, D87, #169). A deployment that sets nothing new is in its `both` role and serves,
+wires and starts what it did: self-hosted payments, as one deployment. There is no migration of its
+own. Two things changed for deployments that had set something new: an engine that names a
+clearinghouse now needs `LPB_ROLE=work`, and it no longer serves clearinghouse routes of its own.
 
 | What | Before | Now |
 | --- | --- | --- |
 | Settings | | `LPB_ROLE`: `both` (the default), `work` or `clearinghouse` ([RELIABILITY.md](../RELIABILITY.md#roles)) |
 | `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`, `LPB_CLEARINGHOUSE_TENANT_ID` | Set together, they selected the remote adapters (#168) | They need `LPB_ROLE=work`, and `LPB_ROLE=work` needs them. With `LPB_ROLE` unset, `both` or `clearinghouse` they are refused at startup |
-| The routes of an engine that names a clearinghouse | Every route. What only a clearinghouse admin does answered 403 | The work routes alone. Every `/v1/clearinghouse` route and the signer's two paths are 404 |
-| That engine's embedded API | `engine.runner_list` served its discovery document | `engine.runner_list` is `None`, as `payments.signing` and `payments.wallet` are: it is nobody's clearinghouse. `engine.payments.allot` and the other commands are unchanged |
-| A payment clearinghouse | An engine with one listener or two, serving every route | `LPB_ROLE=clearinghouse`: the clearinghouse routes alone, on two listeners. Every work route is 404, `GET /v1/offerings` and `/v1/keys` included |
-| What a `clearinghouse` engine needs | | `LPB_HTTP_PRIVATE_PORT`, a signer (`LPB_SIGNER_URL`), Batteries (`LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`) and the grants credential (`LPB_BATTERIES_GRANTS_TOKEN`), or the parts supplied in their place. Without one it does not start |
+| The routes of an engine that names a clearinghouse | Every route. What only a clearinghouse admin does answered 403 | The work routes alone. Every `/v1/clearinghouse` route is 404 |
+| That engine's embedded API | `engine.runner_list` served its discovery document | `engine.runner_list` is `None`, as `payments.wallet` is: it is nobody's clearinghouse. `engine.payments.allot` and the other commands are unchanged |
+| A payment clearinghouse | An engine with one listener or two, serving every route, which stored each allocation's key and answered none | `LPB_ROLE=clearinghouse`: the clearinghouse routes alone, on two listeners. Every work route is 404, `GET /v1/offerings` and `/v1/keys` included. Allotment and rotation hand the allocation's key to the caller once (`allocation_api_key`, `replayed`, `resumed`), and nothing stores it |
+| What a `clearinghouse` engine needs | | `LPB_HTTP_PRIVATE_PORT`, Batteries (`LPB_BATTERIES_URL`, `LPB_BATTERIES_TOKEN`) and the grants credential (`LPB_BATTERIES_GRANTS_TOKEN`), or the parts supplied in their place. Without one it does not start. It needs no `LPB_SECRET_KEY`, and it starts without `LPB_SIGNER_URL`: its wallet report then says the signer is `not_configured` |
+| A `clearinghouse` engine's runner transport | | `IdentityOnlyTransport` (`livepeer_builder.adapters.sdk`): it asks the signer's identity for the wallet report and cannot pay. `engine.jobs.streaming` is `None` |
 | What a `clearinghouse` engine starts | | Discovery alone. No interrupted job is resolved, and no cost sync or retention purge runs. `jobs.run` and `jobs.streaming.stream` raise `InvalidRequest` |
 | `GET /readyz`, `EngineHealth` | | and `role` |
-| `lpb payments check`, `PaymentCheck` | `configuration`, `ok`, `probes`, `tenant` | and `role`. In the `clearinghouse` role the `batteries_grants` probe is always made, and is `not_configured` without the credential |
+| `lpb payments check`, `PaymentCheck` | `configuration`, `ok`, `probes`, `tenant` | and `role`. In the `clearinghouse` role the `batteries_grants` probe is always made, and is `not_configured` without the credential. A `signer` probe that is `not_configured` says what follows in that role |
 | `lpb smoke` | An engine with the environment's settings | The same, in the role the environment names, and its output has `role` |
-| `create_app(engine, ...)` | Mounted every group of routes | Mounts the groups of `engine.role`. For an engine in its `clearinghouse` role, `listener="only"` raises `ValueError` |
+| `create_app(engine, ...)` | Mounted every group of routes, with `deliver_allocation_keys=False` | Mounts the groups of `engine.role`, and hands allocation keys over in the `clearinghouse` role alone. For an engine in its `clearinghouse` role, `listener="only"` raises `ValueError` |
 | The facade | `EngineApi` | `EngineApi.role`, which a caller's own implementation of the whole-engine facade must state |
-| `http/listeners.py` | `EVERY_LISTENER` and `PRIVATE_ONLY`, written by hand | `ROUTE_GROUPS` (each group of routes, its half, and whether it is private) and `ROLE_HALVES`. The two tuples are read from the table |
-| The published schema | The private group's routes carry the tag `private listener` | and every route but health carries `work half` or `clearinghouse half` |
+| `http/listeners.py` | `EVERY_LISTENER` and `PRIVATE_ONLY`, written by hand. `mount_listener_routes(app, engine, name)` | `ROUTE_GROUPS` (each group of routes, its half, and whether it is private) and `ROLE_HALVES`. The two tuples are read from the table. `delivers_allocation_keys(role)`, and `mount_listener_routes(app, engine, name, *, deliver_allocation_keys)`: the keyword is required, and a value that disagrees with the engine's role raises `ValueError` |
+| The published schema | The private group's routes carry the tag `private listener` | and every route but health carries `work half` or `clearinghouse half`. `docs/generated/openapi-clearinghouse.json` is the `clearinghouse` role's own schema |
 | `AdmissionLimiter` | `AdmissionLimiter(max_concurrent, max_per_app)` | and `runs_jobs` (true unless said) |
 | Contracts | | `Role` (`livepeer_builder.contracts`) |
 | The log line `engine.started` | | and `role` |
@@ -339,9 +365,12 @@ own.
   `/v1/clearinghouse` routes stops: an embedding app allots through `engine.payments.allot`, as before,
   and an engine server has no route for it (tech debt T41). Run `lpb payments check`.
 - **A payment clearinghouse** sets `LPB_ROLE=clearinghouse` and `LPB_HTTP_PRIVATE_PORT`, publishes the
-  public listener only, and moves every use of its admin key to the private address. Nothing may call a
-  work route there: its admin's own key is managed under `/v1/clearinghouse/tenants/default/keys`
-  (tech debt T42).
+  public listener and its signer and nothing else, and moves every use of its admin key to the private
+  address. The signer keeps its Batteries authorization webhook: enterprise engines sign there
+  themselves, and it is the only check at signing. Nothing may call a work route there: its admin's own
+  key is managed under `/v1/clearinghouse/tenants/default/keys` (tech debt T42).
+- **A caller of a clearinghouse's allotment or rotation** reads the key from the answer and keeps it:
+  it is shown once. An enterprise's engine in its `work` role does this itself.
 - **A caller's own implementation of `EngineApi`** states `role`.
 - **An entrypoint that calls `create_app` for a clearinghouse** builds two apps, `listener="public"` and
   `listener="private"`, or calls `serve`.
@@ -354,8 +383,8 @@ public listener they name no tenant: the tenant is the credential's, a tenant ad
 On the private listener the clearinghouse admin names the tenant, at the paths it used before. One rule
 holds on every listener, one listener included: a path that names no tenant refuses a clearinghouse
 admin, and a path that names a tenant refuses a tenant credential, its own tenant's included. No service
-rule changed: grant limits, repeat-safety, the allocation answer's amounts and payment keys are as they
-were. There is no migration.
+rule changed: grant limits, repeat-safety, the allocation answer's amounts and who keeps each
+allocation's key are as they were. There is no migration.
 
 | What | Before | Now |
 | --- | --- | --- |
@@ -370,8 +399,8 @@ were. There is no migration.
 | `GET /v1/clearinghouse/actors` | 404 since #165 | A tenant's own actor list. A `tenant_id` in its query is not read |
 | An engine in its `work` role | Called `/v1/clearinghouse/tenants/{LPB_CLEARINGHOUSE_TENANT_ID}/...`, and the clearinghouse refused another tenant (403) | Calls the paths that name no tenant. A command about another tenant than `LPB_CLEARINGHOUSE_TENANT_ID` is refused in the engine before anything is sent: a `ProviderError` 403, `resource belongs to another tenant`, as the clearinghouse's was |
 | `lpb payments check` | `GET /v1/clearinghouse/tenants/{t}/grant` and `.../usage` | `GET /v1/clearinghouse/grant` and `GET /v1/clearinghouse/usage`. A 403 names `LPB_CLEARINGHOUSE_TOKEN`: the key is not a tenant admin's or an auditor's. A grant of another tenant than `LPB_CLEARINGHOUSE_TENANT_ID` is `unexpected` and names that setting |
-| `http/clearinghouse.py` | `mount_tenant_routes` (a tenant's routes and the runner list) and `mount_clearinghouse_admin_routes` | `mount_tenant_routes` (a tenant's own routes, which name no tenant), `mount_named_tenant_routes`, `mount_runner_list_routes` and `mount_clearinghouse_admin_routes`. `mount_clearinghouse_routes` mounts them all with the signer's two paths |
-| `http/listeners.py` | `RouteGroup(mount, half, private=False)`, `Listener.serves_private_routes`, `EVERY_LISTENER` and `PRIVATE_ONLY` | `RouteGroup(mount, half, served_on="every")`, where `served_on` is `every`, `public` or `private`, and `RouteGroup.served_by(listener)`; `Listener` has its name alone; and `PUBLIC_ONLY` beside the two tuples |
+| `http/clearinghouse.py` | `mount_tenant_routes` (a tenant's routes and the runner list) and `mount_clearinghouse_admin_routes` | `mount_tenant_routes` (a tenant's own routes, which name no tenant), `mount_named_tenant_routes`, `mount_runner_list_routes` and `mount_clearinghouse_admin_routes`. `mount_clearinghouse_routes` mounts them all. Each form of a tenant's routes takes the required `deliver_allocation_keys` |
+| `http/listeners.py` | `RouteGroup(mount, half, private=False)`, `Listener.serves_private_routes`, `EVERY_LISTENER` and `PRIVATE_ONLY` | `RouteGroup(mount, half, served_on="every", allots=False)`, where `served_on` is `every`, `public` or `private` and `allots` says the group's mount function takes `deliver_allocation_keys`, and `RouteGroup.served_by(listener)`; `Listener` has its name alone; and `PUBLIC_ONLY` beside the two tuples |
 | The published schema | The private group's routes carry the tag `private listener` | and a tenant's own routes carry `public listener` |
 
 **Before you start the new release:**

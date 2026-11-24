@@ -11,27 +11,31 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 to P8 are built and in review. The three paid proofs of P8 were run on
-  19 November 2026 from the runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook):
-  [the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md). The amendment
-  of D87 point 3 of the same day (a tenant's routes from the credential) is built and in review, on
-  top of P8.
+- **Progress:** P1 to P5 are merged into `releases/m4`. P6, P7 and P8 are built and in review. The paid
+  proofs of P8 were run on 19 November 2026 on the signer proxy, which was withdrawn that day:
+  [the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md) says which still
+  stand. The proofs through a clearinghouse are to be run again, on the direct-signer path, from the
+  runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook). The amendment of D87 point 3
+  of 19 November (a tenant's routes from the credential) is built and in review
+  ([#185](https://github.com/NE-Build-Track/livepeer-builder-core/pull/185)), on top of P8.
 
 ## Goal
 
 builder-core lets an enterprise app buy network work in two ways. It runs Batteries, the signer and the
 wallet itself (self-hosted payments), or it uses a payment clearinghouse that another party runs. A
-clearinghouse is an engine in front of Batteries and the signer. It does payments only, serves many
-tenants, and is the only thing published. The enterprise app keeps its own engine, which runs its jobs
-and sends them straight to orchestrators.
+clearinghouse is an engine in front of Batteries, with a signer beside it that enterprise engines reach
+directly. It does payments only and serves many tenants. The enterprise app keeps its own engine, which
+runs its jobs, sends them straight to orchestrators and signs their payments at the clearinghouse's
+signer.
 
 ## Acceptance
 
-From ISS-31 as amended on 18 November 2026.
+From ISS-31 as amended on 18 November 2026. The first item follows Mike's amendment of 19 November: the
+enterprise's engine signs at the signer itself.
 
 - [ ] A payment clearinghouse serves at least two tenants, one for each enterprise app. Each enterprise
-  app runs its jobs in its own engine, as an embedded engine or an engine server, and reaches the
-  clearinghouse only for signing, allotment, allowance and usage.
+  app runs its jobs in its own engine, as an embedded engine or an engine server. That engine reaches
+  the clearinghouse for allotment, allowance and usage, and signs at the clearinghouse's signer.
 - [ ] One tenant's admin cannot read or change another tenant. The attempt is refused.
 - [ ] Self-hosted payments still work, as one deployment with one tenant.
 - [ ] The clearinghouse admin onboards a tenant and tops up its grant by hand, on a private listener.
@@ -44,20 +48,24 @@ Funded evidence for both configurations is ISS-36, not this plan.
 - [x] **18 November 2026.** The design is locked (D82 to D86), and the guides and decision log are merged
   ([#173](https://github.com/NE-Build-Track/livepeer-builder-core/pull/173)).
 - [x] **18 November 2026.** The open points are settled (D87).
-- [ ] **P1 (#162).** `per_actor` is the only allocation mode. Built and in review:
-  [#174](https://github.com/NE-Build-Track/livepeer-builder-core/pull/174).
-- [ ] **P2 (#163).** Rename routes, classes and settings to the domain language. Built and in review:
+- [x] **P1 (#162).** `per_actor` is the only allocation mode. Merged into `releases/m4` on 20 November
+  2026: [#174](https://github.com/NE-Build-Track/livepeer-builder-core/pull/174).
+- [x] **P2 (#163).** Rename routes, classes and settings to the domain language. Merged into
+  `releases/m4` on 20 November 2026:
   [#177](https://github.com/NE-Build-Track/livepeer-builder-core/pull/177).
-- [ ] **P3 (#164).** Separate the work routes from the clearinghouse routes. Built and in review:
-  [#178](https://github.com/NE-Build-Track/livepeer-builder-core/pull/178).
-- [ ] **P4 (#165).** Tenants at the clearinghouse. Built and in review:
+- [x] **P3 (#164).** Separate the work routes from the clearinghouse routes. Merged into `releases/m4`
+  on 20 November 2026: [#178](https://github.com/NE-Build-Track/livepeer-builder-core/pull/178).
+- [x] **P4 (#165).** Tenants at the clearinghouse. Merged into `releases/m4` on 20 November 2026:
   [#179](https://github.com/NE-Build-Track/livepeer-builder-core/pull/179).
-- [ ] **P5 (#166).** The routes an enterprise's engine calls: payments, usage and discovery. Built and in
-  review: [#180](https://github.com/NE-Build-Track/livepeer-builder-core/pull/180).
+- [x] **P5 (#166).** What an enterprise's engine needs from the clearinghouse: each actor's payment key,
+  handed over once, the tenant's usage and the runner list. Merged into `releases/m4` on 23 November
+  2026: [#180](https://github.com/NE-Build-Track/livepeer-builder-core/pull/180), with
+  [#186](https://github.com/NE-Build-Track/livepeer-builder-core/pull/186).
 - [ ] **P6 (#167).** A public and a private listener. Built and in review:
   [#181](https://github.com/NE-Build-Track/livepeer-builder-core/pull/181).
-- [ ] **P7 (#168).** Remote adapters for the five payment ports, and `lpb payments check`. Built and in
-  review: [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
+- [ ] **P7 (#168).** Remote adapters for the payment ports that reach the clearinghouse, the payment keys
+  an enterprise's engine is handed, and `lpb payments check`. Built and in review:
+  [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
 - [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it. Built and in
   review: [#183](https://github.com/NE-Build-Track/livepeer-builder-core/pull/183).
 - [ ] **A tenant's routes from the credential (#165, #166; D87 point 3 as amended on 19 November 2026).**
@@ -75,13 +83,14 @@ Each pull request ticks its own line here in the same change.
   clearinghouse half, and stays one program with a role setting. The clearinghouse has a public and a
   private listener. Source: Mike.
 - **18 November 2026, D85.** Batteries and the signer are reachable only by the clearinghouse's engine.
-  The clearinghouse accepts keys only in the first version. Source: Mike.
+  The clearinghouse accepts keys only in the first version. Source: Mike. Point 1 was amended on 19
+  November (below).
 - **18 November 2026, D86.** The console runs twice at a clearinghouse, top-up is manual, and the work is
   inside M4. Source: Mike.
 - **18 November 2026, D87.** The open points are settled: a payment key for each actor, the
   clearinghouse's runner list by default, the eight route paths, the Compose projects in `deploy/`,
   `lpb payments check` kept, the realm's role mapping, and how a clearinghouse failure is classified.
-  Source: Mike.
+  Source: Mike. Points 1 and 3 were amended on 19 and 23 November (below).
 - **18 November 2026.** The sample enterprise apps and the console break when they next move their pin.
   That is accepted, and they are fixed after this work lands (#116). Source: Mike.
 - **18 November 2026, P4.** A record written before a tenant's id was its grant's id is not re-keyed:
@@ -91,7 +100,15 @@ Each pull request ticks its own line here in the same change.
 - **19 November 2026, D87 point 3 amended.** The payments path is the signer's two paths at the root of a
   clearinghouse's public listener, `POST /sign-orchestrator-info` and `POST /generate-live-payment`, each
   called with a payment key. The gateway SDK drops any path in a signer address, so
-  `POST /v1/clearinghouse/payments` could not be reached by it unmodified. Source: Mike.
+  `POST /v1/clearinghouse/payments` could not be reached by it unmodified. Source: Mike. Replaced the
+  same day (next entry).
+- **19 November 2026, D85 point 1 and D87 points 1 and 3 amended.** After review of #180, the
+  clearinghouse has no signer proxy and issues no second key. Allotment and rotation at the clearinghouse
+  hand the allocation's own Batteries key to the enterprise's engine once, the clearinghouse keeps no
+  allocation key, and the enterprise's engine signs at the published signer itself. The signer is
+  reachable by enterprise engines and keeps its Batteries authorization webhook configured, which is now
+  the only check at signing. There is no payments route. This replaces the same day's earlier amendment
+  of D87 point 3. Source: Mike.
 - **19 November 2026, P6.** Two listeners are a deployment's choice until the role setting (#169): with
   `LPB_HTTP_PRIVATE_PORT` unset one listener serves everything, so self-hosted payments is unchanged.
   The private listener takes a clearinghouse admin credential only, as the guide's routes say ("for a
@@ -150,3 +167,78 @@ Each pull request ticks its own line here in the same change.
   (the actor list with the tenant in its query until #165), and now serve a tenant's own; the
   published schema tags a tenant's own routes `public listener`. Source: Mike (the decision, as dated
   notes on #165 and #166); the rest for his review.
+- **23 November 2026, D87 point 1.** A resumed allotment or rotation hands the key over whenever
+  Batteries returns it again: Batteries replays the original success, the secret included, for a
+  matching idempotency key, and never expires it. A repeat of a finished command answers without the key
+  (`replayed`), and a lost key is then replaced by a rotation. Source: Mike, after review of #186.
+- **23 November 2026, P5.** An allotment or a payment key rotation left unfinished is resumed only by
+  the kind of command that began it, the one that stores the key or the one that hands it over. A resume
+  by the other kind is refused before any provider call (409 `operation_conflict`), and the record stays
+  resumable by the first. Source: Mike, after review of #180.
+- **23 November 2026, P5.** The unreleased migration that created `lpb_payment_keys` is deleted, not
+  dropped by a later migration. A database that ran this stack before is recreated. Source: Mike.
+- **23 November 2026, P5.** [#186](https://github.com/NE-Build-Track/livepeer-builder-core/pull/186),
+  John's code change for the amendment of 19 November, is merged into P5's branch. The hand-written
+  documents and the comments in code follow it in one sweep.
+- **23 November 2026, P6.** Neither listener carries a signer path: a clearinghouse serves none (#167,
+  as Mike amended it on 19 November 2026). Every listener's app keeps each allocation's key with the
+  engine (`deliver_allocation_keys=False`), on one listener or two: there is no role setting yet, and
+  the engine behind a listener runs jobs. Handing keys to the caller is the `clearinghouse` role's
+  (#169). Source: the amended ticket; the `False` on both listeners is for Mike's review.
+- **23 November 2026, P6.** Cancelling `serve()` with two listeners is a forced exit, as a listener
+  that ended by itself is: both hang up on their open connections, and the task ends with its
+  cancellation. A first SIGINT or SIGTERM still ends them in order. Source: Mike, after review of #181.
+- **23 November 2026, P6.** The wallet report's unspent grants are exact. A grant counts as its
+  unallocated balance and what each of its allocations still holds, an overdrawn allocation as nothing.
+  `TenantGrant` gains the required field `allocated_unspent` for it. This replaces "each grant's total
+  less what its allocations spent" in the entry of 19 November, which read too low when an allocation
+  was overdrawn and the grant had a balance left to allot. Source: Mike, after review of #181.
+- **23 November 2026, P7, carried forward.** The direct-signer design is merged into P7's branch, and
+  what the two entries of 19 November built on the withdrawn design is taken out: signing through the
+  clearinghouse, the reading of `signer_not_reached`, the `lpp_` key and its resolver. An enterprise's
+  engine now signs at `LPB_SIGNER_URL`, the clearinghouse's published signer, which is set beside the
+  clearinghouse settings and no longer refused there; the remote `AllocationManager` returns the key an
+  allotment or a rotation hands over, and the engine's ordinary commands store it in its own secret
+  store; `CredentialResolver` is the engine's own. Built where the amended decisions are silent, for
+  Mike's review: an answer without a key is a refusal at the engine and saves no actor; a lost rotation
+  is replaced by a rotation under a new reference, and a lost allotment, of which the engine has no
+  record, by a revoke at the clearinghouse and a new allotment; an allotment's reference at the
+  clearinghouse folds in the admin's `operation_ref`, so that second allotment is a new command there;
+  `revoke_key` reads the allocation and replaces the key only when the allocation still holds it; a
+  rotation the engine resumes after it stored the key finishes from its own copy; the clearinghouse's
+  address stays a scheme, a host and a port; and `lpb payments check` probes the signer at
+  `LPB_SIGNER_URL`, beside the clearinghouse. Source: Mike's amendments of 19 and 23 November 2026 (D85
+  point 1, D87 points 1 and 3) and #168 as amended.
+- **23 November 2026, P7.** When two rotations of one actor overlap at a clearinghouse, the
+  clearinghouse's order decides which key the engine keeps. Source: Mike, after review of #182. Built:
+  the optional protocol `OneKeyPerAllocation` on the allocation manager; an overtaken rotation asks
+  which key the allocation takes and keeps its own while it is that one; no rotation is made to end a
+  key, and the remote `revoke_key` refuses the key an allocation holds; a resume reads its key back from
+  the engine's store. The stale window of an engine that uses a clearinghouse is six timeouts of a
+  call, for the three calls of an overtaken rotation, and the default timeout is 20 seconds so that the
+  defaults meet it. This replaces what the entry above says of `revoke_key`.
+- **23 November 2026, P8, carried forward.** The direct-signer design is merged into P8's branch, and
+  the role follows it. Only an engine in its `clearinghouse` role hands allocation keys over, on both
+  of its listeners; an engine in its `both` role keeps them, on one listener or two; one function
+  decides (`delivers_allocation_keys`). Built where the amended decisions are silent, for Mike's
+  review: a clearinghouse needs no `LPB_SECRET_KEY`, since it stores no allocation's key; it is given
+  no transport that could pay, only the signer's identity call for its wallet report; no role is
+  refused at startup for a missing `LPB_SIGNER_URL`, and `lpb payments check` fails for it and says
+  what follows in each role; the wallet report and a clearinghouse's own check read the signer where
+  the clearinghouse's engine reaches it, never at its published address; the `clearinghouse` role's
+  schema is published as a second generated file, which closes T48; and the clearinghouse project
+  publishes the signer through a TCP relay of its one port, because the signer shares Batteries'
+  network namespace and nothing of Batteries is published. The paid proofs of 19 November through a
+  clearinghouse ran on the withdrawn signer proxy and are to be run again from the rewritten runbook;
+  the proof of the `both` role stands. Source: #169 as amended on 19 November 2026, D84 point 2, D85
+  point 1 and D87 point 1.
+- **23 November 2026, a tenant's routes from the credential, carried forward.** The direct-signer
+  design and the roles are merged into this change's branch, and the two forms of a tenant's routes
+  follow them. An allotment and a rotation hand the allocation's key over in both forms on an engine in
+  its `clearinghouse` role: to the tenant's admin at the path that names no tenant, and to the
+  clearinghouse admin at the path that names the tenant, since that engine stores no key and an answer
+  without it would leave the key with nobody. In the `both` role both forms store the key and answer
+  none. The listener table says which groups allot (`allots`), and each of them is handed
+  `deliver_allocation_keys`. The signer's two paths are no group of the table. D87 point 3 is one text
+  for both of Mike's amendments of 19 November. Source: Mike's amendments (D85 point 1, D87 points 1
+  and 3); what the decisions are silent on is for his review.

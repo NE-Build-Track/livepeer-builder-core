@@ -1,5 +1,40 @@
 # Runtime evidence: the payment clearinghouse's paid proofs, 19 November 2026
 
+## What still stands (marked 23 November 2026)
+
+This run used a design that was withdrawn the day it was run. Then, the clearinghouse's engine served
+the signer's two paths, issued each actor a payment key of its own (`lpp_`), and signed for the
+enterprise's engine with the Batteries key it kept. Now, the clearinghouse hands each allocation's own
+Batteries key to the enterprise's engine once and stores none, and the enterprise's engine signs at the
+clearinghouse's published signer itself (D85 point 1 and D87 points 1 and 3, as amended on 19 and 23
+November 2026). Nothing below this section is changed: it is the record of what was run.
+
+Each result is judged by what it exercised.
+
+| Result | Status | Why |
+| --- | --- | --- |
+| Proofs (a) and (b): the jobs paid through the clearinghouse, and their costs | **Superseded. To be run again.** | Every payment was signed at the clearinghouse engine's two signer paths with an `lpp_` key. Neither exists now |
+| Tenant one's and tenant two's payment records, allowances and `spent` after those jobs | **Superseded. To be run again.** | They follow from those payments |
+| Tenant two allots its own actor, "with a payment key issued once" | **Superseded. To be run again.** | The answer now hands over the allocation's own key, and the clearinghouse stores none |
+| The enterprise allots its actor through the clearinghouse | **Superseded. To be run again.** | The enterprise's engine now stores the key it is handed |
+| `lpb payments check` on the enterprise's engine, with "the signer path 405" at the clearinghouse | **Superseded. To be run again.** | The check now asks the published signer, at `LPB_SIGNER_URL`, and never the clearinghouse's engine |
+| An empty allocation refused by the signer | **Not run then. To be run.** | The clearinghouse's engine is no longer in the signing path, so the signer's Batteries authorization webhook is the only check at signing |
+| Proof (c): an engine in its `both` role pays by itself | **Stands as run.** | The engine signed at its own signer with the allocation's Batteries key from its own store. That path did not use the signer proxy or an `lpp_` key, and the direct-signer change did not alter it. It was not run again on the code after the change |
+| `lpb payments check` on the clearinghouse, and the signer probe against a real signer (405) | **Stands as run.** | The probe is the same `GET` at the same address. Its words for a missing address changed; its requests did not |
+| The wallet report: the deposit, the reserve and `signer.ready` | **Stands as run** for what it reads. | The report makes the same identity call. An engine in its `clearinghouse` role now makes it through a transport that cannot pay, which no live run has exercised |
+| The routes each role serves, the 403s between tenants, and the clearinghouse admin's 403 on the public listener | **Stand as run.** | None of them touched signing. The runbook repeats them at no cost |
+| The offerings read from the clearinghouse's runner list | **Stands as run.** | Unchanged |
+| What the run found: the password file's newline, discovery's owner-only config, a refused request still charged, the deposit that did not move | **Stands.** | Facts about the signer, discovery and the network |
+
+**To be proven on the new path,** from the runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook):
+a tenant onboarded on the private listener; an allotment from the enterprise's engine, with the key
+stored there and none at the clearinghouse; a fixed paid job and a live one from the enterprise's
+engine, signed at the published signer; the tenant's usage at the clearinghouse, and the second tenant
+untouched; and an empty allocation refused by the signer. The new evidence is added as its own
+document when those are run.
+
+## The run of 19 November 2026
+
 The three paid proofs that ISS-31's last ticket asks for (#169), run on one host with the Compose
 projects in [deploy/](../../../deploy/README.md) and its proof runbook: an engine in its `work` role
 pays for jobs through an engine in its `clearinghouse` role that holds two tenants, and an engine in

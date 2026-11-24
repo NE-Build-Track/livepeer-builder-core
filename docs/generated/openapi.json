@@ -90,6 +90,15 @@
             "title": "Created At",
             "type": "string"
           },
+          "credential_custody": {
+            "default": "secret_store",
+            "enum": [
+              "secret_store",
+              "work_engine"
+            ],
+            "title": "Credential Custody",
+            "type": "string"
+          },
           "currency": {
             "enum": [
               "USD",
@@ -175,6 +184,15 @@
           "created_at": {
             "format": "date-time",
             "title": "Created At",
+            "type": "string"
+          },
+          "credential_custody": {
+            "default": "secret_store",
+            "enum": [
+              "secret_store",
+              "work_engine"
+            ],
+            "title": "Credential Custody",
             "type": "string"
           },
           "currency": {
@@ -1032,33 +1050,6 @@
         "title": "IssuedKey",
         "type": "object"
       },
-      "IssuedPaymentKey": {
-        "additionalProperties": false,
-        "description": "An actor's payment key, as the command that issued it answers (D87, #166). The clearinghouse keeps\nthe key's hash and never the key, so the token is in the answer of the run that issued the key and\nnowhere else. A repeat of the command's reference, or a run that found the key already issued,\nanswers ``token: null`` and ``replayed: true``, as issuing an access key does.",
-        "properties": {
-          "replayed": {
-            "default": false,
-            "title": "Replayed",
-            "type": "boolean"
-          },
-          "token": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Token"
-          }
-        },
-        "required": [
-          "token"
-        ],
-        "title": "IssuedPaymentKey",
-        "type": "object"
-      },
       "Job": {
         "additionalProperties": false,
         "properties": {
@@ -1448,93 +1439,6 @@
           "app"
         ],
         "title": "JobRequest",
-        "type": "object"
-      },
-      "KeyedAllocation": {
-        "additionalProperties": false,
-        "description": "The answer to allotting an allocation and to rotating its payment key: the allocation, and the\npayment key the command issued for its actor. An enterprise's engine presents that key when it asks\nthe clearinghouse to sign a payment for the actor, and stores it where it stores a Batteries key\ntoday. ``payment_key`` is ``None`` when the store keeps no payment keys (a supplied store without\n``PaymentKeyRepo``).",
-        "properties": {
-          "actor_id": {
-            "title": "Actor Id",
-            "type": "string"
-          },
-          "allocation_id": {
-            "title": "Allocation Id",
-            "type": "string"
-          },
-          "api_key_id": {
-            "title": "Api Key Id",
-            "type": "string"
-          },
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "currency": {
-            "enum": [
-              "USD",
-              "ETH"
-            ],
-            "title": "Currency",
-            "type": "string"
-          },
-          "grant_id": {
-            "title": "Grant Id",
-            "type": "string"
-          },
-          "label": {
-            "default": "",
-            "maxLength": 200,
-            "title": "Label",
-            "type": "string"
-          },
-          "payment_key": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/IssuedPaymentKey"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "secret_ref": {
-            "$ref": "#/components/schemas/SecretRef"
-          },
-          "status": {
-            "enum": [
-              "active",
-              "paused",
-              "exhausted",
-              "revoked"
-            ],
-            "title": "Status",
-            "type": "string"
-          },
-          "tenant_id": {
-            "title": "Tenant Id",
-            "type": "string"
-          },
-          "updated_at": {
-            "format": "date-time",
-            "title": "Updated At",
-            "type": "string"
-          }
-        },
-        "required": [
-          "tenant_id",
-          "actor_id",
-          "grant_id",
-          "allocation_id",
-          "api_key_id",
-          "secret_ref",
-          "currency",
-          "status",
-          "created_at",
-          "updated_at"
-        ],
-        "title": "KeyedAllocation",
         "type": "object"
       },
       "KnownActor": {
@@ -2298,7 +2202,7 @@
       },
       "SecretRef": {
         "additionalProperties": false,
-        "description": "A handle to a secret held by a SecretStore. Databases, records and logs hold only this.",
+        "description": "A SecretStore handle, or an opaque receipt for a credential the work engine holds. Which one is the\nactor's ``credential_custody``, never the text of ``ref``.",
         "properties": {
           "ref": {
             "minLength": 1,
@@ -2563,8 +2467,11 @@
       },
       "TenantGrant": {
         "additionalProperties": false,
-        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked\nones included (#166).",
+        "description": "A tenant with its grant, as the payment provider reports it (D83). The tenant's id is the grant's\nid. ``unallocated`` is what is left to allot; the provider, not the engine, refuses an allocation\nlarger than it. ``spent`` is the tenant's payment usage: what its allocations have spent, the revoked\nones included (#166). ``allocated_unspent`` is what its allocations still hold (#167): for each one,\nwhat it was allotted less what it has spent, and nothing for one that has spent more, so an overdrawn\nallocation takes nothing off another's. A revoked allocation holds nothing: what it had not spent is\nback in ``unallocated``. The two together are what the tenant may still spend.",
         "properties": {
+          "allocated_unspent": {
+            "$ref": "#/components/schemas/Money-Output"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -2593,7 +2500,8 @@
           "status",
           "total",
           "unallocated",
-          "spent"
+          "spent",
+          "allocated_unspent"
         ],
         "title": "TenantGrant",
         "type": "object"
@@ -2708,7 +2616,7 @@
       },
       "UnspentGrants": {
         "additionalProperties": false,
-        "description": "What the tenants whose grants are in one currency may still spend (#167): for every grant the\nprovider holds in that currency, whatever its status, the grant's total less what its allocations\nhave spent, and never less than zero for one grant. ``grants`` is how many grants were summed.\nNothing is converted: a deployment with grants in two currencies has two of these.",
+        "description": "What the tenants whose grants are in one currency may still spend (#167): for every grant the\nprovider holds in that currency, whatever its status, what is not yet allotted (``unallocated``) and\nwhat its allocations still hold (``allocated_unspent``), neither counted below zero. It is not the\ngrant's total less what was spent: an allocation that spent more than it held takes nothing off the\nrest. ``grants`` is how many grants were summed. Nothing is converted: a deployment with grants in two\ncurrencies has two of these.",
         "properties": {
           "grants": {
             "title": "Grants",
@@ -2819,12 +2727,6 @@
         "description": "An engine API key: `lpk_...`",
         "scheme": "bearer",
         "type": "http"
-      },
-      "PaymentKey": {
-        "bearerFormat": "lpp",
-        "description": "An actor's payment key: `lpp_...`, issued when its allocation is allotted",
-        "scheme": "bearer",
-        "type": "http"
       }
     }
   },
@@ -2834,40 +2736,6 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/generate-live-payment": {
-      "post": {
-        "description": "Sign one payment against the allocation of the actor whose payment key this is. Fixed work\ncalls it once; live work calls it every payment cycle, with the signer's `state` from the cycle\nbefore. An empty allocation is the signer's 402.",
-        "operationId": "generate_live_payment_generate_live_payment_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "The signer's own answer: its status, body and content type, whatever the status."
-          },
-          "401": {
-            "description": "No live payment key. Nothing was sent to the signer."
-          },
-          "502": {
-            "description": "`code: signer_outcome_unknown`. The call left and no usable answer came back."
-          },
-          "503": {
-            "description": "`code: signer_not_reached`. The signer was not reached: nothing was sent."
-          }
-        },
-        "security": [
-          {
-            "PaymentKey": []
-          }
-        ],
-        "summary": "Generate Live Payment",
-        "tags": [
-          "clearinghouse half"
-        ]
-      }
-    },
     "/readyz": {
       "get": {
         "operationId": "readyz_readyz_get",
@@ -2884,40 +2752,6 @@
           }
         },
         "summary": "Readyz"
-      }
-    },
-    "/sign-orchestrator-info": {
-      "post": {
-        "description": "Who the clearinghouse's signer is: the call the gateway SDK begins every payment with. It\nsigns no payment. It still takes a payment key: nothing here answers without one.",
-        "operationId": "sign_orchestrator_info_sign_orchestrator_info_post",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "The signer's own answer: its status, body and content type, whatever the status."
-          },
-          "401": {
-            "description": "No live payment key. Nothing was sent to the signer."
-          },
-          "502": {
-            "description": "`code: signer_outcome_unknown`. The call left and no usable answer came back."
-          },
-          "503": {
-            "description": "`code: signer_not_reached`. The signer was not reached: nothing was sent."
-          }
-        },
-        "security": [
-          {
-            "PaymentKey": []
-          }
-        ],
-        "summary": "Sign Orchestrator Info",
-        "tags": [
-          "clearinghouse half"
-        ]
       }
     },
     "/v1/allowance": {
@@ -3119,7 +2953,6 @@
         ]
       },
       "post": {
-        "description": "Allot the actor's allocation from the tenant's grant. The answer carries the actor's payment\nkey, whose token is shown once.",
         "operationId": "allot_v1_clearinghouse_actors__actor_id__allocation_post",
         "parameters": [
           {
@@ -3148,7 +2981,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/KeyedAllocation"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -3228,7 +3061,6 @@
     },
     "/v1/clearinghouse/actors/{actor_id}/allocation/rotate-payment-key": {
       "post": {
-        "description": "Replace the actor's payment key, and the Batteries key behind it. The old one stops at once.",
         "operationId": "rotate_payment_key_v1_clearinghouse_actors__actor_id__allocation_rotate_payment_key_post",
         "parameters": [
           {
@@ -3257,7 +3089,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/KeyedAllocation"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -3928,7 +3760,6 @@
         ]
       },
       "post": {
-        "description": "Allot the actor's allocation from the tenant's grant. The answer carries the actor's payment\nkey, whose token is shown once.",
         "operationId": "allot_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_post",
         "parameters": [
           {
@@ -3967,7 +3798,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/KeyedAllocation"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -4057,7 +3888,6 @@
     },
     "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/rotate-payment-key": {
       "post": {
-        "description": "Replace the actor's payment key, and the Batteries key behind it. The old one stops at once.",
         "operationId": "rotate_payment_key_v1_clearinghouse_tenants__tenant_id__actors__actor_id__allocation_rotate_payment_key_post",
         "parameters": [
           {
@@ -4096,7 +3926,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/KeyedAllocation"
+                  "$ref": "#/components/schemas/ActorAllocation"
                 }
               }
             },
@@ -5793,7 +5623,7 @@
       "name": "work half"
     },
     {
-      "description": "Served by an engine in its `both` or its `clearinghouse` role (`LPB_ROLE`): these routes are 404 on an engine in its `work` role, which pays through a payment clearinghouse and is not one.",
+      "description": "Served by an engine in its `both` or its `clearinghouse` role (`LPB_ROLE`): these routes are 404 on an engine in its `work` role, which uses a payment clearinghouse and is not one.",
       "name": "clearinghouse half"
     },
     {

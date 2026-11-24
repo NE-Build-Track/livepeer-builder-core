@@ -227,8 +227,10 @@ Locked by Mike on 13 November 2026.
 The payment clearinghouse (D82 to D86, the [ISS-31 guide](iss-31-payment-configurations.md)) is now
 configuration 2. The matrix keeps its seven rows.
 
-- **Configuration 2** is an enterprise's engine in its `work` role paying through an engine in its
-  `clearinghouse` role. It runs `per_actor`, like configuration 1. The tables above are changed.
+- **Configuration 2** is an enterprise's engine in its `work` role with an engine in its `clearinghouse`
+  role: the clearinghouse allots the allocations and hands over each actor's payment key, and the
+  enterprise's engine signs at the clearinghouse's signer. It runs `per_actor`, like configuration 1.
+  The tables above are changed.
 - **Row G** is ChatLPT with its embedded engine. It is the proof ISS-31 names (#116).
 - **Row F** uses an engine server in its `work` role.
 - **Evidence item 6.** The clearinghouse admin's top-up of the grant and the tenant admin's allotment take

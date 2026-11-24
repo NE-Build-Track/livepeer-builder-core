@@ -2,8 +2,9 @@
 # "clearinghouse"; in this project it is the service `batteries`.
 # The webhook and Kafka stay on loopback (the signer shares this container's network namespace; `:8080`
 # is 127.0.0.1). The management API binds all interfaces so the engine can reach it over the project's
-# inside network, which Batteries v0.0.3 and later accept only with the unsafe@ prefix. No port of this
-# container is published. The on-chain listener is turned on in compose.yaml.
+# inside network, which Batteries v0.0.3 and later accept only with the unsafe@ prefix. No port of
+# Batteries is published: the signer, which shares this container's network namespace, is published by
+# the signer-relay service, port 8937 alone. The on-chain listener is turned on in compose.yaml.
 DBPath = "/data/clearinghouse.db"
 CredsFile = "/run/secrets/batteries.toml"
 EnableAuthWebhook = ":8080"

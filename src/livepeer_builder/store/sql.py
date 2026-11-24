@@ -43,7 +43,6 @@ from livepeer_builder.store.matching import (
 )
 from livepeer_builder.store.migrate import upgrade
 from livepeer_builder.store.operations import SqlOperations
-from livepeer_builder.store.payment_keys import SqlPaymentKeys
 from livepeer_builder.store.rows import chunks, insert_once, load_jobs
 
 _LOG = logging.getLogger(__name__)
@@ -69,7 +68,7 @@ def create_engine(url: str) -> AsyncEngine:
     return engine
 
 
-class SqlStore(SqlKeys, SqlOperations, actors.SqlActorCommands, SqlPaymentKeys):
+class SqlStore(SqlKeys, SqlOperations, actors.SqlActorCommands):
     def __init__(self, engine: AsyncEngine) -> None:
         self.engine = engine
         self.maintenance = SqlMaintenance(engine)

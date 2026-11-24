@@ -4,17 +4,18 @@
 
 | Secret | Where it lives | Never appears in |
 | --- | --- | --- |
-| Allocation keys (`lpg_`) | `SecretStore` (encrypted DB by default, which needs `LPB_SECRET_KEY`, or an enterprise vault); records hold a `SecretRef` | DB plaintext, responses, events, logs, `ActorContext` |
-| Payment keys a clearinghouse issues (`lpp_`, #166) | Only their SHA-256 hash is stored (`lpb_payment_keys`); the token is shown once, in the answer to the allotment or the rotation that issued it | DB plaintext, the operation ledger, any read, logs |
+| Allocation keys (`lpg_`) | `SecretStore` (encrypted DB by default, which needs `LPB_SECRET_KEY`, or an enterprise vault); records hold a `SecretRef`. A standalone clearinghouse stores none: allotment and rotation hand each key once to the enterprise's engine, which keeps it in its own `SecretStore` (#166) | DB plaintext, the operation ledger, events, logs, `ActorContext`, and every response but that one handover |
 | Engine API keys (`lpk_`), a tenant admin's included | Only their SHA-256 hash is stored; the token is shown once, and the answer to onboarding a tenant is the one place a tenant's first admin key appears | DB plaintext, list/inspect responses |
 | `LPB_SECRET_KEY` (Fernet KEK) | The deployment's secret manager | The database, backups |
 | `LPB_BATTERIES_TOKEN` | The deployment's secret manager | Clients, responses |
 | `LPB_BATTERIES_GRANTS_TOKEN` (optional, the tenant desk) | The deployment's secret manager | Clients, responses |
-| `LPB_CLEARINGHOUSE_TOKEN` (#168): the tenant admin key of an engine that uses a payment clearinghouse | The deployment's secret manager. It is sent as a bearer to the tenant's routes at `LPB_CLEARINGHOUSE_URL`, and to the discovery address only when that is the clearinghouse's runner list. No redirect is followed | Logs, error text, `repr`, the output of `lpb payments check`, the clearinghouse's two signer paths, any runner, any other address |
-| The payment keys an enterprise's engine is handed by its clearinghouse (`lpp_`, #168) | The enterprise's `SecretStore`, where an allocation key is kept with self-hosted payments; the actor's record holds a `SecretRef`. It is sent as the bearer of that actor's signer calls, at the clearinghouse's two signer paths and nowhere else | The engine's own answers (`payment_key: null`), DB plaintext, the operation ledger, logs, the tenant's routes, any runner |
+| `LPB_CLEARINGHOUSE_TOKEN` (#168): the tenant admin key of an engine that uses a payment clearinghouse | The deployment's secret manager. It is sent as a bearer to the tenant's routes at `LPB_CLEARINGHOUSE_URL`, and to the discovery address only when that is the clearinghouse's runner list. No redirect is followed | Logs, error text, an error's chain or its traceback's frames, `repr`, the output of `lpb payments check`, the signer, any runner, any other address |
+| The allocation keys an enterprise's engine is handed by its clearinghouse (`lpg_`, #168), once each, in the answer to an allotment or a payment key rotation | The enterprise's `SecretStore`, where an allocation key is kept with self-hosted payments; the actor's record holds a `SecretRef`, with `credential_custody: secret_store`. It is sent as the bearer of that actor's signer calls, to the signer at `LPB_SIGNER_URL` and nowhere else | The engine's own answers, DB plaintext, the operation ledger, logs, error text, an error's chain or its traceback's frames, the clearinghouse's routes, any runner. The clearinghouse keeps none ([payments.md](contracts/payments.md#payment-keys)) |
 
 Settings use `SecretStr`, so secrets don't print in reprs. `tests/unit/test_payments.py` checks that
 no plaintext payment key is stored, and `tests/unit/test_http.py` checks that none is returned.
+`tests/unit/test_allocation_delivery.py` checks that a key handed over is in no table and no store, and
+is masked wherever the answer is dumped or logged.
 
 **The payment path stays out of builder responses (D58).** A payment failure's message is the
 engine's own; the signer URL and the signer's or Batteries' text go to the log only, and
@@ -41,29 +42,32 @@ See [contracts/access.md](contracts/access.md#boundaries).
 - **Payment calls:** the caller's credential stops at the engine. Only the actor's allocation key
   goes to the signer.
 - **Roles (D84, #169):** `LPB_ROLE` decides what a deployment exposes. An engine in its `work` role
-  serves no clearinghouse route and no signer path, and holds no address or credential of Batteries or
-  a signer: its payment calls go to the clearinghouse, and a prompt or a result never does. An engine in
-  its `clearinghouse` role serves no job route and no other work route, runs no job, and does not start
-  without the private listener: onboarding, a grant's top-up, a tenant's status and the wallet report
-  are never on the address it publishes. Batteries and the signer are reached by that engine alone and
-  are published nowhere (the [two Compose projects](../deploy/README.md) show the arrangement). A
-  setting that contradicts the role is refused at startup by name, with no value echoed
-  (`tests/unit/test_role_settings.py`, `tests/unit/test_roles.py`).
-- **Payment keys (D87, #166):** a clearinghouse gives an enterprise's engine one payment key for each
-  actor, never the Batteries key behind it. A payment key finds one actor, and only while that actor
-  holds the allocation the key was issued for: rotating it stops the old one at once, and revoking the
-  allocation stops it. It is no access key: as a bearer on any route but the signer's two paths it gets
-  what no credential gets. `tests/unit/test_issued_payment_keys.py` checks both, and that the token is in
-  no table and no log line ([payments.md](contracts/payments.md#payment-keys)).
-- **Signing through a clearinghouse (D87, #166):** `POST /sign-orchestrator-info` and
-  `POST /generate-live-payment` take a payment key and nothing else: no credential, an access key and a
-  Batteries key are 401 there, on both paths, and nothing is forwarded for them. The clearinghouse reads
-  the actor's Batteries key from its own secret store and calls its signer with it. That key is in no
-  answer, error body or log line, an answer that held it would be withheld, and the payment key is never
-  sent to the signer or to Batteries. Only the request body and its content type go to the signer, and
-  only the signer's status, body and content type come back. The private signer's address is in the log
-  only (`tests/unit/test_signing_routes.py`,
-  [payments.md](contracts/payments.md#signing-through-a-clearinghouse)).
+  serves no clearinghouse route, and holds no address or credential of Batteries: its allotments and
+  reads go to the clearinghouse, its payments are signed at the clearinghouse's published signer, and a
+  prompt or a result goes to neither. An engine in its `clearinghouse` role serves no job route and no
+  other work route, runs no job, stores no allocation's key, and does not start without the private
+  listener: onboarding, a grant's top-up, a tenant's status and the wallet report are never on the
+  address it publishes. A setting that contradicts the role is refused at startup by name, with no
+  value echoed (`tests/unit/test_role_settings.py`, `tests/unit/test_roles.py`).
+- **The payment key handover (D85, D87, #166):** a standalone clearinghouse, an engine in its
+  `clearinghouse` role, hands each allocation's own Batteries key (`lpg_`) to the engine of the tenant
+  it belongs to, once, in the answer to the allotment or the rotation that minted it. That answer goes
+  to the tenant's admin or a clearinghouse admin and to nobody else: another tenant's admin is 403
+  before any provider call. The clearinghouse keeps no copy.
+  The key is in a buffer of that one call, never in a store, a table, the operation ledger or a log
+  line, and the answer carries `Cache-Control: no-store`. A repeat of a finished command hands over
+  nothing, a resumed one hands over the key Batteries returns again, and a command whose actor was
+  revoked, rotated or allotted again meanwhile hands over none
+  (`tests/unit/test_allocation_delivery.py`, [payments.md](contracts/payments.md#payment-keys)). A key
+  spends its own allocation and no other: a leaked one is bounded by that allocation, and a rotation or
+  a revoke ends it. On a self-hosted engine, the `both` role, no key leaves: the engine stores each one
+  and returns none.
+- **The signer is published; Batteries is not (D85 point 1):** at a clearinghouse every enterprise's
+  engine signs at the signer itself, with the keys it was handed. The clearinghouse's engine is not in
+  that path, so the signer's Batteries authorization webhook is the only check at signing: the signer
+  is reachable by enterprise engines and keeps that webhook configured. Batteries' management API stays
+  private, reached by the clearinghouse's own engine alone (the
+  [two Compose projects](../deploy/README.md) show the arrangement).
 - **Runner addresses:** a runner URL names one app on an orchestrator, and a job's `path` is appended
   to it. The contract refuses a path that is not already normal (a dot or empty segment, an encoded
   separator, a backslash, a control character, a lone surrogate or a fragment) with a 422 before anything
@@ -75,24 +79,26 @@ See [contracts/access.md](contracts/access.md#boundaries).
   grant's id, every command passes the tenant it acts on to the access policy, and a tenant admin is
   refused there for any other tenant (403) before any lookup or provider call. A tenant admin divides its
   tenant's grant and cannot enlarge it, issue an admin key, or act through `/v1/keys` on another
-  tenant's key ([access.md](contracts/access.md#defaultpolicy)). No Batteries credential leaves the
-  engine. Since 19 November 2026 (D87 point 3, as amended) a tenant credential cannot name a tenant in a
-  path at all: a tenant's own routes take the tenant from the credential, and a path that names a tenant
-  takes a clearinghouse admin only, on the private listener
-  ([access.md](contracts/access.md#listeners)). An engine that uses a clearinghouse refuses a command
-  about another tenant than its own before it sends anything, since the clearinghouse would apply it to
-  the key's tenant.
+  tenant's key ([access.md](contracts/access.md#defaultpolicy)). No Batteries management credential
+  leaves the engine. The one Batteries credential that leaves a standalone clearinghouse is an
+  allocation's own key, handed once to the engine of the tenant it belongs to (above). Since 19 November
+  2026 (D87 point 3, as amended) a tenant credential cannot name a tenant in a path at all: a tenant's
+  own routes take the tenant from the credential, and a path that names a tenant takes a clearinghouse
+  admin only, on the private listener ([access.md](contracts/access.md#listeners)). An engine that uses
+  a clearinghouse refuses a command about another tenant than its own before it sends anything, since
+  the clearinghouse would apply it to the key's tenant.
 - **The private listener (D84, #167):** a clearinghouse admin key can onboard tenants and top up grants,
   so a leaked one could spend the wallet. A deployment that sets `LPB_HTTP_PRIVATE_PORT` serves what
   only a clearinghouse admin does (onboarding, the tenant list, a grant's top-up, a tenant's status, the
   wallet report, and a tenant's routes at the paths that name the tenant) on a private listener, which binds loopback unless told otherwise. On the public
   listener those routes are 404, as any unknown path, and a clearinghouse admin credential is 403 on
-  every route that takes an access credential, so a leaked clearinghouse admin key does nothing where
-  the engine is published. The private listener takes a clearinghouse admin credential only. Reaching
-  it is not enough: it still asks for the credential. The signer's two paths (#166) are on both
-  listeners and take a payment key on both; an access key of any kind is 401 there. With
-  one listener, the default, there is no such boundary: keep the engine off the public network, or put
-  the admin routes behind your own proxy ([access.md](contracts/access.md#listeners)).
+  every route that takes a credential, so a leaked clearinghouse admin key does nothing where the
+  engine is published. The private listener takes a clearinghouse admin credential only. Reaching it is
+  not enough: it still asks for the credential. Neither listener hands an allocation's key to a caller:
+  an engine with two listeners stores each key for its own jobs, as an engine with one does, and the
+  handover above is the `clearinghouse` role's (#169). With one listener, the default, there is no such
+  boundary: keep the engine off the public network, or put the admin routes behind your own proxy
+  ([access.md](contracts/access.md#listeners)).
 - **The wallet report (#167):** it states the wallet's deposit and reserve, the unspent grants and
   whether the signer answers. It holds no key material, no keystore path and no RPC address; the
   wallet's public address is in it because Batteries reports it. The engine reads no chain and holds no

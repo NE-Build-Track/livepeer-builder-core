@@ -1,7 +1,10 @@
 """#168: ``LPB_CLEARINGHOUSE_URL`` and its two companions select the remote adapters (D84).
 
-With them, every payment part the caller did not supply reaches the clearinghouse, and nothing of
-Batteries or a signer is built. Without them the engine is built as before. A supplied part is never
+With them, the three payment ports that reach a clearinghouse (``AllocationManager``,
+``AllowanceReader``, ``UsageSource``) are the remote adapters, and nothing of Batteries is built. The
+other two stay the engine's own, as with self-hosted payments: it keeps each actor's key in its own
+secret store, and it signs at the signer ``LPB_SIGNER_URL`` names, which is the clearinghouse's (D85
+point 1, as amended). Without the settings the engine is built as before. A supplied part is never
 replaced.
 """
 
@@ -12,7 +15,6 @@ from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageS
 from livepeer_builder.adapters.clearinghouse import (
     ClearinghouseAllocations,
     ClearinghouseAllowances,
-    ClearinghouseCredentials,
     ClearinghouseUsage,
 )
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
@@ -29,14 +31,40 @@ from tests.unit.clearinghouse_engine import TOKEN, parts_of, self_hosted, with_c
 # -- which adapters ---------------------------------------------------------------------------------------
 
 
-async def test_the_clearinghouse_settings_point_every_payment_port_at_the_clearinghouse() -> None:
+SIGNER = "http://127.0.0.1:8935"
+
+
+async def test_the_clearinghouse_settings_point_three_payment_ports_at_the_clearinghouse() -> None:
     async with parts_of(with_clearinghouse()) as parts:
         assert isinstance(parts.allocation_manager, ClearinghouseAllocations)
         assert parts.grants_manager is parts.allocation_manager  # it reads the grant, and refuses the rest
         assert isinstance(parts.usage_source, ClearinghouseUsage)
-        assert isinstance(parts.credentials, ClearinghouseCredentials)
         assert isinstance(parts.allowances, ClearinghouseAllowances)
         assert TOKEN not in repr(parts)
+
+
+async def test_the_engine_keeps_its_actors_keys_itself_and_signs_at_the_signer() -> None:
+    """The two ports no clearinghouse serves. ``CredentialResolver`` is the engine's own: the key it was
+    handed, from its own secret store. Signing is the SDK's transport at ``LPB_SIGNER_URL``, exactly as
+    a self-hosted engine's, and the clearinghouse's address is no part of it."""
+    given = with_clearinghouse("http://127.0.0.1:9", signer_url=SIGNER)
+    async with parts_of(given) as parts, parts_of(self_hosted(signer_url=SIGNER)) as own:
+        assert parts.credentials is None  # the engine's own records and secret store
+        assert isinstance(parts.transport, SdkRunnerTransport) and parts.transport.pays
+        assert vars(parts.transport) == vars(own.transport)  # one transport, whoever runs the signer
+        assert "127.0.0.1:9" not in repr(vars(parts.transport))
+    engine = await BuilderEngine.create(given)
+    try:
+        assert engine.jobs._credentials is engine.payments
+    finally:
+        await engine.stop()
+
+
+async def test_without_a_signer_address_the_engine_does_not_pay() -> None:
+    """As today for any engine: the clearinghouse's address never stands in for the signer's."""
+    async with parts_of(with_clearinghouse()) as parts:
+        assert isinstance(parts.transport, SdkRunnerTransport) and not parts.transport.pays
+        assert vars(parts.transport)["_signer_url"] is None
 
 
 async def test_without_them_the_engine_is_built_for_self_hosted_payments_as_before() -> None:

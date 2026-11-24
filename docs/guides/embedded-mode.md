@@ -137,13 +137,15 @@ resolves it and sends it to the signer. See [SECURITY.md](../SECURITY.md).
 
 **With a payment clearinghouse** the code above is the same, and the settings differ (D84, #169). The
 engine is in its `work` role: `LPB_ROLE=work`, with `LPB_CLEARINGHOUSE_URL`, `LPB_CLEARINGHOUSE_TOKEN`
-and `LPB_CLEARINGHOUSE_TENANT_ID` from what the clearinghouse admin handed over at onboarding, and no
-Batteries or signer setting ([RELIABILITY.md](../RELIABILITY.md#roles)). The tenant is onboarded at the
-clearinghouse, not here, and its id is the `tenant_id` of every actor. `engine.payments.allot` then
-takes the amount from the tenant's grant at the clearinghouse and keeps the payment key the
-clearinghouse issues for the actor (`lpp_`) in your `SecretStore`; each job is signed there with it
+and `LPB_CLEARINGHOUSE_TENANT_ID` from what the clearinghouse admin handed over at onboarding,
+`LPB_SIGNER_URL` set to the signer the clearinghouse publishes, and no Batteries setting
+([RELIABILITY.md](../RELIABILITY.md#roles)). The tenant is onboarded at the clearinghouse, not here, and
+its id is the `tenant_id` of every actor. `engine.payments.allot` then takes the amount from the
+tenant's grant at the clearinghouse and stores the key the clearinghouse hands over for the actor's
+allocation in your `SecretStore`; your engine signs each job's payment with it, at that signer, itself
 ([payments.md](../contracts/payments.md#the-remote-adapters)). Allot through the engine: an allocation
-made at the clearinghouse directly gives your engine no payment key.
+made at the clearinghouse directly hands its key to that caller, and your engine has no record of the
+actor.
 
 ## 4. Call the services
 
@@ -214,8 +216,11 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
   of your own (`manager.add_grant("<tenant id>")`, then `EngineSupply(allocation_manager=manager,
   grants_manager=manager)`), or onboard the tenant. The fake refuses as Batteries does: an unknown grant
   is its 404, and an allocation or a top-up larger than the grant's unallocated balance its 409.
-  `payments.allot` answers with the allocation and the actor's payment key (`KeyedAllocation`): an
-  engine with self-hosted payments does not use that key, and its `.allocation` is the stored record.
+  `payments.allot` stores the actor's payment key in the engine's `SecretStore` and answers the
+  allocation (`ActorAllocation`, with `credential_custody: secret_store`). `payments.allot_for_delivery`
+  is what a standalone clearinghouse calls: it hands the key to the caller once, in a
+  `DeliveredAllocation`, and stores none, so an engine that runs the actor's jobs itself never calls it
+  ([payments.md](../contracts/payments.md#payment-keys)).
 
 ## 5. What you still run as an operator
 

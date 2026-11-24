@@ -3,13 +3,13 @@
 Writes deploy/clearinghouse/secrets/ (git-ignored, mode 0700): Batteries' credential registry (the
 engine's two credentials, the signer's webhook credential and the Kafka users) and the signer's webhook
 and Kafka files. Then writes deploy/clearinghouse/.env from .env.example, with the engine's two Batteries
-credentials and a new LPB_SECRET_KEY filled in. Nothing is printed but the names of what is left to do.
+credentials filled in. The engine gets no LPB_SECRET_KEY: in its clearinghouse role it hands each
+allocation's key to the caller and stores none. Nothing is printed but the names of what is left to do.
 
 You still add secrets/rpc-url (mode 0600, no trailing newline) and config/discovery.toml, and set the
 four WALLET_ variables in .env.
 """
 
-import base64
 import os
 import secrets
 from pathlib import Path
@@ -72,11 +72,7 @@ files = {
 for name, value in files.items():
     (target / name).write_text(value)
 
-filled = {
-    "LPB_BATTERIES_TOKEN": engine,
-    "LPB_BATTERIES_GRANTS_TOKEN": grant_desk,
-    "LPB_SECRET_KEY": base64.urlsafe_b64encode(os.urandom(32)).decode(),  # as `lpb gen-secret-key`
-}
+filled = {"LPB_BATTERIES_TOKEN": engine, "LPB_BATTERIES_GRANTS_TOKEN": grant_desk}
 lines = []
 for line in (project / ".env.example").read_text().splitlines():
     name = line.split("=", 1)[0]

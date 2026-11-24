@@ -62,10 +62,6 @@ classDiagram
         +__aiter__() AsyncIterator
         +async aclose() None
     }
-    class SignerForwarder {
-        <<interface>>
-        +async forward_signer_call(call, credential, body, content_type) SignerAnswer
-    }
     class CredentialResolver {
         <<interface>>
         +async credential(actor) PaymentKey
@@ -89,7 +85,11 @@ classDiagram
     }
     class AllocationsByActor {
         <<interface>>
-        +for_actor(tenant_id, actor_id) AllocationManager
+        +for_actor(tenant_id, actor_id, operation_ref) AllocationManager
+    }
+    class OneKeyPerAllocation {
+        <<interface>>
+        +async holds_key(allocation_id, api_key_id) bool
     }
     class UsageSource {
         <<interface>>
@@ -126,7 +126,7 @@ classDiagram
     class ActorCommandRepo {
         <<interface>>
         +async allot_actor(actor, replacing) bool
-        +async set_actor_key(tenant_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from) ActorAllocation?
+        +async set_actor_key(tenant_id, actor_id, allocation_id, api_key_id, secret_ref, updated_at, only_from, credential_custody) ActorAllocation?
         +async set_actor_status(tenant_id, actor_id, allocation_id, status, updated_at, only_from) ActorAllocation?
     }
     class UsageOnceRepo {
@@ -137,12 +137,6 @@ classDiagram
         <<interface>>
         +async count_set_aside_usage() int
         +async set_aside_usage(rows) SetAsideUsage[]
-    }
-    class PaymentKeyRepo {
-        <<interface>>
-        +async actor_by_payment_key(token_hash) ActorAllocation?
-        +async delete_payment_key(tenant_id, actor_id, allocation_id) None
-        +async put_payment_key(tenant_id, actor_id, allocation_id, token_hash, created_at, only_if_absent) bool
     }
     class CostSnapshot {
         <<interface>>
@@ -180,7 +174,6 @@ classDiagram
     class BatteriesUsageSource
     class ClearinghouseAllocations
     class ClearinghouseAllowances
-    class ClearinghouseCredentials
     class ClearinghouseUsage
     class DefaultPolicy
     class EncryptedDbSecretStore
@@ -210,12 +203,11 @@ classDiagram
     RunnerTransport <|.. SdkRunnerTransport
     StreamingRunnerTransport <|.. SdkRunnerTransport
     RunnerStream <|.. SdkRunnerStream
-    SignerForwarder <|.. SdkRunnerTransport
     CredentialResolver <|.. PaymentsService
-    CredentialResolver <|.. ClearinghouseCredentials
     AllocationManager <|.. BatteriesClient
     AllocationManager <|.. ClearinghouseAllocations
     AllocationsByActor <|.. ClearinghouseAllocations
+    OneKeyPerAllocation <|.. ClearinghouseAllocations
     UsageSource <|.. BatteriesUsageSource
     UsageSource <|.. ClearinghouseUsage
     TenantUsageSource <|.. BatteriesUsageSource
@@ -228,7 +220,6 @@ classDiagram
     ActorCommandRepo <|.. SqlStore
     UsageOnceRepo <|.. SqlStore
     UsageSetAsideRepo <|.. SqlStore
-    PaymentKeyRepo <|.. SqlStore
     CostSnapshot <|.. SqlCostSnapshot
     AllocationCostSnapshot <|.. SqlCostSnapshot
     Clock <|.. SystemClock
@@ -253,12 +244,11 @@ classDiagram
 | `RunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `StreamingRunnerTransport` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `RunnerStream` | `SdkRunnerStream` | `livepeer_builder.adapters.runner_call` |
-| `SignerForwarder` | `SdkRunnerTransport` | `livepeer_builder.adapters.sdk` |
 | `CredentialResolver` | `PaymentsService` | `livepeer_builder.services.payments` |
-| `CredentialResolver` | `ClearinghouseCredentials` | `livepeer_builder.adapters.clearinghouse` |
 | `AllocationManager` | `BatteriesClient` | `livepeer_builder.adapters.batteries` |
 | `AllocationManager` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
 | `AllocationsByActor` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
+| `OneKeyPerAllocation` | `ClearinghouseAllocations` | `livepeer_builder.adapters.clearinghouse` |
 | `UsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
 | `UsageSource` | `ClearinghouseUsage` | `livepeer_builder.adapters.clearinghouse` |
 | `TenantUsageSource` | `BatteriesUsageSource` | `livepeer_builder.adapters.batteries` |
@@ -271,7 +261,6 @@ classDiagram
 | `ActorCommandRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `UsageOnceRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `UsageSetAsideRepo` | `SqlStore` | `livepeer_builder.store.sql` |
-| `PaymentKeyRepo` | `SqlStore` | `livepeer_builder.store.sql` |
 | `CostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `AllocationCostSnapshot` | `SqlCostSnapshot` | `livepeer_builder.store.cost_reads` |
 | `Clock` | `SystemClock` | `livepeer_builder.adapters.clock` |

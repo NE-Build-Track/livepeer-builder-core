@@ -393,6 +393,147 @@ async def test_a_second_interrupt_does_not_wait_for_open_connections(signals: di
         await asyncio.wait_for(serving, timeout=10)
 
 
+@pytest.mark.parametrize("held_on", ["one listener", "both listeners"])
+async def test_a_second_interrupt_ends_serving_while_a_request_is_held_open(
+    signals: dict[int, object], held_on: str
+) -> None:
+    """The forced exit must hang up on open connections itself (John, #181 review): from Python 3.12 the
+    listening server's ``wait_closed()`` returns only once every connection is gone, so ``force_exit``
+    alone left ``serve`` waiting for a request that never ends. With a request held on both listeners,
+    neither server ends after the first Ctrl-C, and the second must still end them."""
+    apps = [Held(), Held()] if held_on == "both listeners" else [Held()]
+    servers, ports = two_servers(*apps)
+    with _bound(servers) as sockets:
+        serving = asyncio.create_task(_serve_together(servers, sockets))
+        await started(servers)
+        writers = [await held_open(port, app) for port, app in zip(ports, apps, strict=False)]
+        try:
+            signal.raise_signal(signal.SIGINT)
+            await nothing_listens(ports)  # both stopped accepting, and the held requests are waited for
+            assert not serving.done() and not any(app.disconnected.is_set() for app in apps)
+            signal.raise_signal(signal.SIGINT)
+            ended, _ = await asyncio.wait([serving], timeout=10)
+            told = [app.disconnected.is_set() for app in apps]
+        finally:  # a serve() left waiting ends once its callers hang up, so a failure is an assertion
+            for writer in writers:
+                await hung_up(writer)
+            await asyncio.wait_for(serving, timeout=10)
+    assert ended, "serve() still waited for a held request 10 s after the second interrupt"
+    assert all(told)  # each request in flight was told its caller is gone
+    assert [server.force_exit for server in servers] == [True, True]
+    assert {sig: signal.getsignal(sig) for sig in signals} == signals
+
+
+def listener_tasks() -> "list[asyncio.Task[Any]]":
+    """The tasks ``_serve_together`` runs its servers in, while one is still running or pending."""
+    return [task for task in asyncio.all_tasks() if task.get_name().startswith("lpb-listener-")]
+
+
+async def gone(tasks: "list[asyncio.Task[Any]]") -> None:
+    """Nothing a failed test left behind outlives it."""
+    if tasks:
+        await asyncio.wait(tasks, timeout=10)
+
+
+@pytest.mark.parametrize("held_on", ["one listener", "both listeners"])
+async def test_a_cancelled_serve_ends_while_a_request_is_held_open(
+    signals: dict[int, object], held_on: str
+) -> None:
+    """Cancelling is how an embedder stops ``serve``, and off the main thread it is the only way. It is
+    a forced exit, as it is for one listener, where uvicorn's ``serve`` raises at once (#181 review): the
+    listeners hang up on their open connections, so a request that never ends does not hold the task."""
+    apps = [Held(), Held()] if held_on == "both listeners" else [Held()]
+    servers, ports = two_servers(*apps)
+    with _bound(servers) as sockets:
+        serving = asyncio.create_task(_serve_together(servers, sockets))
+        await started(servers)
+        writers = [await held_open(port, app) for port, app in zip(ports, apps, strict=False)]
+        try:
+            serving.cancel()
+            ended, _ = await asyncio.wait([serving], timeout=10)
+            told = [app.disconnected.is_set() for app in apps]
+            forced = [server.force_exit for server in servers]
+            still_listening = [listening(port) for port in ports]
+            left = listener_tasks()
+        finally:  # a serve() left waiting ends once its callers hang up, so a failure is an assertion
+            for writer in writers:
+                await hung_up(writer)
+            await asyncio.wait([serving], timeout=10)
+            await gone(left)
+    assert ended, "serve() still waited for a held request 10 s after it was cancelled"
+    assert all(told)  # each request in flight was told its caller is gone
+    assert forced == [True, True]
+    assert not any(still_listening) and not left
+    assert {sig: signal.getsignal(sig) for sig in signals} == signals
+    assert serving.cancelled()  # the caller sees its own cancellation, and nothing else
+    with pytest.raises(asyncio.CancelledError):
+        await serving
+
+
+async def test_a_second_cancel_while_serve_cleans_up_still_ends_both_listeners(
+    signals: dict[int, object],
+) -> None:
+    """A caller that cancels twice (a timeout, then its own shutdown) lands the second cancel in the
+    clean-up. It still finishes: the process's signal handlers are back, and no server is left running."""
+    held = Held()
+    servers, ports = two_servers(first=held)
+    with _bound(servers) as sockets:
+        serving = asyncio.create_task(_serve_together(servers, sockets))
+        await started(servers)
+        writer = await held_open(ports[0], held)
+        try:
+            serving.cancel()
+            await asyncio.sleep(0)  # the first cancel is in, and the clean-up has begun
+            cleaning_up = not serving.done()
+            serving.cancel()
+            ended, _ = await asyncio.wait([serving], timeout=10)
+            left = listener_tasks()
+            handlers = {sig: signal.getsignal(sig) for sig in signals}
+            still_listening = [listening(port) for port in ports]
+        finally:
+            await hung_up(writer)
+            await asyncio.wait([serving], timeout=10)
+            await gone(left)
+    assert cleaning_up, "the second cancel must arrive while serve() is still cleaning up"
+    assert ended, "serve() had not ended 10 s after it was cancelled twice"
+    assert not left, "a server was left running after serve() ended"
+    assert handlers == signals
+    assert not any(still_listening)
+    assert held.disconnected.is_set()
+    assert [server.force_exit for server in servers] == [True, True]
+    assert serving.cancelled()
+
+
+async def test_a_cancel_after_a_first_signal_stops_waiting_for_an_open_connection(
+    signals: dict[int, object],
+) -> None:
+    """After one SIGTERM ``serve`` waits for a request in flight, with no limit. A cancel that arrives
+    during that wait is the same forced exit, and the caller still sees its cancellation."""
+    held = Held()
+    servers, ports = two_servers(first=held)
+    with _bound(servers) as sockets:
+        serving = asyncio.create_task(_serve_together(servers, sockets))
+        await started(servers)
+        writer = await held_open(ports[0], held)
+        try:
+            signal.raise_signal(signal.SIGTERM)
+            await nothing_listens(ports)  # the idle listener has ended, and the other waits
+            assert not serving.done() and not held.disconnected.is_set()
+            serving.cancel()
+            ended, _ = await asyncio.wait([serving], timeout=10)
+            told, left = held.disconnected.is_set(), listener_tasks()
+            handlers = {sig: signal.getsignal(sig) for sig in signals}
+        finally:
+            await hung_up(writer)
+            await asyncio.wait([serving], timeout=10)
+            await gone(left)
+    assert ended, "serve() still waited for a held request 10 s after it was cancelled"
+    assert told and not left
+    assert handlers == signals
+    assert servers[0].force_exit  # the listener that still had a caller was forced
+    assert serving.cancelled()
+
+
 async def test_off_the_main_thread_no_signal_handler_is_installed(signals: dict[int, object]) -> None:
     """Python delivers signals to the main thread only, and refuses a handler set from another. An
     embedder that serves from a worker thread ends the listeners itself."""

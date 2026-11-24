@@ -153,7 +153,10 @@ sequenceDiagram
 ## 5. Explicit allotment (per_actor)
 
 Money moves only on an admin command, with an idempotency key. The key goes straight into the
-`SecretStore`; the database stores only a `SecretRef`.
+`SecretStore`; the database stores only a `SecretRef`. The diagram is an engine with both halves. At a
+standalone clearinghouse `allot_for_delivery` runs the same steps without the `SecretStore`: the key is
+held for the one answer, which hands it to the enterprise's engine, and the actor's row records
+`credential_custody: work_engine` ([payments.md](../contracts/payments.md#payment-keys)).
 
 ```mermaid
 sequenceDiagram

@@ -5,6 +5,12 @@ total less what the grant's allocations hold (``internal/store/manage.go``: crea
 allocation moves the amount out of the grant's unallocated account and adds it to the allocation's
 ``allocated`` amount, and a revoke moves back what was not spent and lowers ``allocated`` by it). The
 adapter reads both and never turns an answer it cannot read into a zero.
+
+The same allocations say what each still holds unspent, ``allocated`` less ``spent`` (#167): the wallet
+report adds that to the unallocated balance for what a tenant may still spend. Batteries charges after
+it authorizes, so an allocation can spend more than it holds (``internal/store/ingest.go``: its
+``available`` balance goes below zero and its status becomes ``exhausted``). Such an allocation holds
+nothing, and takes nothing off another's.
 """
 
 import json
@@ -32,6 +38,22 @@ def allocation(allocation_id: str, grant_id: str, allocated: str, currency: str 
     return {
         "id": allocation_id, "grant_id": grant_id, "name": "n", f"allocated_{currency}": allocated,
         "currency": currency, "status": "active", f"available_{currency}": allocated, f"spent_{currency}": "0",
+    }  # fmt: skip
+
+
+def charged(
+    allocation_id: str,
+    grant_id: str,
+    allocated: str,
+    spent: str,
+    status: str = "active",
+    currency: str = "usd",
+) -> dict[str, Any]:
+    """An allocation that was charged, as Batteries serves it: ``available`` is its ledger balance,
+    ``allocated`` less ``spent``, which is below zero when it is overdrawn."""
+    available = format(Decimal(allocated) - Decimal(spent), "f")
+    return allocation(allocation_id, grant_id, allocated, currency) | {
+        "status": status, f"spent_{currency}": spent, f"available_{currency}": available,
     }  # fmt: skip
 
 
@@ -103,6 +125,62 @@ async def test_every_tenant_is_listed_with_its_own_grants_balance() -> None:
     assert [path for _, path, _ in batteries.requests] == [
         "/v1/grants", "/v1/grants", "/v1/allocations", "/v1/allocations"
     ]  # fmt: skip
+
+
+def eth(amount: str) -> Money:
+    return Money(amount=Decimal(amount), currency="ETH")
+
+
+async def test_what_a_grants_allocations_still_hold_is_summed_allocation_by_allocation() -> None:
+    """An overdrawn allocation adds nothing and takes nothing off another: g1's sums alone (90 allotted,
+    85.25 spent) would read 4.75, where a2 still holds 19.75 and a5 its 10. Read with the requests the
+    balance already made."""
+    batteries = Batteries(
+        [grant("g1", "100"), grant("g2", "7"), grant("g3", "1.5", currency="eth"), grant("g4", "3")],
+        [charged("a1", "g1", "60", "70", "exhausted"), charged("a2", "g1", "20", "0.25"),
+         charged("a3", "g2", "7", "7", "exhausted"),
+         charged("a4", "g3", "1", "0.000000000000000007", currency="eth"),
+         charged("a5", "g1", "10", "0", "paused"),
+         charged("a6", "g3", "0.25", "0.250000000000000001", "exhausted", currency="eth")],
+    )  # fmt: skip
+    listed = await batteries.client().grant_balances()
+    assert [(t.tenant_id, t.unallocated, t.allocated_unspent, t.spent) for t in listed] == [
+        ("g1", usd("10"), usd("29.75"), usd("70.25")),  # a paused allocation can be resumed: it counts
+        ("g2", usd("0"), usd("0"), usd("7")),
+        ("g3", eth("0.25"), eth("0.999999999999999993"), eth("0.250000000000000008")),
+        ("g4", usd("3"), usd("0"), usd("0")),  # no allocation: nothing is held in one
+    ]
+    assert [path for _, path, _ in batteries.requests] == [
+        "/v1/grants", "/v1/grants", "/v1/allocations", "/v1/allocations", "/v1/allocations"
+    ]  # fmt: skip
+
+    batteries.requests.clear()
+    one = await batteries.client().read_grant("g1")
+    assert (one.unallocated, one.allocated_unspent, one.spent) == (usd("10"), usd("29.75"), usd("70.25"))
+    assert [path for _, path, _ in batteries.requests] == [
+        "/v1/grants/g1",
+        "/v1/allocations",
+        "/v1/allocations",
+    ]
+    assert (await batteries.client().read_grant("g4")).allocated_unspent == usd("0")
+
+
+async def test_a_revoked_allocation_holds_nothing_and_what_it_returned_is_counted_once() -> None:
+    """A revoke moves what the allocation had not spent back to the grant and takes it off ``allocated``
+    (``internal/store/manage.go``, the ``revoke:`` transfer), so a revoked allocation is served with
+    ``allocated`` equal to ``spent``: the 50 that a1 returned is in the unallocated balance and in no
+    allocation. A late charge raises ``spent`` only (a2), and one revoked while overdrawn returned
+    nothing (a3). None of them holds anything, and none takes anything off the live one (a4)."""
+    batteries = Batteries(
+        [grant("g1", "100")],
+        [charged("a1", "g1", "10", "10", "revoked"), charged("a2", "g1", "5", "5.5", "revoked"),
+         charged("a3", "g1", "2", "3", "revoked"), charged("a4", "g1", "20", "8")],
+    )  # fmt: skip
+    read = await batteries.client().read_grant("g1")
+    assert (read.unallocated, read.allocated_unspent, read.spent) == (usd("63"), usd("12"), usd("26.5"))
+    assert [(t.unallocated, t.allocated_unspent) for t in await batteries.client().grant_balances()] == [
+        (usd("63"), usd("12"))
+    ]
 
 
 async def test_a_tenant_is_paused_by_setting_its_grants_status() -> None:

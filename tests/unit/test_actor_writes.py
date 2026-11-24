@@ -16,14 +16,7 @@ from typing import Any
 import pytest
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.contracts import (
-    ActorAllocation,
-    ActorContext,
-    AllotRequest,
-    KeyedAllocation,
-    Money,
-    TopUpRequest,
-)
+from livepeer_builder.contracts import ActorAllocation, ActorContext, AllotRequest, Money, TopUpRequest
 from livepeer_builder.errors import (
     AlreadyAllotted,
     InvalidRequest,
@@ -152,7 +145,7 @@ async def test_a_key_rotation_does_not_undo_a_pause_that_finished_meanwhile(
 
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
     assert stored.status == "paused" and stored.api_key_id != before.api_key_id
-    assert rotated.allocation == stored
+    assert rotated == stored
 
 
 @pytest.mark.parametrize("command", ["pause", "activate", "top_up", "rotate"])
@@ -241,15 +234,15 @@ async def test_a_top_up_does_not_undo_a_pause_that_finished_meanwhile(
 async def test_a_top_up_that_changes_no_status_writes_nothing(desk: Desk, clock: FixedClock) -> None:
     allotted = await desk.payments.allot(desk.admin, allot_request())
     clock.advance(60)
-    assert await desk.top_up() == allotted.allocation  # ``updated_at`` included
-    assert await desk.payments.get_actor(desk.admin, "default", "alice") == allotted.allocation
+    assert await desk.top_up() == allotted  # ``updated_at`` included
+    assert await desk.payments.get_actor(desk.admin, "default", "alice") == allotted
 
 
 async def test_a_status_command_writes_the_status_and_the_time_only(desk: Desk, clock: FixedClock) -> None:
     allotted = await desk.payments.allot(desk.admin, allot_request())
     clock.advance(60)
     paused = await desk.pause()
-    assert paused == allotted.allocation.model_copy(update={"status": "paused", "updated_at": clock.now()})
+    assert paused == allotted.model_copy(update={"status": "paused", "updated_at": clock.now()})
     assert await desk.payments.get_actor(desk.admin, "default", "alice") == paused
 
 
@@ -288,7 +281,7 @@ async def test_a_key_rotation_does_not_undo_a_rotation_that_finished_meanwhile(
     rotation wrote its key over the finished one: that one had answered with a key the actor no longer
     held, and its key stayed live with its secret stored and nothing pointing at it."""
     await desk.payments.allot(desk.admin, allot_request())
-    finished: list[KeyedAllocation] = []
+    finished: list[ActorAllocation] = []
 
     async def other() -> None:
         finished.append(await rotate_2(desk))
@@ -296,7 +289,7 @@ async def test_a_key_rotation_does_not_undo_a_rotation_that_finished_meanwhile(
     during(manager, "create_key", other)  # rotate-1 has minted its key; rotate-2 runs to its end
     with pytest.raises(InvalidRequest, match="another key rotation"):
         await desk.rotate()
-    assert await holds_only_the_key_of(desk, alice, manager, vault) == finished[0].allocation
+    assert await holds_only_the_key_of(desk, alice, manager, vault) == finished[0]
 
 
 async def test_a_rotation_resumed_after_a_newer_one_finished_does_not_put_its_own_key_back(
@@ -319,7 +312,7 @@ async def test_a_rotation_resumed_after_a_newer_one_finished_does_not_put_its_ow
     clock.advance(120)  # LPB_OPERATION_STALE_S: rotate-1's first run is presumed dead
     with pytest.raises(InvalidRequest, match="another key rotation"):
         await desk.rotate()
-    assert await holds_only_the_key_of(desk, alice, manager, vault) == second.allocation
+    assert await holds_only_the_key_of(desk, alice, manager, vault) == second
 
 
 async def test_a_rotation_that_lost_keeps_its_reference_and_answers_the_same_again(
@@ -339,7 +332,7 @@ async def test_a_rotation_that_lost_keeps_its_reference_and_answers_the_same_aga
     with pytest.raises(InvalidRequest) as again:
         await desk.rotate()
     assert str(again.value) == str(lost.value) and manager.calls == calls
-    assert await desk.payments.get_actor(desk.admin, "default", "alice") == third.allocation
+    assert await desk.payments.get_actor(desk.admin, "default", "alice") == third
 
 
 async def test_a_rotation_that_lost_and_could_not_revoke_its_own_key_finishes_on_a_repeat(
@@ -395,7 +388,7 @@ async def test_a_rotation_resumed_after_a_revoke_and_a_new_allotment_is_refused(
     with pytest.raises(NotFound, match=f"began on allocation '{first.allocation_id}'") as refused:
         await desk.rotate()
     assert manager.calls == calls  # nothing was sent for the new allocation
-    assert await holds_only_the_key_of(desk, alice, manager, vault) == second.allocation
+    assert await holds_only_the_key_of(desk, alice, manager, vault) == second
     clock.advance(120)  # a refusal on a resumed run keeps its reference: the same answer again
     with pytest.raises(NotFound) as again:
         await desk.rotate()
@@ -427,7 +420,7 @@ async def test_such_a_rotation_drops_the_secret_it_had_stored_for_the_revoked_al
     clock.advance(120)
     with pytest.raises(NotFound, match="began on allocation"):
         await desk.rotate()
-    assert await holds_only_the_key_of(desk, alice, manager, vault) == second.allocation
+    assert await holds_only_the_key_of(desk, alice, manager, vault) == second
 
 
 # -- an allotment that another command overtook --------------------------------------------------------
@@ -471,7 +464,7 @@ async def test_a_allotment_does_not_move_an_actor_out_of_revoked(
     answer = await desk.payments.allot(desk.admin, allot_b())
 
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
-    assert stored.status == "revoked" and answer.allocation == stored
+    assert stored.status == "revoked" and answer == stored
     assert manager.allocations[stored.allocation_id].status == "revoked"
     assert len(manager.allocations) == (2 if start == "revoked" else 1)  # nothing more was funded
     with pytest.raises(NotProvisioned):
@@ -488,9 +481,7 @@ async def test_a_allotment_does_not_undo_a_pause_that_finished_meanwhile(
     answer = await desk.payments.allot(desk.admin, allot_b())
 
     stored = await holds_only_the_key_of(desk, alice, manager, vault)
-    assert (
-        stored.status == "paused" and answer.allocation == stored
-    )  # the same allocation and key: its result too
+    assert stored.status == "paused" and answer == stored  # the same allocation and key: its result too
     assert manager.allocations[stored.allocation_id].status == "paused"
 
 
@@ -569,13 +560,13 @@ async def test_a_store_without_the_column_writes_still_runs_every_command(
     allotted = await desk.payments.allot(desk.admin, allot_request("0"))
     clock.advance(60)
     funded = await desk.top_up()
-    assert funded == allotted.allocation.model_copy(update={"status": "active", "updated_at": clock.now()})
+    assert funded == allotted.model_copy(update={"status": "active", "updated_at": clock.now()})
     assert (await desk.pause()).status == "paused"
     assert (await desk.activate()).status == "active"
 
     rotated = await desk.rotate()
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
-    assert rotated.allocation == stored and stored.api_key_id != allotted.api_key_id
+    assert rotated == stored and stored.api_key_id != allotted.api_key_id
     assert (await desk.payments.credential(alice)).token == manager.keys[stored.api_key_id][1]
     assert list(vault.values) == [stored.secret_ref.ref]
 
@@ -584,6 +575,29 @@ async def test_a_store_without_the_column_writes_still_runs_every_command(
     assert vault.values == {}
     with pytest.raises(NotFound):
         await desk.pause()
+
+
+@pytest.mark.parametrize("whole_row", [False, True], ids=["column-writes", "whole-row"])
+async def test_a_rotation_records_custody_with_its_key_on_either_store(
+    make_engine: EngineFactory,
+    store: SqlStore,
+    admin: ActorContext,
+    vault: MemorySecretStore,
+    whole_row: bool,
+) -> None:
+    """The key write carries who holds the new key (#186 review), in the store's own write and in the
+    engine's whole-row fallback alike."""
+    supplied = _WholeRowStore(store) if whole_row else store
+    engine = await make_engine(supply=EngineSupply(store=supplied, secret_store=vault))  # type: ignore[arg-type]
+    await engine.payments.allot(admin, allot_request())
+    delivered = await engine.payments.rotate_for_delivery(admin, "default", "alice", "rotate-1")
+    stored = await engine.payments.get_actor(admin, "default", "alice")
+    assert stored.credential_custody == delivered.credential_custody == "work_engine"
+    assert stored.secret_ref == delivered.secret_ref and vault.values == {}
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-2")
+    stored = await engine.payments.get_actor(admin, "default", "alice")
+    assert stored == rotated and stored.credential_custody == "secret_store"
+    assert list(vault.values) == [stored.secret_ref.ref]
 
 
 @pytest.mark.parametrize("command", ["pause", "top_up", "rotate"])
@@ -619,7 +633,7 @@ async def test_a_store_without_the_column_writes_keeps_a_rotation_that_finished_
 ) -> None:
     desk = whole_row_desk
     await desk.payments.allot(desk.admin, allot_request())
-    finished: list[KeyedAllocation] = []
+    finished: list[ActorAllocation] = []
 
     async def other() -> None:
         finished.append(await rotate_2(desk))
@@ -627,7 +641,7 @@ async def test_a_store_without_the_column_writes_keeps_a_rotation_that_finished_
     during(manager, "create_key", other)
     with pytest.raises(InvalidRequest, match="another key rotation"):
         await desk.rotate()
-    assert await holds_only_the_key_of(desk, alice, manager, vault) == finished[0].allocation
+    assert await holds_only_the_key_of(desk, alice, manager, vault) == finished[0]
 
 
 @pytest.mark.parametrize("then", ["revoke", "pause"])
@@ -639,5 +653,5 @@ async def test_a_store_without_the_column_writes_keeps_what_finished_during_a_al
     answer = await desk.payments.allot(desk.admin, allot_b())
 
     stored = await desk.payments.get_actor(desk.admin, "default", "alice")
-    assert stored.status == ("revoked" if then == "revoke" else "paused") and answer.allocation == stored
+    assert stored.status == ("revoked" if then == "revoke" else "paused") and answer == stored
     assert list(vault.values) == ([] if then == "revoke" else [stored.secret_ref.ref])

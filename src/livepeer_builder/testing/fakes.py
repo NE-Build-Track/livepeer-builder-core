@@ -253,6 +253,8 @@ class _Grant:
 
 class FakeAllocationManager(FakeEscrow):
     """Mimics Batteries management semantics: idempotent replays, and a grant's unallocated balance.
+    A success is saved under the call's idempotency key and replayed to the same request under that key;
+    any other request under it is refused as Batteries refuses it (409), and nothing is applied.
 
     A tenant's id is its grant's id (D83), so an allotment names a grant the fake must hold. ``add_grant``
     gives it one under an id the test chooses (a tenant such as ``"default"``); ``create_grant``, which
@@ -271,6 +273,7 @@ class FakeAllocationManager(FakeEscrow):
         self.allocations: dict[str, _Allocation] = {}
         self.keys: dict[str, tuple[str, str, bool]] = {}  # api_key_id -> (allocation, secret, revoked)
         self.replays: dict[str, object] = {}
+        self._sent: dict[str, tuple[object, ...]] = {}  # the request each saved success answered
         self.calls: list[str] = []
         self.topped_up_grants: list[tuple[str, Money, str]] = []
         self.grants: list[GrantRecord] = []
@@ -309,6 +312,17 @@ class FakeAllocationManager(FakeEscrow):
         if call in self._failures:
             raise self._failures.pop(call)
 
+    def _saved(self, idempotency_key: str, *request: object) -> bool:
+        """Whether a success is saved under the key, for this request as it is sent: an amount is compared
+        as written (``5`` is not ``5.0``). A call that failed saved nothing."""
+        sent = tuple(f"{v.amount:f} {v.currency}" if isinstance(v, Money) else v for v in request)
+        if idempotency_key not in self.replays:
+            self._sent[idempotency_key] = sent
+            return False
+        if self._sent[idempotency_key] == sent:
+            return True
+        raise ProviderError(409, "idempotency key was already used with different parameters or operation")
+
     def _grant(self, grant_id: str) -> _Grant:
         if grant_id not in self._held:
             raise ProviderError(404, "resource not found")
@@ -325,7 +339,7 @@ class FakeAllocationManager(FakeEscrow):
     ) -> NewAllocationKey:
         self._called("create_key_for_grant")
         self.last_grant_id = grant_id
-        if idempotency_key in self.replays:
+        if self._saved(idempotency_key, "create_key_for_grant", grant_id, name, amount):
             return self.replays[idempotency_key]  # type: ignore[return-value]
         self._take(grant_id, amount.amount)
         allocation = f"alloc_{len(self.allocations) + 1}"
@@ -337,7 +351,7 @@ class FakeAllocationManager(FakeEscrow):
 
     async def create_key(self, allocation_id: str, name: str, idempotency_key: str) -> NewAllocationKey:
         self._called("create_key")
-        if idempotency_key in self.replays:
+        if self._saved(idempotency_key, "create_key", allocation_id, name):
             return self.replays[idempotency_key]  # type: ignore[return-value]
         key = self._mint(allocation_id)
         self.replays[idempotency_key] = key
@@ -347,7 +361,7 @@ class FakeAllocationManager(FakeEscrow):
         self, allocation_id: str, amount: Money, idempotency_key: str
     ) -> None:
         self._called("top_up_allocation")
-        if idempotency_key in self.replays:
+        if self._saved(idempotency_key, "top_up_allocation", allocation_id, amount):
             return
         allocation = self.allocations[allocation_id]
         self._take(allocation.grant_id, amount.amount)
@@ -360,7 +374,7 @@ class FakeAllocationManager(FakeEscrow):
         self, grant_id: str, amount: Money, idempotency_key: str
     ) -> None:
         self._called("top_up_grant")
-        if idempotency_key in self.replays:
+        if self._saved(idempotency_key, "top_up_grant", grant_id, amount):
             return
         grant = self._grant(grant_id)
         self.replays[idempotency_key] = True
@@ -430,16 +444,14 @@ class FakeAllocationManager(FakeEscrow):
 
     async def read_grant(self, grant_id: str) -> TenantGrant:  # NOSONAR - async by protocol
         self._called("read_grant")
-        return _tenant_grant(self._grant(grant_id), self._spent(grant_id))
+        return _tenant_grant(self._grant(grant_id), self._allocations_of(grant_id))
 
     async def grant_balances(self) -> list[TenantGrant]:  # NOSONAR - async by protocol
         self._called("grant_balances")
-        return [_tenant_grant(self._held[grant.id], self._spent(grant.id)) for grant in self.grants]
+        return [_tenant_grant(self._held[grant.id], self._allocations_of(grant.id)) for grant in self.grants]
 
-    def _spent(self, grant_id: str) -> Decimal:
-        """What the grant's allocations have spent, the revoked ones included, as Batteries reports it."""
-        spent = (held.spent for held in self.allocations.values() if held.grant_id == grant_id)
-        return sum(spent, Decimal(0))
+    def _allocations_of(self, grant_id: str) -> list[_Allocation]:  # the revoked ones included
+        return [held for held in self.allocations.values() if held.grant_id == grant_id]
 
     async def set_grant_status(self, grant_id: str, status: str) -> None:  # NOSONAR - async by protocol
         self._called("set_grant_status")
@@ -471,8 +483,11 @@ class FakeAllocationManager(FakeEscrow):
         return NewAllocationKey(allocation_id=allocation_id, api_key_id=key_id, secret=SecretStr(secret))
 
 
-def _tenant_grant(grant: _Grant, spent: Decimal) -> TenantGrant:
+def _tenant_grant(grant: _Grant, allocations: list[_Allocation]) -> TenantGrant:
+    """As Batteries reports it: an allocation that spent more than it holds adds nothing to the unspent."""
     currency: Currency = "USD" if grant.record.currency == "USD" else "ETH"
+    spent = sum((held.spent for held in allocations), Decimal(0))
+    unspent = sum((max(held.granted - held.spent, Decimal(0)) for held in allocations), Decimal(0))
     return TenantGrant(
         tenant_id=grant.record.id,
         name=grant.record.name,
@@ -480,4 +495,5 @@ def _tenant_grant(grant: _Grant, spent: Decimal) -> TenantGrant:
         total=Money(amount=grant.total, currency=currency),
         unallocated=Money(amount=grant.unallocated, currency=currency),
         spent=Money(amount=spent, currency=currency),
+        allocated_unspent=Money(amount=unspent, currency=currency),
     )

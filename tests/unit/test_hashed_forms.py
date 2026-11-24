@@ -225,7 +225,7 @@ async def test_an_allotment_recorded_with_its_grant_before_165_is_replayed_and_n
     alice = alice_from("grant_1", clock.now())
     await store.save_actor(alice)
     await store.begin_operation(recorded("provision", clock, result=alice.model_dump(mode="json")))
-    assert (await engine.payments.allot(admin, ALLOT_ALICE)).allocation == alice
+    assert await engine.payments.allot(admin, ALLOT_ALICE) == alice
     assert OPERATION_REPLAYED.get() is True and manager.calls == []
     with pytest.raises(OperationConflict):  # another amount under the reference is still a conflict
         await engine.payments.allot(

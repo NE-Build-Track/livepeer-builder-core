@@ -16,6 +16,7 @@ from livepeer_gateway.errors import LivepeerGatewayError, LivepeerHTTPError
 from livepeer_gateway.remote_signer import get_signer_info
 from pydantic import SecretStr
 
+from livepeer_builder.adapters.clean_errors import bare, raised
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_address import runner_address
 from livepeer_builder.adapters.runner_call import (
@@ -25,18 +26,9 @@ from livepeer_builder.adapters.runner_call import (
     json_object,
 )
 from livepeer_builder.adapters.signer_failures import unavailable_before_signing
-from livepeer_builder.adapters.signer_forward import HttpSignerForwarder
-from livepeer_builder.contracts import (
-    JobRequest,
-    Runner,
-    RunnerReply,
-    SignerAnswer,
-    SignerCall,
-    SignerNotReady,
-    SignerReadiness,
-)
+from livepeer_builder.contracts import JobRequest, Runner, RunnerReply, SignerNotReady, SignerReadiness
 from livepeer_builder.contracts.payments import payable_rate
-from livepeer_builder.errors import SignerNotReached
+from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.protocols import OnSigned
 
 _LOG = logging.getLogger(__name__)
@@ -66,6 +58,11 @@ class HttpDiscoverySource:
     so a slow source would otherwise freeze the snapshot. A redirect is not followed, even by an injected
     client; it fails the refresh. A 2xx whose content encoding does not decode is a ``ValueError``, as
     a body that is not JSON is. There is no size cap (D63).
+
+    A read that carried ``bearer`` fails with an error that leads to no key (#168 review): the kind and
+    the words the reader always raised, as a new error that holds no request, chains none that does,
+    and was never in a frame that held one (``_read``). Without ``bearer`` nothing is held back, and the
+    HTTP client's own error is raised as before.
     """
 
     def __init__(
@@ -96,16 +93,25 @@ class HttpDiscoverySource:
         return self._document
 
     async def fetch(self) -> tuple[Runner, ...]:
-        try:
-            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
-            async with asyncio.timeout(self._timeout_s):
-                body = await self._body(self._client)
-        except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
-            message = f"no inventory from {self._discovery_url} within {self._timeout_s:g}s"
-            raise TimeoutError(message) from error
+        body = raised(await self._read())
         runners = read_inventory(body)
         self._document = body  # kept only once it read: the document the snapshot is built from
         return runners
+
+    async def _read(self) -> bytes | Exception:
+        """The document as it was served, or the error the read came to. The error is returned, for
+        ``raised``, and never raised from here: this frame's callee holds the request, whose headers
+        carry ``bearer``, and the HTTP client's own errors hold it too."""
+        try:
+            # httpx's timeout bounds each phase; this bounds the request, so a slow body cannot hold a refresh
+            async with asyncio.timeout(self._timeout_s):
+                return await self._body(self._client)
+        except (TimeoutError, httpx.TimeoutException) as error:  # httpx's is no TimeoutError, and says ""
+            slow = TimeoutError(f"no inventory from {self._discovery_url} within {self._timeout_s:g}s")
+            slow.__cause__ = error if self._bearer is None else bare(error)
+            return slow
+        except Exception as error:
+            return error if self._bearer is None else _without_the_request(error)
 
     async def _body(self, client: httpx.AsyncClient) -> bytes:
         headers = {"Accept": _JSON}
@@ -122,6 +128,73 @@ class HttpDiscoverySource:
                 raise ValueError(message) from error
 
 
+def _without_the_request(error: Exception) -> Exception:
+    """The error of a read that carried a credential, as a new error of the same kind and words that
+    holds no request. An error status keeps its status and the address it was asked at, on an answer and
+    a request made here, with no header of the ones that were sent and no body. What the error chained
+    is kept by its kind alone."""
+    if isinstance(error, httpx.HTTPStatusError):
+        asked = httpx.Request(error.request.method, error.request.url)
+        answered = httpx.Response(error.response.status_code, request=asked)
+        return httpx.HTTPStatusError(str(error), request=asked, response=answered)
+    fresh = bare(error)
+    if error.__cause__ is not None:
+        fresh.__cause__ = bare(error.__cause__)
+    return fresh
+
+
+async def signer_readiness(signer_url: str | None) -> SignerReadiness:
+    """Whether the signer at ``signer_url`` answers its identity call now (#167): the call every paid job
+    begins with, at the root of the signer address, as the SDK makes it. It carries no credential, signs
+    no payment, and its answer (the wallet's address and a signature) is not kept. The SDK's own words
+    for a failure hold the signer address and the signer's body, so only the kind of failure is logged."""
+    if signer_url is None:
+        return SignerReadiness(ready=False, reason="not_configured")
+    try:
+        await _ask_signer_identity(signer_url)
+    except (LivepeerGatewayError, ValueError) as error:  # ValueError: an address the SDK cannot call
+        answered = isinstance(error, LivepeerGatewayError) and not unavailable_before_signing(error)
+        reason: SignerNotReady = "no_identity" if answered else "unavailable"
+        status = error.status_code if isinstance(error, LivepeerHTTPError) else None
+        _LOG.warning(
+            "signer not ready",
+            extra={
+                "event": "signer.not_ready",
+                "reason": reason,
+                "status_code": status,
+                "error": type(error).__name__,
+            },
+        )
+        return SignerReadiness(ready=False, reason=reason)
+    return SignerReadiness(ready=True)
+
+
+class IdentityOnlyTransport:
+    """The transport of an engine in its ``clearinghouse`` role (#169), which never runs a job (D82) and
+    signs nothing: its tenants' engines sign at the signer themselves. All it can do is ask the signer
+    at ``LPB_SIGNER_URL`` for its identity, which the wallet report states (``SignerProbe``). It calls no
+    runner and no signing path, opens no stream, and takes no credential anywhere."""
+
+    pays = False  # no credential pays a runner through it
+
+    def __init__(self, signer_url: str | None) -> None:
+        self._signer_url = signer_url
+
+    async def signer_readiness(self) -> SignerReadiness:
+        return await signer_readiness(self._signer_url)
+
+    async def call(
+        self,
+        runner: Runner,
+        request: JobRequest,
+        credential: str | None,
+        on_signed: OnSigned | None = None,
+    ) -> RunnerReply:
+        """Never reached through the engine: admission refuses every job in this role first."""
+        del runner, request, credential, on_signed
+        raise InvalidRequest("this engine is in its clearinghouse role (LPB_ROLE) and calls no runner")
+
+
 class SdkRunnerTransport:
     """The Live Runner call with the actor's credential as the signer bearer. Unpaid when there is none.
 
@@ -130,19 +203,9 @@ class SdkRunnerTransport:
     ``get_payment`` (D53).
     """
 
-    def __init__(
-        self,
-        signer_url: str | None,
-        max_payment_challenge_retries: int = 3,
-        *,
-        signer_is_clearinghouse: bool = False,
-    ) -> None:
+    def __init__(self, signer_url: str | None, max_payment_challenge_retries: int = 3) -> None:
         self._signer_url = signer_url
         self._retries = max_payment_challenge_retries
-        # Whether the address is a payment clearinghouse's, which serves the signer's two paths (#168). A
-        # clearinghouse can say it sent its signer nothing; a signer never does (signer_failures.py).
-        self._signer_is_clearinghouse = signer_is_clearinghouse
-        self._forwarder = HttpSignerForwarder(signer_url) if signer_url is not None else None
 
     @property
     def pays(self) -> bool:
@@ -150,40 +213,8 @@ class SdkRunnerTransport:
         return self._signer_url is not None
 
     async def signer_readiness(self) -> SignerReadiness:
-        """Whether the signer answers its identity call now (``SignerProbe``, #167): the call every paid
-        job begins with, at the root of the signer address, as the SDK makes it. It carries no
-        credential, signs no payment, and its answer (the wallet's address and a signature) is not kept.
-        The SDK's own words for a failure hold the signer address and the signer's body, so only the
-        kind of failure is logged."""
-        if self._signer_url is None:
-            return SignerReadiness(ready=False, reason="not_configured")
-        try:
-            await _ask_signer_identity(self._signer_url)
-        except (LivepeerGatewayError, ValueError) as error:  # ValueError: an address the SDK cannot call
-            answered = isinstance(error, LivepeerGatewayError) and not unavailable_before_signing(error)
-            reason: SignerNotReady = "no_identity" if answered else "unavailable"
-            status = error.status_code if isinstance(error, LivepeerHTTPError) else None
-            _LOG.warning(
-                "signer not ready",
-                extra={
-                    "event": "signer.not_ready",
-                    "reason": reason,
-                    "status_code": status,
-                    "error": type(error).__name__,
-                },
-            )
-            return SignerReadiness(ready=False, reason=reason)
-        return SignerReadiness(ready=True)
-
-    async def forward_signer_call(
-        self, call: SignerCall, credential: str, body: bytes, content_type: str
-    ) -> SignerAnswer:
-        """One signer call for a clearinghouse (``SignerForwarder``, #166), to the signer this transport
-        pays the engine's own jobs through, with ``credential`` as its bearer. An engine whose transport
-        does not pay serves neither signer path, so the first branch is a supplied wiring's."""
-        if self._forwarder is None:
-            raise SignerNotReached("this engine has no signer (LPB_SIGNER_URL)")
-        return await self._forwarder.forward_signer_call(call, credential, body, content_type)
+        """Whether the signer answers its identity call now (``SignerProbe``, #167)."""
+        return await signer_readiness(self._signer_url)
 
     def _request(
         self, runner: Runner, request: JobRequest, credential: str | None, events: PaymentEvents
@@ -215,7 +246,7 @@ class SdkRunnerTransport:
         credential: str | None,
         on_signed: OnSigned | None = None,
     ) -> RunnerReply:
-        events = PaymentEvents(on_signed, clearinghouse=self._signer_is_clearinghouse)
+        events = PaymentEvents(on_signed)
         paid = self._request(runner, request, credential, events)
         status, body, content_type = await paid.respond(request.timeout_s)
         return RunnerReply(
@@ -241,7 +272,7 @@ class SdkRunnerTransport:
         keeps the sessions signed so far for cost sync; if it hits before the signer's payment is
         validated, ``payment_sent`` is ``False`` and the manifest stays ``unknown``.
         """
-        events = PaymentEvents(on_signed, clearinghouse=self._signer_is_clearinghouse)
+        events = PaymentEvents(on_signed)
         paid = self._request(runner, request, credential, events)
         try:
             async with asyncio.timeout(request.first_byte_timeout_s):

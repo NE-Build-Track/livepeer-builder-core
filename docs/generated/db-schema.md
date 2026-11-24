@@ -37,6 +37,7 @@ erDiagram
         datetime created_at
         datetime updated_at
         string label
+        string credential_custody
     }
     lpb_attempts {
         string job_id PK
@@ -101,13 +102,6 @@ erDiagram
         json result
         datetime started_at
         datetime completed_at
-    }
-    lpb_payment_keys {
-        string tenant_id PK
-        string actor_id PK
-        string allocation_id
-        string token_hash
-        datetime created_at
     }
     lpb_payment_sessions {
         string job_id PK
@@ -196,6 +190,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `created_at` | DATETIME | no |  |
 | `updated_at` | DATETIME | no |  |
 | `label` | VARCHAR(200) | no |  |
+| `credential_custody` | VARCHAR(16) | no |  |
 
 ## `lpb_attempts`
 
@@ -281,16 +276,6 @@ Indexes:
 | `result` | JSON | yes |  |
 | `started_at` | DATETIME | no |  |
 | `completed_at` | DATETIME | yes |  |
-
-## `lpb_payment_keys`
-
-| Column | Type | Null | Key |
-| --- | --- | --- | --- |
-| `tenant_id` | VARCHAR(200) | no | PK |
-| `actor_id` | VARCHAR(200) | no | PK |
-| `allocation_id` | VARCHAR(200) | no |  |
-| `token_hash` | VARCHAR(64) | no | unique |
-| `created_at` | DATETIME | no |  |
 
 ## `lpb_payment_sessions`
 

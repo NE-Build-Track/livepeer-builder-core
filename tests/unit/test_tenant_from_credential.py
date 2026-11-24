@@ -75,9 +75,9 @@ def bearer(token: str | None) -> dict[str, str]:
 
 
 def routes_of(mount: Any, engine: BuilderEngine) -> dict[tuple[str, str], APIRoute]:
-    """The routes one group mounts, by itself."""
+    """The routes one group mounts, by itself. The routes are the same whoever keeps the keys."""
     app = shared_app(engine, manage_lifecycle=False)
-    mount(app, engine)
+    mount(app, engine, deliver_allocation_keys=False)
     return {
         (method, route.path): route
         for route in app.routes

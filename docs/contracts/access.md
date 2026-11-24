@@ -173,7 +173,7 @@ role (`LPB_ROLE`, D84, #169), and a listener serves some or all of those:
 | `LPB_ROLE` | Routes served | Listeners |
 | --- | --- | --- |
 | `both`, the default | The work routes and the clearinghouse routes | One, or two with `LPB_HTTP_PRIVATE_PORT` |
-| `work` | The work routes. A clearinghouse route, the wallet, the runner list and the signer's two paths are each 404, as any path the engine does not know, with a credential or without one | One, or two with `LPB_HTTP_PRIVATE_PORT`. It has no private group, so both serve the work routes, and the rule about kinds below still holds |
+| `work` | The work routes. A clearinghouse route, the wallet and the runner list are each 404, as any path the engine does not know, with a credential or without one | One, or two with `LPB_HTTP_PRIVATE_PORT`. It has no private group, so both serve the work routes, and the rule about kinds below still holds |
 | `clearinghouse` | The clearinghouse routes. Every work route is 404 the same way: the job routes, `GET /v1/offerings`, `/v1/runners`, the cost routes, `GET /v1/allowance`, `/v1/events`, `/v1/sessions` and `/v1/keys` | Two, always: the settings do not load without `LPB_HTTP_PRIVATE_PORT`, and `create_app` refuses to build it the app of one listener |
 
 `/livez` and `/readyz` are served in every role and on every listener, with no credential, and `/readyz`
@@ -209,12 +209,11 @@ in one process:
 | Routes | Every route but the private group | Every route but a tenant's own routes |
 | The private group: onboarding, the tenant list, a grant's top-up, a tenant's status, the wallet report, and a tenant's routes at the paths that name the tenant | 404, as any path the engine does not know, with a credential or without one | Served |
 | A tenant's own routes, which name no tenant | Served | 404, the same way |
-| A clearinghouse admin credential | 403 on every route that takes an access credential, the work routes included | Accepted |
+| A clearinghouse admin credential | 403 on every route that takes a credential, the work routes included | Accepted |
 | A tenant admin, an auditor, an actor or a service credential | Accepted, as with one listener | 403 on every route, its own tenant's included |
 | No credential, or a bad one | 401 | 401 |
-| The signer's two paths, `POST /sign-orchestrator-info` and `POST /generate-live-payment` (#166) | Served. A live payment key signs. Anything else is 401: no credential, a Batteries key, and an access key of any kind, a clearinghouse admin's included | Served, and the same answers: a live payment key signs here too |
 | `/livez`, `/readyz`, `GET /v1/offerings` | Served, with no credential | Served, with no credential |
-| `/openapi.json`, `/docs` | The public listener's routes only | Every route |
+| `/openapi.json`, `/docs` | The public listener's routes only | The private listener's routes only |
 
 - **The private listener is for a clearinghouse admin only.** It is where a clearinghouse admin does
   everything, for any tenant, naming the tenant in the path. A tenant's admin and its auditor use the
@@ -223,13 +222,15 @@ in one process:
 - **A tenant admin key of kind `tenant_admin` is issued on the private listener:**
   `POST /v1/clearinghouse/tenants/{tenant_id}/keys` is served there only, and only a clearinghouse admin
   may issue that kind ([a tenant's access keys](#a-tenants-access-keys)).
-- **The signer's two paths are on every listener, and the rule about kinds does not reach them.** They
-  take a payment key, which is no access credential and has no kind
-  ([payments.md](payments.md#signing-through-a-clearinghouse)). An enterprise's engine reaches a
-  clearinghouse at its public listener, so they are served there; they are a group served on every
-  listener, so they are on the private one too, and a live payment key signs on both. An access key is
-  401 on them on every listener: a clearinghouse admin key gets 401 there, not the public listener's
-  403, and a tenant's key gets 401 there, not the private listener's 403.
+- **Who keeps an allocation's key follows the role, on one listener or two** (#169). An engine in its
+  `both` role runs jobs, so allotment and rotation store the key in its `SecretStore` and answer the
+  allocation alone, on the public listener and on the private one. An engine in its `clearinghouse`
+  role hands each key to the caller once and stores none, on both of its listeners: to the tenant's
+  admin on the public one, at the path that names no tenant, and to a clearinghouse admin on the
+  private one, at the path that names the tenant, who passes it to the tenant
+  ([payments.md](payments.md#payment-keys)). `delivers_allocation_keys(role)` in `http/listeners.py`
+  decides, and `create_app` passes its answer to every app it builds. No listener serves a signer path
+  in any role: an engine signs at the signer itself.
 - **The credential rule is a property of the listener, not of each route.** It is applied where every
   route authenticates (`http/auth.py`), by kind, after the credential is verified. A route added later
   is covered with no check of its own, and so is a route an extension adds with `actor_dependency`
@@ -239,17 +240,20 @@ in one process:
   `http/listeners.py`: each group of routes with its half and which of two listeners serves it
   (`served_on`: `every`, `public` or `private`). A group of routes that is not in it fails a test
   (`tests/unit/test_listeners.py`), which also reads the routes from each app: every route of the
-  private group is 404 on the public listener, every route that takes an access credential refuses a
+  private group is 404 on the public listener, every route that takes a credential refuses a
   clearinghouse admin key on the public listener before the provider or the store is asked, and a
   tenant's own routes are the public listener's alone. `tests/unit/test_tenant_from_credential.py`
-  sweeps both forms of a tenant's routes for the kinds each refuses. The routes that take no credential, and the two that take a payment
-  key, are named there with their own answers, so a new one is a decision somebody made.
+  sweeps both forms of a tenant's routes for the kinds each refuses. The routes that take no credential
+  are named there, so a new one is a decision somebody made.
 - **The published schema.** `docs/generated/openapi.json` is generated from an engine in its `both`
   role with one listener, so it has every route. Each route but health carries the tag of its half,
   `work half` or `clearinghouse half`, whose description names the roles that serve it. The routes of
   the private group also carry the tag `private listener`, and a tenant's own routes the tag
-  `public listener`. An engine's own `/openapi.json` names the
-  routes of its role and its listener, and no other.
+  `public listener`. Its allotment and rotation answer the allocation alone, as that engine does.
+  `docs/generated/openapi-clearinghouse.json` is generated from an engine in its `clearinghouse` role,
+  for its private listener: the routes that listener serves and no other, with the answer that hands an
+  allocation's key over ([payments.md](payments.md#payment-keys)). An engine's own `/openapi.json`
+  names the routes of its role and its listener, and no other.
 - **A clearinghouse has no route that issues a second clearinghouse admin key** (#169). `/v1/keys`,
   which issues every kind, is a work route. The first clearinghouse admin key is `lpb bootstrap-admin`'s,
   once. It is kept under the tenant `default`, so its holder lists, rotates and revokes it on the private
@@ -441,11 +445,13 @@ Both are generic: no enterprise logic lives in the engine.
   bootstrap route and no static admin token. A tenant's first admin key comes from onboarding it, and
   only a clearinghouse admin issues another. A deployment with a private listener accepts a
   clearinghouse admin credential there only ([listeners](#listeners)).
-- **Payment keys (#166):** a payment key (`lpp_`) is no access key. It asks a clearinghouse for one
-  actor's payments and nothing else, at the signer's two paths (`POST /sign-orchestrator-info`,
-  `POST /generate-live-payment`): as a bearer on any other route it gets what no credential gets, 401.
-  Those two paths do not go through the authenticator chain: a payment key is the one credential there,
-  and an access key or a JWT is 401 ([payments.md](payments.md#signing-through-a-clearinghouse)).
+- **Payment keys (#166):** an allocation's key (`lpg_`) is no access key. It is a credential at the
+  signer and nowhere else: as a bearer on any engine route it gets what no credential gets, 401. The
+  engine that runs an actor's jobs holds that actor's key. With self-hosted payments that is the one
+  engine, which keeps it in its `SecretStore` and returns it in no answer. At a standalone clearinghouse
+  it is the enterprise's engine: allotment and rotation hand it the key once, in an answer only that
+  tenant's admin or a clearinghouse admin can get, and the clearinghouse keeps none
+  ([payments.md](payments.md#payment-keys)).
 - **Request fields:** no request field establishes identity. The body's `actor_id` on admin routes
   names a *target* and needs an admin credential.
 
@@ -461,8 +467,7 @@ Both are generic: no enterprise logic lives in the engine.
 | A tenant's auditor key | That tenant's admin (`POST /v1/clearinghouse/keys`), or a clearinghouse admin (`POST .../tenants/{tenant_id}/keys`) | A dashboard or audit reader | That tenant's admin, or a clearinghouse admin |
 | Batteries management credential | Batteries operator | Engine settings (`LPB_BATTERIES_TOKEN`) | Batteries operator |
 | Batteries grants credential (tenant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_GRANTS_TOKEN`), optional; without it the tenant desk is off | Batteries operator |
-| Allocation key (`lpg_`) | Engine, through the Batteries management API | `SecretStore` (a reference in the DB) | Engine: `rotate-payment-key` / `revoke` |
-| Payment key (`lpp_`, #166) | A clearinghouse's engine, when it allots the actor's allocation | The enterprise's engine, where it keeps a Batteries key today; the clearinghouse keeps the hash | The tenant's admin: `rotate-payment-key` (the old one stops at once) / `revoke` |
+| Allocation key (`lpg_`) | Engine, through the Batteries management API | Self-hosted payments: the engine's `SecretStore` (a reference in the DB). At a standalone clearinghouse: the enterprise's engine, handed the key once by allotment or rotation; the clearinghouse keeps a receipt and no key (`credential_custody`, [payments.md](payments.md#payment-keys)) | Engine: `rotate-payment-key` / `revoke`, on the tenant admin's command |
 | Signer webhook token; Kafka credentials | Batteries operator | Signer | Batteries operator |
 
 ## Example standalone flow

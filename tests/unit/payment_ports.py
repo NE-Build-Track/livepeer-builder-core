@@ -2,21 +2,24 @@
 
 ``open_ports("local")`` is an engine whose payment ports reach the payment provider itself: self-hosted
 payments, with the shipped fakes standing in for Batteries. ``open_ports("remote")`` is an enterprise's
-engine whose ports are the remote adapters, over an in-process transport into a clearinghouse's public
-listener (``create_app(..., listener="public")``), whose own engine has the same fakes behind it. So on
-the remote side both ends of the wire are this repository's code, and the provider that holds the money
-is the same kind of object on both sides: a test reads it to see what happened.
+engine whose ports are the remote adapters, over an in-process transport into a standalone
+clearinghouse's public listener (``standalone_clearinghouse``): the app ``create_app`` builds for an
+engine in its ``clearinghouse`` role, which hands each allocation's key to the caller and stores none.
+The clearinghouse is an engine of its own, with a store and a secret store of its own and the same fakes
+behind it. So on the remote side both ends of the wire are this repository's code, and the provider that
+holds the money is the same kind of object on both sides: a test reads it to see what happened.
 
-Since #169 each engine is in the role its side has: ``local`` is the ``both`` role, the enterprise's
-engine is in its ``work`` role, and the clearinghouse in its ``clearinghouse`` role, which serves no work
-route and runs no job.
+Each engine is in the role its side has (#169): ``local`` is the ``both`` role, the enterprise's engine
+is in its ``work`` role, and the clearinghouse in its ``clearinghouse`` role, which serves no work route
+and runs no job. ``open_ports("remote", house=...)`` puts another engine where the clearinghouse should
+be: a test of what an enterprise's engine meets there.
 """
 
 import contextlib
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 from fastapi import FastAPI
@@ -26,17 +29,10 @@ from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.clearinghouse import ClearinghousePorts
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
 from livepeer_builder.contracts import ActorContext, Money
-from livepeer_builder.errors import NotAuthenticated
 from livepeer_builder.http import create_app
 from livepeer_builder.protocols import AllocationManager, AllowanceReader, CredentialResolver, UsageSource
 from livepeer_builder.store import SqlStore
-from livepeer_builder.testing import (
-    FakeAllocationManager,
-    FakeSigningTransport,
-    FakeUsageSource,
-    MemorySecretStore,
-    make_engine,
-)
+from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource, MemorySecretStore, make_engine
 
 Side = Literal["local", "remote"]
 AppOf = Callable[[BuilderEngine], FastAPI]
@@ -46,12 +42,14 @@ GRANT_TOTAL = Decimal(100)
 OPERATOR = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 # A clearinghouse has a private listener (#169). Nothing binds it here: the apps are called in process.
 CLEARINGHOUSE_ROLE: dict[str, object] = {"role": "clearinghouse", "http_private_port": 18081}
+# An engine with self-hosted payments and two listeners: no clearinghouse for anybody's engine.
+BOTH_ROLE: dict[str, object] = {"role": "both", "http_private_port": 18081}
 PERMISSIONS = frozenset({"discover", "jobs.run", "jobs.read", "costs.read"})
 
 
 @dataclass
 class Ports:
-    """One engine and its four payment ports, with the provider that holds the money behind them."""
+    """One engine and its payment ports, with the provider that holds the money behind them."""
 
     side: Side
     engine: BuilderEngine  # the engine that runs the jobs: self-hosted, or an enterprise's
@@ -64,9 +62,12 @@ class Ports:
     usage: UsageSource
     credentials: CredentialResolver
     clearinghouse: BuilderEngine | None = None  # the remote side's other end
+    secrets: MemorySecretStore | None = None  # the engine's own secret store, when a test supplied it
+    clearinghouse_secrets: MemorySecretStore | None = None  # the clearinghouse's own, which stays empty
     requests: list[httpx.Request] = field(default_factory=list)  # what crossed the wire (remote)
     token: str = ""  # the tenant admin key (remote)
     lost: list[str] = field(default_factory=list)  # see ``lose_the_answer_to``
+    answers: list[tuple[int, bytes]] = field(default_factory=list)  # what the clearinghouse answered (remote)
     # every request that arrived at the clearinghouse's socket, as (path, headers), when it has one
     seen: list[tuple[str, CIMultiDict[str]]] = field(default_factory=list)
 
@@ -92,15 +93,10 @@ class Ports:
         """The paths of the requests that crossed the wire with ``method``, in order (remote)."""
         return [request.url.path for request in self.requests if request.method == method]
 
-    async def pays_for(self, token: str) -> str | None:
-        """The allocation the payment key ``token`` pays from now, as whoever signs would find it: the
-        provider for a Batteries key, the clearinghouse for a payment key. ``None`` when it pays for
-        nothing (never issued, rotated away, or its allocation revoked)."""
-        if self.clearinghouse is not None:
-            try:
-                return (await self.clearinghouse.payments.resolve_payment_key(token)).allocation_id
-            except NotAuthenticated:
-                return None
+    async def pays_for(self, token: str) -> str | None:  # NOSONAR - async, as the tests await it
+        """The allocation the payment key ``token`` pays from now, as the signer's authorization webhook
+        would find it at the provider, on either side: the key is the allocation's own Batteries key.
+        ``None`` when it pays for nothing (never minted, rotated away, or its allocation revoked)."""
         for allocation_id, secret, revoked in self.provider.keys.values():
             if (
                 secret == token
@@ -112,16 +108,19 @@ class Ports:
 
 
 class Lossy(httpx.AsyncBaseTransport):
-    """The wire into the clearinghouse's app, which can lose an answer after the app handled the request."""
+    """The wire into the clearinghouse's app, which can lose an answer after the app handled the request.
+    ``answers`` is what the app answered each request with, lost or not, as (status, body)."""
 
     def __init__(self, app: httpx.ASGITransport, requests: list[httpx.Request], lost: list[str]) -> None:
         self._app = app
         self._requests = requests
         self._lost = lost
+        self.answers: list[tuple[int, bytes]] = []
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         self._requests.append(request)
         response = await self._app.handle_async_request(request)
+        self.answers.append((response.status_code, await response.aread()))
         for ending in self._lost:
             if request.url.path.endswith(ending):
                 self._lost.remove(ending)
@@ -135,19 +134,28 @@ def usd(amount: str | int) -> Money:
 
 
 @contextlib.asynccontextmanager
-async def open_ports(side: Side, served: AppOf | None = None) -> AsyncIterator[Ports]:
-    """``served`` builds the clearinghouse's app from its engine (remote): its public listener unless a
-    test serves something narrower."""
+async def open_ports(
+    side: Side, served: AppOf | None = None, house: dict[str, object] | None = None, **engine_settings: Any
+) -> AsyncIterator[Ports]:
+    """``served`` builds the app the enterprise's engine calls from the engine behind it (remote): a
+    standalone clearinghouse's public listener unless a test serves something else. ``house`` is that
+    engine's role and listeners: a clearinghouse's unless a test puts another engine there.
+    ``engine_settings`` are more settings of the enterprise's engine (remote)."""
     provider, provider_usage = FakeAllocationManager(), FakeUsageSource()
     if side == "local":
         async with _local(provider, provider_usage) as ports:
             yield ports
     else:
-        async with _remote(provider, provider_usage, served or public_listener) as ports:
+        role = CLEARINGHOUSE_ROLE if house is None else house
+        app = served or standalone_clearinghouse
+        async with _remote(provider, provider_usage, app, role, engine_settings) as ports:
             yield ports
 
 
-def public_listener(house: BuilderEngine) -> FastAPI:
+def standalone_clearinghouse(house: BuilderEngine) -> FastAPI:
+    """What a payment clearinghouse serves an enterprise's engine: the public listener of an engine in
+    its ``clearinghouse`` role, as ``lpb serve`` builds it. The role decides that each allocation's key
+    is handed to the caller once and none is stored; nothing here says so."""
     return create_app(house, manage_lifecycle=False, listener="public")
 
 
@@ -173,16 +181,19 @@ async def _local(provider: FakeAllocationManager, usage: FakeUsageSource) -> Asy
 
 @contextlib.asynccontextmanager
 async def _remote(
-    provider: FakeAllocationManager, usage: FakeUsageSource, served: AppOf
+    provider: FakeAllocationManager,
+    usage: FakeUsageSource,
+    served: AppOf,
+    role: dict[str, object],
+    more: dict[str, Any],
 ) -> AsyncIterator[Ports]:
+    # The clearinghouse's own engine, store and secret store: nothing of them is the enterprise engine's.
+    house_secrets = MemorySecretStore()
     house_supply = EngineSupply(
-        allocation_manager=provider,
-        grants_manager=provider,
-        usage_source=usage,
-        transport=FakeSigningTransport(),  # a clearinghouse has a signer: it serves the signer's two paths
+        allocation_manager=provider, grants_manager=provider, usage_source=usage, secret_store=house_secrets
     )
     async with contextlib.AsyncExitStack() as stack:
-        house = await stack.enter_async_context(make_engine(supply=house_supply, **CLEARINGHOUSE_ROLE))
+        house = await stack.enter_async_context(make_engine(supply=house_supply, **role))
         assert house.payments.tenants is not None
         one = await house.payments.tenants.onboard(OPERATOR, "one", usd(100), operation_ref="onboard-one")
         two = await house.payments.tenants.onboard(OPERATOR, "two", usd(100), operation_ref="onboard-two")
@@ -191,10 +202,10 @@ async def _remote(
 
         requests: list[httpx.Request] = []
         lost: list[str] = []
-        public = served(house)
-        client = await stack.enter_async_context(
-            httpx.AsyncClient(transport=Lossy(httpx.ASGITransport(app=public), requests, lost))
-        )
+        # a failure inside the clearinghouse's app is its 500, as over a socket, and never this side's error
+        inside = httpx.ASGITransport(app=served(house), raise_app_exceptions=False)
+        lossy = Lossy(inside, requests, lost)
+        client = await stack.enter_async_context(httpx.AsyncClient(transport=lossy))
         wire = ClearinghouseWire(CLEARINGHOUSE_URL, token, one.tenant_id, client)
         store = await SqlStore.connect("sqlite+aiosqlite:///:memory:")
         stack.push_async_callback(store.close)
@@ -206,7 +217,6 @@ async def _remote(
             allocation_manager=remote.allocations,
             grants_manager=remote.allocations,
             usage_source=remote.usage,
-            credentials=remote.credentials,
             allowances=remote.allowances,
         )
         settings = {
@@ -215,7 +225,7 @@ async def _remote(
             "clearinghouse_token": token,
             "clearinghouse_tenant_id": one.tenant_id,
         }
-        engine = await stack.enter_async_context(make_engine(supply=supply, **settings))
+        engine = await stack.enter_async_context(make_engine(supply=supply, **settings, **more))
         yield Ports(
             side="remote",
             engine=engine,
@@ -226,9 +236,12 @@ async def _remote(
             manager=remote.allocations,
             allowances=remote.allowances,
             usage=remote.usage,
-            credentials=remote.credentials,
+            credentials=engine.payments,  # the engine's own: the key it was handed, from its own store
             clearinghouse=house,
+            secrets=secrets,
+            clearinghouse_secrets=house_secrets,
             requests=requests,
             token=token,
             lost=lost,
+            answers=lossy.answers,
         )

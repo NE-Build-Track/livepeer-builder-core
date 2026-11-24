@@ -286,9 +286,10 @@ server alone, with no enterprise app in front of it: an engine server in its `wo
 route that allots, so the project allots with a script that calls the embedded API (T41).
 
 **`lpb payments check`** is kept from the 13 November design as a read-only command (D87). It prints the
-role and probes what that role needs. A self-hosted engine probes the signer and Batteries. An engine
-that uses a clearinghouse probes the clearinghouse: who it is, its grant and its usage. It never writes,
-and ISS-36's runbook uses it as a precondition.
+role and probes what that role needs. Every role probes the signer's address. An engine that reaches
+Batteries itself, in its `both` or its `clearinghouse` role, also probes Batteries. An engine in its
+`work` role probes the clearinghouse it uses instead: who it is, its grant, its usage and the runner
+list. It never writes, and ISS-36's runbook uses it as a precondition.
 
 ### Docs to change
 
@@ -590,8 +591,9 @@ Locked by Mike on 18 November 2026. They replace the four answers of 13 November
 - **Tenants and names** (D83): one id for a tenant and its grant; `tenant` in the API with the grant
   nested under it; the kinds `clearinghouse_admin` and `tenant_admin`; the `/v1/clearinghouse` prefix.
   Renaming app IDs to capabilities is not part of this and stays with ISS-48.
-- **The two halves** (D84): one program with `LPB_ROLE`; remote adapters for the five ports; a public and
-  a private listener at the clearinghouse.
+- **The two halves** (D84): one program with `LPB_ROLE`; remote adapters for three of the five ports,
+  with signing and the stored keys left to the enterprise's engine; a public and a private listener at
+  the clearinghouse.
 - **Access at the clearinghouse** (D85): keys only in the first version; a tenant admin may issue auditor
   keys; identity providers stay at the enterprise's own engine. Batteries is reachable only by the
   clearinghouse's engine. The signer is published: an enterprise's engine signs at it directly, with the

@@ -213,11 +213,13 @@ class AsyncJobWorker:
         self._steps.add(step)
         step.add_done_callback(self._steps.discard)
         try:
-            return await step
-        except asyncio.CancelledError:
-            if _being_cancelled():
-                raise
-            return []  # the engine's stop ended the step: what it claimed went back to the queue
+            await asyncio.wait([step])  # ends when the step does, however it ends
+        except asyncio.CancelledError:  # the caller is being cancelled: its step goes with it
+            step.cancel()
+            await asyncio.wait([step])
+            raise
+        # a step the engine's stop cancelled started nothing: what it claimed went back to the queue
+        return [] if step.cancelled() else step.result()
 
     async def _step(self) -> list[asyncio.Task[None]]:
         """Claim what there is room for, then start it. Every read and write of a step is done before
@@ -430,12 +432,6 @@ async def _ended_within(tasks: Collection[asyncio.Task[Any]], patience: float) -
     if late:
         await asyncio.wait(late)
     return len(late)
-
-
-def _being_cancelled() -> bool:
-    """Whether the task that runs this is itself being cancelled."""
-    task = asyncio.current_task()
-    return task is not None and task.cancelling() > 0
 
 
 def _first(errors: dict[UUID, Exception]) -> Exception | None:

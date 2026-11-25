@@ -165,8 +165,12 @@ class JobRepo(Protocol):
         answered as ``create_job`` answers them.
 
         ``max_queued`` is the queue's limit: with it, the store raises ``NoCapacity`` and stores nothing
-        when that many jobs are ``queued``, and it decides that in the same transaction, so that jobs
-        stored at the same moment never pass the limit between them."""
+        when that many jobs hold a place in the queue, and it decides that in the same transaction, so
+        that jobs stored at the same moment never pass the limit between them. A place is held by a
+        ``queued`` job and by a ``running`` one that ``requeue_unstarted`` could still put back: its
+        request is stored and it has no attempt. A job the full queue refuses whose reference is held is
+        answered as ``create_job`` answers a held reference, with the holder, unless the holder is the
+        failed job named by ``retry_of``: that stays ``NoCapacity``."""
         ...
 
     async def queued_jobs(self, limit: int, skip_apps: Collection[str] = ()) -> list[tuple[UUID, str]]:

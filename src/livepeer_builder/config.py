@@ -18,7 +18,7 @@ from pydantic import (
 
 from livepeer_builder.contracts import Contract, Currency, Role
 from livepeer_builder.contracts.access import reserved_scope
-from livepeer_builder.contracts.common import GrantId
+from livepeer_builder.contracts.common import GrantId, without_input
 
 ENV_PREFIX = "LPB_"
 # The clearinghouse's runner list, after its address: what an enterprise's engine reads by default (D87).
@@ -80,6 +80,8 @@ class EngineSettings(Contract):
     auto_migrate: bool = True  # production can set False and run `lpb migrate` explicitly
     retention_jobs_days: int | None = Field(default=None, ge=1)  # None keeps completed jobs forever
     retention_usage_days: int | None = Field(default=None, ge=1)  # None keeps cached usage rows forever
+    # a stored async result's bytes go after this many days (D69); None keeps them as long as the job
+    retention_results_days: int | None = Field(default=7, ge=1)
     retention_interval_s: float = Field(default=6 * 3600, gt=0)  # how often the retention purge runs
 
     # network
@@ -97,6 +99,14 @@ class EngineSettings(Contract):
     # admission (checked before any payment)
     max_concurrent_jobs: int | None = Field(default=64, ge=1)
     max_concurrent_jobs_per_app: int | None = Field(default=None, ge=1)
+
+    # async jobs (D69, ISS-26; docs/contracts/engine.md#async-jobs)
+    async_workers: int = Field(default=4, ge=1)  # queued jobs dispatched at once, inside the limits above
+    async_max_queued: int = Field(default=1000, ge=1)  # a submit beyond this is refused, before it is stored
+    async_queue_ttl_s: float = Field(default=3600.0, gt=0)  # a job still queued after this fails, unpaid
+    async_result_max_bytes: int = Field(default=16 * 1024 * 1024, ge=1)  # a larger reply is not stored
+    async_poll_s: float = Field(default=1.0, gt=0)  # how often the worker looks at the queue unprompted
+    async_drain_timeout_s: float = Field(default=30.0, ge=0)  # engine stop waits this long for running jobs
 
     # paid failover (D55): how many paid attempts a job may fail over from; 1 turns paid failover off
     max_paid_attempts: int = Field(default=2, ge=1, le=10)
@@ -449,7 +459,7 @@ class EngineSettings(Contract):
         except ValidationError as refused:
             title, details = refused.title, refused.errors(include_url=False)
         # Raised here, outside the except block, so the refusal does not chain the error that holds them.
-        raise ValidationError.from_exception_data(title, [_without_input(detail) for detail in details])
+        raise ValidationError.from_exception_data(title, [without_input(detail) for detail in details])
 
     def require_discovery_url(self) -> str:
         """The discovery address, for an engine about to start: ``BuilderEngine.start()`` asks before
@@ -478,21 +488,6 @@ class EngineSettings(Contract):
         (#112, C23)."""
         source = os.environ if env is None else env
         return source.get(ENV_PREFIX + "DATABASE_URL") or DEFAULT_DATABASE_URL
-
-
-_HIDDEN_INPUT = "[hidden]"  # what a refusal's errors() and json() say was given
-
-
-def _without_input(detail: Mapping[str, Any]) -> Any:  # one of pydantic's InitErrorDetails
-    """A refused setting as pydantic reported it, with ``_HIDDEN_INPUT`` for what was given. A rule's
-    exception in the context becomes its message, so the refusal's words stay the rule's own."""
-    line = {"type": detail["type"], "loc": detail["loc"], "input": _HIDDEN_INPUT}
-    if "ctx" in detail:
-        line["ctx"] = {
-            name: str(value) if isinstance(value, BaseException) else value
-            for name, value in detail["ctx"].items()
-        }
-    return line
 
 
 def generate_secret_key() -> str:

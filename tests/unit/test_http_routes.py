@@ -149,7 +149,8 @@ async def test_keys_jobs_usage_and_costs_over_rest(
     assert (
         await client.post(f"/v1/jobs/{job_id}/usage", json={"quantities": {"tokens": 3}}, headers=alice)
     ).status_code == 200
-    assert (await client.get(f"/v1/jobs/{job_id}/result", headers=alice)).status_code == 501
+    # an immediate job's result was returned once and is not kept (410; a 501 until ISS-26)
+    assert (await client.get(f"/v1/jobs/{job_id}/result", headers=alice)).status_code == 410
     # Paid, usage not here yet: pending at once, before any sync (#33, ISS-17), and the same after it.
     clock.advance(1)  # the default window ends at the engine's clock, and [start, end) excludes its end
     before = await client.get("/v1/costs/summary", headers=alice)

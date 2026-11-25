@@ -8,7 +8,9 @@ Construction (supply, decorate, assemble) lives in livepeer_builder.runtime.asse
 import asyncio
 import contextlib
 import logging
+from collections.abc import Coroutine
 from importlib.metadata import PackageNotFoundError, version
+from typing import Any
 
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import EngineHealth, PurgeReport, Role
@@ -81,8 +83,8 @@ class BuilderEngine:
         the refusal comes before anything is polled or written (#154).
 
         An engine in its ``clearinghouse`` role (#169) starts none of the work half's machinery: it
-        resolves no interrupted job, and runs no cost sync and no retention purge, because it holds no
-        job. It still reads discovery, for the runner list it publishes.
+        resolves no interrupted job, and runs no cost sync, no retention purge and no async worker,
+        because it holds no job. It still reads discovery, for the runner list it publishes.
 
         If starting fails (no address, a schema that does not match, a store error, or a cancellation), the
         engine stops: what ``create`` opened is closed before the error reaches the caller, and a new
@@ -103,17 +105,21 @@ class BuilderEngine:
             await self._require_current_schema()
             if runs_jobs:
                 await self.jobs.recover_interrupted()
+                # what the async worker finds waiting (ISS-26): counted here, before any loop runs, so
+                # the worker's loop reads the queue only while a job waits
+                await self.jobs.worker.count_queue()
             await self.discovery.refresh()
         except BaseException:
             await run_shielded(self.stop())  # __aexit__ and a lifespan's finally never run after this
             raise
         self._stop.clear()
-        self._tasks = [asyncio.create_task(self.discovery.run(self._stop), name="lpb-discovery")]
+        self._tasks = []
+        self._run_loop(self.discovery.run(self._stop), "lpb-discovery")
         if runs_jobs:
-            self._tasks += [
-                asyncio.create_task(self.costs.run(self._stop), name="lpb-cost-sync"),
-                asyncio.create_task(self._retention_loop(), name="lpb-retention"),
-            ]
+            self._run_loop(self.costs.run(self._stop), "lpb-cost-sync")
+            self._run_loop(self._retention_loop(), "lpb-retention")
+            # after recover_interrupted, which put back the jobs a restart left claimed (ISS-26)
+            self._run_loop(self.jobs.worker.run(self._stop), "lpb-async-jobs")
         _LOG.info(
             "engine started",
             extra={
@@ -126,9 +132,19 @@ class BuilderEngine:
             },
         )
 
+    def _run_loop(self, loop: Coroutine[Any, Any, None], name: str) -> None:
+        """Start a background loop and keep its task until ``stop()`` has cancelled and awaited it. The
+        event loop holds a running task only weakly, so the engine holds it."""
+        task = asyncio.create_task(loop, name=name)
+        self._tasks.append(task)
+
     async def stop(self) -> None:
+        # First, and with no await before it: from here on no async job is claimed, so none is claimed
+        # and paid while the streams below are given their time (ISS-26). Running ones carry on.
+        self.jobs.worker.close()
         await self.jobs.close_streams()  # before the store closes: open streams drain, then end abandoned
         self._stop.set()
+        await self.jobs.worker.drain()  # running async jobs end or are cancelled, and every end is written
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
@@ -158,6 +174,8 @@ class BuilderEngine:
             cost_sync_error=self.costs.last_error,
             cost_sync_set_aside=self.costs.set_aside_rows,
             running_jobs=self.admission.running,
+            queued_jobs=self.jobs.worker.queued_jobs,
+            oldest_queued_s=self.jobs.worker.oldest_queued_s,
             version=package_version(),
         )
 
@@ -192,7 +210,19 @@ class BuilderEngine:
             raise RuntimeError(mismatch)
 
     async def _retention_loop(self) -> None:
-        if self.settings.retention_jobs_days is None and self.settings.retention_usage_days is None:
+        """Purge every ``retention_interval_s``, in every engine that runs jobs. The first purge runs at
+        start where it did before ISS-26: with job or usage retention on. Otherwise it waits one
+        interval first, so an engine with the default settings, where results retention alone is on
+        (D69 (6)), adds no write at start beside its caller's own first ones.
+
+        The loop does not ask whether a setting is on. A stored result says itself when it goes
+        (``expires_at``, stamped when its job ended), and one stored while results had a time keeps it
+        after every retention setting is turned off: the purge deletes it when that time comes. An
+        expired result is never served meanwhile (``read_result`` reads its ``expires_at``): only its
+        space waits. With no setting on and no such result, a purge deletes nothing."""
+        settings = self.settings
+        at_start = settings.retention_jobs_days is not None or settings.retention_usage_days is not None
+        if not at_start and await self._stopped_within(settings.retention_interval_s):
             return
         while not self._stop.is_set():
             try:
@@ -200,7 +230,13 @@ class BuilderEngine:
                 _LOG.info("retention purge", extra={"event": "store.purged", **report.model_dump()})
             except Exception:
                 _LOG.exception("retention purge failed", extra={"event": "store.purge_failed"})
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.settings.retention_interval_s)
-            except TimeoutError:
-                continue
+            if await self._stopped_within(settings.retention_interval_s):
+                return
+
+    async def _stopped_within(self, seconds: float) -> bool:
+        """Wait up to ``seconds`` for the engine to stop. Whether it did."""
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=seconds)
+        except TimeoutError:
+            return False
+        return True

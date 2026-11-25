@@ -130,6 +130,7 @@ async def load_jobs(conn: AsyncConnection, rows: Sequence[Any]) -> list[Job]:
                 usage=MeasuredUsage.model_validate(row["usage"]) if row["usage"] else None,
                 created_at=row["created_at"],
                 completed_at=row["completed_at"],
+                started_at=row["started_at"],
             )
         )
     return jobs

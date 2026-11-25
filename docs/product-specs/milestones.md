@@ -76,7 +76,7 @@ The release is the merge of `releases/m3` into `releases/final`
 
 | Ticket | Milestone | Prepared here |
 | --- | --- | --- |
-| ISS-26 Async jobs and durable recovery handles | M4 | **Defined:** `mode="async"`, `ResultRef.storage="stored"` → 501 |
+| ISS-26 Async jobs and durable recovery handles | M4 | **Built** (in review): `jobs.submit`, a worker, stored results, the cancel of a queued job ([engine.md](../contracts/engine.md#async-jobs)) |
 | ISS-27 Persistent application endpoints | M4 | **Defined:** `SessionManager`, engine-proxied (D9) → 501 |
 | ISS-28 Failure classification and recovery across modes | M4 | Failure taxonomy and recovery for immediate jobs (implemented) |
 | ISS-29 REST across all execution modes | M4 | Reserved routes return 501 |

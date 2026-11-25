@@ -303,13 +303,16 @@ sequenceDiagram
     BE->>J: on start, before serving
     J->>DB: jobs_in_state("running")
     loop each interrupted job
-        alt any attempt in_flight or payment_sent
+        alt an async job with no attempt, fewer than 3 of its claims counted (ISS-26)
+            J->>DB: requeue_unstarted: back to queued, nothing went out
+        else any attempt in_flight or payment_sent
             J->>DB: finish_job(uncertain, Failure(interrupted))
         else nothing could have paid
             J->>DB: finish_job(failed, Failure(interrupted))
         end
     end
-    BE->>BE: discovery refresh, then the background loops (discovery, cost sync, retention)
+    BE->>DB: queued_stats: what the async worker finds waiting
+    BE->>BE: discovery refresh, then the background loops (discovery, cost sync, retention, the async worker)
 ```
 
 ## 10. Persistent session (planned, M4 · ISS-27)
@@ -341,11 +344,16 @@ sequenceDiagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: submit (async, M4)
+    [*] --> queued: submit (async)
     [*] --> running: run (immediate)
-    queued --> running: worker picks it up (M4)
-    running --> succeeded: runner 2xx
+    queued --> running: a worker claims it, its gate first (a worker, a slot, the job), then a compare-and-set
+    queued --> failed: cancelled, or past the queue's time limit, nothing paid
+    running --> queued: restart or stop before its first attempt, three claims at most
+    running --> queued: claimed when no runner could take it, given back uncounted
+    running --> succeeded: runner 2xx, an async job's answer stored with its end
     running --> failed: refused everywhere, no allocation, runner 4xx/5xx, signer refusal
+    running --> failed: an async answer too large to store, paid
+    running --> failed: timeout_s up before a further attempt, no runner called
     running --> uncertain: paid, then timeout or unreachable
     running --> uncertain: restart with an in_flight or paid attempt
     running --> failed: restart, nothing could have paid

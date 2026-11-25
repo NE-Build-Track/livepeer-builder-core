@@ -69,6 +69,7 @@ DEFAULTS: dict[str, tuple[type, ...]] = {
     "SelectionPolicy": (MostCapacityFirst,),
     "RunnerTransport": (SdkRunnerTransport,),
     "StreamingRunnerTransport": (SdkRunnerTransport,),
+    "BoundedRunnerTransport": (SdkRunnerTransport,),
     "RunnerStream": (SdkRunnerStream,),
     "CredentialResolver": (PaymentsService,),
     "AllocationManager": (BatteriesClient, ClearinghouseAllocations),

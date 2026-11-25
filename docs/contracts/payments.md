@@ -982,8 +982,8 @@ Each attempt that opened a payment session is classified:
 
 | Class | Rule | Typical enterprise treatment |
 | --- | --- | --- |
-| `delivered` | The attempt succeeded | Bill under its retail policy |
-| `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**), including an attempt the job failed over from, even when a later one delivered (D52) | Absorb; don't bill |
+| `delivered` | The attempt succeeded and its answer reached the job's owner. For an immediate job and a stream that is the attempt that succeeded; for an async job, whose owner reads the stored answer, the job must also have ended `succeeded` | Bill under its retail policy |
+| `failed_after_payment` | Payment went out and the attempt failed (refused, runner error, **rejected tickets**), including an attempt the job failed over from, even when a later one delivered (D52). Also an async job's attempt that succeeded when the job did not: the runner answered and was paid, and the engine holds no answer for the owner to read, because it was too large to store, the write of the job's end failed, or the engine stopped before that write (D69 (4), [engine.md](engine.md#results-of-an-async-job)) | Absorb; don't bill |
 | `uncertain` | The attempt that left the job `uncertain`, or an attempt that never reported back | Hold, then reconcile |
 | `pending` | The job is still running (its fees so far are not final), or payment went out and no applied usage row has arrived yet | Wait. **Never zero** |
 

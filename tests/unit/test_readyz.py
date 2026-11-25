@@ -186,6 +186,8 @@ async def test_readyz_without_a_credential_serves_codes_not_exception_text(
         "cost_sync_at",
         "cost_sync_error",
         "cost_sync_set_aside",  # a count (#114, C13)
+        "queued_jobs",  # a count, and the age of the oldest in seconds (ISS-26)
+        "oldest_queued_s",
         "running_jobs",
         "version",
     }  # no allocation_mode: per_actor is the only one (D82, #162)

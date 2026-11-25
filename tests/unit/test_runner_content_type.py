@@ -120,8 +120,9 @@ async def test_rest_answers_with_the_runner_s_content_type_unchanged(
 async def test_a_stored_result_answers_with_its_content_type_unchanged(
     make_engine: EngineFactory, admin: ActorContext, monkeypatch: pytest.MonkeyPatch, content_type: str
 ) -> None:
-    """``GET /v1/jobs/{id}/result`` answers 501 until results are stored (ISS-26), so the service method is
-    replaced here by one that returns a result. The route built its answer with ``media_type=``."""
+    """The service method is replaced here by one that returns a result with each content type. (This
+    test was written while the route answered 501; an async job's stored result now takes the same path,
+    tests/unit/test_async_http.py.) The route built its answer with ``media_type=``."""
     engine = await make_engine()
     key = await engine.keys.bootstrap_admin()
     stored = kept(content_type.encode())

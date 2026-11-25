@@ -509,6 +509,22 @@
             ],
             "title": "Discovery Observed At"
           },
+          "oldest_queued_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Queued S"
+          },
+          "queued_jobs": {
+            "default": 0,
+            "title": "Queued Jobs",
+            "type": "integer"
+          },
           "ready": {
             "title": "Ready",
             "type": "boolean"

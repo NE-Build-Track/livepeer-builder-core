@@ -10,6 +10,7 @@ from livepeer_builder.services import failover
 NOT_DISPATCHED = frozenset({"no_offering", "no_capacity", "not_provisioned"})  # failed before any attempt
 # paid, and the runner may have run; "in_flight" is a job the engine stopped mid-call (recovery)
 UNCERTAIN_OUTCOMES: frozenset[AttemptOutcome] = failover.UNCERTAIN_OUTCOMES | {"in_flight"}
+NOT_STORED: FailureKind = "result_not_stored"  # an async job's paid answer the engine did not keep (ISS-26)
 
 
 def attempt_outcome(kind: FailureKind) -> AttemptOutcome:
@@ -20,6 +21,8 @@ def attempt_outcome(kind: FailureKind) -> AttemptOutcome:
         return "payment_refused"
     if kind == "interrupted":
         return "in_flight"  # the engine stopped mid-call; recovery leaves the attempt as it was
+    if kind == NOT_STORED:
+        return "succeeded"  # the runner answered and was paid; it is the job that failed (D69 (4))
     return cast(AttemptOutcome, kind)
 
 
@@ -35,6 +38,12 @@ class Fails:
     words. Among stream chunks the stream was paid when it opened, so ``payment_sent`` does not apply.
     ``reason`` is a payment failure's (D58): ``signer_unknown`` with ``payment_unknown``, which leaves
     the job ``uncertain`` as in the engine, any other with ``payment``.
+
+    ``result_not_stored`` is an async job's (ISS-26): the runner answered and was paid, and the engine
+    kept nothing of an answer larger than it stores. As in the engine, the attempt is ``succeeded``
+    with status 200, the job is ``failed`` with ``payment_sent`` set and no status or body of its own,
+    and its ``ResultRef`` has the size and the hash of the answer and no location. ``body`` is that
+    answer (empty when none is given); ``status_code`` and ``payment_sent`` do not apply.
     """
 
     kind: FailureKind = "runner_error"

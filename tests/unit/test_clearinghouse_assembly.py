@@ -55,7 +55,7 @@ async def test_the_engine_keeps_its_actors_keys_itself_and_signs_at_the_signer()
         assert "127.0.0.1:9" not in repr(vars(parts.transport))
     engine = await BuilderEngine.create(given)
     try:
-        assert engine.jobs._credentials is engine.payments
+        assert engine.jobs._dispatcher._credentials is engine.payments  # where the paid call is (ISS-26)
     finally:
         await engine.stop()
 

@@ -11,8 +11,9 @@ wholesale **network** cost and classifies every charge, so you can reconcile wha
 
 > Status: **M3 closed on 9 November 2026**; M4 is next (Cloud SPE Build Track). The first builder journey works
 > end to end: access, discovery, paid jobs, history and network-cost reports.
-> Async jobs, persistent sessions and the events feed are defined but not yet implemented (M4): they
-> answer `501`. See [docs/PLANS.md](docs/PLANS.md).
+> Async jobs are queued and run by the engine's own worker, and their results are stored (M4).
+> Persistent sessions and the events feed are defined but not yet implemented (M4): they answer `501`.
+> See [docs/PLANS.md](docs/PLANS.md).
 
 ## Install
 

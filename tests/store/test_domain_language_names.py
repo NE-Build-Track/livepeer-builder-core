@@ -140,8 +140,12 @@ async def stored(engine: AsyncEngine, old_names: bool) -> dict[str, list[dict[st
 
 
 # What a row written before 0014 reads at the head in a column added since: 0015 makes every existing
-# actor's credential the configured store's (#186 review).
-ADDED_AT_HEAD = {"lpb_actors": {"credential_custody": "secret_store"}}
+# actor's credential the configured store's (#186 review), and 0016 gives every existing job no claim
+# (ISS-26).
+ADDED_AT_HEAD: dict[str, dict[str, Any]] = {
+    "lpb_actors": {"credential_custody": "secret_store"},
+    "lpb_jobs": {"started_at": None, "claims": 0, "claims_given_back": 0},
+}
 
 
 def in_order(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -174,7 +178,7 @@ async def test_every_row_written_before_the_rename_is_read_under_the_new_names(
     migrated: tuple[AsyncEngine, str], clock: FixedClock
 ) -> None:
     engine, job_id = migrated
-    assert await current_revision(engine) == head_revision() == "0015"
+    assert await current_revision(engine) == head_revision() == "0016"
     store, now = SqlStore(engine), clock.now()
 
     alice = ActorAllocation(
@@ -348,11 +352,14 @@ async def test_an_interrupted_run_on_sqlite_changes_nothing(tmp_path: Path, cloc
         for name in ("lpb_access_keys", "lpb_jobs", "lpb_actors", "lpb_actor_sightings"):
             added = ADDED_AT_HEAD.get(name, {})
             assert head[name] == in_order([renamed(row) | added for row in before[name]])
+        head_tables = await table_names(engine)
 
         await interrupted(engine, "down", "0013")
         assert await current_revision(engine) == head_revision()
         assert await stored(engine, old_names=False) == head
-        assert await table_names(engine) == tables
+        # Every table of the head is still there, the two that 0016 adds (ISS-26) included: its step down
+        # begins with an UPDATE, which opens the driver's transaction before any DROP TABLE.
+        assert await table_names(engine) == head_tables
         async with engine.connect() as conn:
             assert (await conn.execute(select(func.count()).select_from(t.operations))).scalar_one() == 4
     finally:

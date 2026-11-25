@@ -105,9 +105,9 @@ is then by construction; tests prove it.
 | --- | --- | --- |
 | `list_offerings(app?)` | `discovery.offerings(app=…)` | none in REST (D51); MCP is authenticated at the transport |
 | `get_rates(app)` | `discovery.runners(actor, app)` → per-runner `price_info`, read with `payable_rate` (source and age: D62) | `discover` |
-| `run_job(…JobRequest fields)` | `jobs.run(actor, JobRequest)`; `mode="async"` stays 501 until ISS-26 | `jobs.run` |
+| `run_job(…JobRequest fields)` | `jobs.run(actor, JobRequest)`; since ISS-26 `jobs.run` refuses `mode="async"` with `InvalidRequest` (400), and an async job is queued with `jobs.submit` | `jobs.run` |
 | `get_job(job_id)`, `list_jobs(limit, before)` | `jobs.get`, `jobs.list_jobs` | `jobs.read` |
-| `get_job_result(job_id)` | `jobs.result` (501 today: results are not retained) | `jobs.read` |
+| `get_job_result(job_id)` | `jobs.result`: since ISS-26 an async job's stored result, to the job's owner only; 410 for an immediate job, whose result is not retained | `jobs.read` |
 | `get_job_cost(job_id)`, `get_cost_summary(start, end)` | `costs.for_job`, `costs.summary` | `costs.read` |
 | `get_allowance()` | `payments.allowance(actor)` | (as REST) |
 
@@ -179,7 +179,7 @@ Tools
 [ ] run_job over LPB_MCP_MAX_RESULT_BYTES: no bytes, size, sha256 and a note that names async
 [ ] run_job unprovisioned: isError, status 402, code not_provisioned, job included
 [ ] run_job repeated operation_ref: same 409 code as REST (ISS-14)
-[ ] run_job mode=async: isError 501 with milestone M4
+[ ] run_job mode=async: isError, status 400 (InvalidRequest), as jobs.run answers since ISS-26
 [ ] progress notifications carry no runner bytes; none without a progressToken
 [ ] get_job of another actor's job: 404 (not 403), as REST
 [ ] get_job_cost, get_cost_summary, get_allowance match their REST answers

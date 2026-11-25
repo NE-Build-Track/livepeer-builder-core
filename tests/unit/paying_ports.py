@@ -175,7 +175,7 @@ async def _through_a_clearinghouse(
             manager=payments._manager,
             allowances=payments._allowances,
             usage=engine.costs._worker._source,
-            credentials=engine.jobs._credentials,  # the engine's own resolver: PaymentsService
+            credentials=engine.jobs._dispatcher._credentials,  # the engine's own resolver: PaymentsService
             clearinghouse=house,
             token=token,
             seen=served.seen,

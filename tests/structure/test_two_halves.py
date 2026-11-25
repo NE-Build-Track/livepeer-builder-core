@@ -54,7 +54,7 @@ from livepeer_builder.http.work import mount_work_routes
 from livepeer_builder.protocols import clearinghouse, conditional_writes, persistence
 from livepeer_builder.runtime import payment_defaults
 from livepeer_builder.services.costs import CostService, CostSyncWorker
-from livepeer_builder.services.jobs import JobService
+from livepeer_builder.services.dispatch import Dispatcher
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "livepeer_builder"
 GUIDE = "docs/design-docs/m4-guides/iss-31-payment-configurations.md"
@@ -62,9 +62,14 @@ GUIDE = "docs/design-docs/m4-guides/iss-31-payment-configurations.md"
 # Network capabilities, runner choice, the runner call, streaming, job records and the cost of each job.
 WORK = {
     "services/admission.py",
+    "services/async_held.py",  # a job the worker holds, and the end the worker owes it (ISS-26)
+    "services/async_jobs.py",  # the worker that runs queued jobs (ISS-26)
+    "services/job_runners.py",  # who could run a job, and with which credential
+    "services/cost_classes.py",  # the cost class of each attempt, a pure function
     "services/cost_window.py",
     "services/costs.py",
     "services/discovery.py",
+    "services/dispatch.py",  # the paid call, which every way of running a job goes through (ISS-26)
     "services/evidence.py",
     "services/failover.py",
     "services/failure_codes.py",
@@ -76,6 +81,7 @@ WORK = {
     "services/streams.py",
     "services/usage_intake.py",
     "services/usage_reports.py",
+    "http/job_handles.py",  # an async job's result and its cancel (ISS-26)
     "http/streaming.py",
     "http/work.py",
 }
@@ -116,8 +122,9 @@ SHARED = {
     "http/unprocessable.py",
 }
 
-# The five ports. Signing has no protocol of its own: it happens inside the runner transport.
-SIGNING_INSIDE = {"RunnerTransport", "StreamingRunnerTransport", "RunnerStream"}
+# The five ports. Signing has no protocol of its own: it happens inside the runner transport, which may
+# also stream a reply (D33) or read one with a bound for an async job (ISS-26): the same call and payment.
+SIGNING_INSIDE = {"RunnerTransport", "StreamingRunnerTransport", "BoundedRunnerTransport", "RunnerStream"}
 PORTS = SIGNING_INSIDE | {"CredentialResolver", "AllocationManager", "AllowanceReader", "UsageSource"}
 # Payment protocols that are not ports: where payment keys and allocation records are kept. The work
 # half reads both through CredentialResolver and AllowanceReader. EngineStore is here because it holds
@@ -331,9 +338,9 @@ def test_every_protocol_is_a_payment_port_or_named_as_not_one() -> None:
 
 def test_the_work_half_holds_the_ports_it_pays_and_reads_through() -> None:
     """The ports are in use where the guide says, so the checks above are not passing on nothing."""
-    job = typing.get_type_hints(JobService.__init__)
-    assert job["transport"] is protocols.RunnerTransport  # signing happens inside it
-    assert job["credentials"] is protocols.CredentialResolver
+    paid_call = typing.get_type_hints(Dispatcher.__init__)  # where every job is paid for (ISS-26)
+    assert paid_call["transport"] is protocols.RunnerTransport  # signing happens inside it
+    assert paid_call["credentials"] is protocols.CredentialResolver
     assert typing.get_type_hints(CostService.__init__)["allowances"] == protocols.AllowanceReader | None
     assert typing.get_type_hints(CostSyncWorker.__init__)["source"] is protocols.UsageSource
 

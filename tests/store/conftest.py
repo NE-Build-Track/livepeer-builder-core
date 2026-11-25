@@ -35,8 +35,11 @@ async def database_url(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncI
 
 
 # Columns a revision after 0014 added, which neither 0014 nor any revision before it has: 0015 records an
-# actor's credential custody (#186 review).
-ADDED_SINCE_0014 = {"lpb_actors": {"credential_custody"}}
+# actor's credential custody (#186 review), and 0016 an async job's claim (ISS-26).
+ADDED_SINCE_0014 = {
+    "lpb_actors": {"credential_custody"},
+    "lpb_jobs": {"started_at", "claims", "claims_given_back"},
+}
 
 
 def as_before_0014(current: Table) -> TableClause:

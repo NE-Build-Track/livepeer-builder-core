@@ -17,6 +17,19 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def json_body(content: bytes, content_type: str) -> dict[str, Any] | None:
+    """The body as a JSON object, when its content type says JSON and it is one; else ``None``. What a
+    runner's reply carries as ``data``, worked out again for a stored result (ISS-26)."""
+    mime = content_type.split(";", 1)[0].strip().lower()
+    if not mime.endswith(("/json", "+json")):
+        return None
+    try:
+        data = json.loads(content)
+    except (ValueError, RecursionError):  # not JSON, not text, or nested past what the decoder reads
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def utc(value: datetime) -> datetime:
     """Normalize to timezone-aware UTC (SQLite returns naive datetimes). A time with no offset is UTC.
 

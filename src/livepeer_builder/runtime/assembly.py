@@ -335,7 +335,10 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     if not runs_jobs:
         _require_a_whole_clearinghouse(parts, tenants)
     admission = AdmissionLimiter(
-        settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app, runs_jobs=runs_jobs
+        settings.max_concurrent_jobs,
+        settings.max_concurrent_jobs_per_app,
+        runs_jobs=runs_jobs,
+        async_workers=settings.async_workers,  # the async worker's lane, inside the two limits (ISS-26)
     )
     stream_limits = StreamLimits(
         finalize_timeout_s=settings.stream_finalize_timeout_s,
@@ -359,7 +362,6 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         admission,
         parts.clock,
         AsyncLimits(
-            workers=settings.async_workers,
             max_queued=settings.async_max_queued,
             queue_ttl_s=settings.async_queue_ttl_s,
             result_max_bytes=settings.async_result_max_bytes,

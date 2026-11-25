@@ -9,6 +9,11 @@ It follows the engine's rules for the API's shape: a queued job reads back ``que
 the job it names. It does not model the queue's limits: script a full queue with
 ``Raises(NoCapacity(...))``, which is raised at ``submit``, and an actor with no allocation with
 ``Fails(kind="not_provisioned")``, which fails the job at ``submit`` as the engine does.
+
+A queued job whose app no runner serves waits, as in the engine, which does not fail a queued job for
+what may pass: ``advance()`` leaves a job scripted ``Fails(kind="no_offering")`` queued, however often
+it is called. The fake has no clock and no time limit: script ``Fails(kind="no_capacity")`` for the end
+the engine gives a job that waited ``LPB_ASYNC_QUEUE_TTL_S``.
 """
 
 from datetime import UTC, datetime
@@ -144,11 +149,17 @@ class FakeQueue:
 
     async def advance(self) -> int:  # NOSONAR - awaited as the worker's run_once is; awaits nothing
         """Run every queued job, oldest first, to the end its script gives it; how many ran. The
-        engine's worker does this by itself; a test of the engine steps it with ``run_once()``."""
+        engine's worker does this by itself; a test of the engine steps it with ``run_once()``. A job
+        whose app no runner serves (``Fails(kind="no_offering")``) is not run: it stays queued."""
         waiting, self._waiting = self._waiting, {}
+        ran = 0
         for job_id, (actor, request) in waiting.items():
             job = self._jobs[job_id]
             scripted = self.replies.get((request.app, request.path), Reply())
+            if isinstance(scripted, Fails) and scripted.kind == "no_offering":
+                self._waiting[job_id] = (actor, request)  # the engine lets it wait for a runner
+                continue
+            ran += 1
             if isinstance(scripted, Reply):
                 self.record(actor, request, "succeeded", None, reply=scripted, queued=job)
                 self._results[job_id] = scripted
@@ -157,7 +168,7 @@ class FakeQueue:
             else:  # the engine's worker raises nothing: an error it meets ends the job
                 failure = Failure(kind="runner_error", message="engine error")
                 self.record(actor, request, "failed", failure, queued=job)
-        return len(waiting)
+        return ran
 
     async def result(  # NOSONAR - async by protocol (JobsApi); the fake awaits nothing
         self, actor: ActorContext, job_id: UUID

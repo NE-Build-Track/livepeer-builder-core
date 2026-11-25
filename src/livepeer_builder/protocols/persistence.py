@@ -104,7 +104,12 @@ class JobRepo(Protocol):
         self, tenant_id: str, actor_id: str | None, limit: int = 50, before: datetime | None = None
     ) -> list[Job]: ...
 
-    async def start_attempt(self, attempt: Attempt) -> None: ...  # written before the call
+    async def start_attempt(self, attempt: Attempt, *, claim: int | None = None) -> bool:
+        """Insert the attempt, before its call. ``claim`` is the number of the claim an async job runs
+        under (ISS-26): the attempt is then written only while the job is ``running`` under that claim,
+        in one transaction, and ``False`` says it was not. An immediate job and a stream name no claim,
+        and their attempt is written as before. A store that answers nothing has written."""
+        ...
 
     async def record_payment_evidence(self, attempt: Attempt) -> None:
         """Store the attempt's payment evidence while the call is still going (D42, D54): add sessions not
@@ -129,10 +134,13 @@ class JobRepo(Protocol):
         failure: Failure | None,
         result: ResultRef | None,
         completed_at: datetime,
+        *,
+        claim: int | None = None,
     ) -> bool:
         """End a ``running`` job, and only a running one (ISS-26): ``False``, and nothing written, for a
-        job that already ended or is still queued, so a late writer never reopens a job. The same
-        transaction deletes the request stored for an async job."""
+        job that already ended or is still queued, so a late writer never reopens a job. With ``claim``,
+        an async job's, also only while that claim holds the job. The same transaction deletes the
+        request stored for an async job."""
         ...
 
     async def set_usage(self, job_id: UUID, usage: MeasuredUsage) -> None: ...
@@ -162,15 +170,27 @@ class JobRepo(Protocol):
 
     async def claim_job(
         self, job_id: UUID, started_at: datetime
-    ) -> tuple[Job, JobRequest, ActorContext] | None:
+    ) -> tuple[Job, JobRequest, ActorContext, int] | None:
         """Compare-and-set: a ``queued`` job becomes ``running``, with ``started_at`` and one more claim.
-        The job, its request and its actor; ``None`` when it is no longer queued (another claim, a cancel
-        or the queue's time limit moved it first)."""
+        The job, its request, its actor and the claim's number, which is the job's count of claims once
+        this one is made; ``None`` when it is no longer queued (another claim, a cancel or the queue's
+        time limit moved it first).
+
+        The number is what the worker's later writes for the job carry (``claim=``): ``start_attempt``,
+        ``requeue_unstarted``, ``finish_job`` and ``finish_job_with_result`` each apply only while the
+        job is ``running`` with that count of claims, so a worker that lost the job writes nothing."""
         ...
 
-    async def requeue_unstarted(self, job_id: UUID, max_claims: int) -> bool:
+    async def requeue_unstarted(
+        self, job_id: UUID, max_claims: int, *, claim: int | None = None, counted: bool = True
+    ) -> bool:
         """Put a ``running`` job back in the queue when nothing went out for it: it has no attempt row,
-        its request is still stored, and it was claimed fewer than ``max_claims`` times. One statement."""
+        its request is still stored, and it was claimed fewer than ``max_claims`` times. One statement.
+        With ``claim``, only while that claim holds the job.
+
+        ``counted=False`` gives the claim back: the job's count of claims goes down by one and
+        ``max_claims`` is not looked at. It is for a job that could not be dispatched for a reason that
+        passes (no runner listed, none with room), which may wait as often as it takes."""
         ...
 
     async def cancel_queued(self, job_id: UUID, failure: Failure, completed_at: datetime) -> bool:
@@ -184,11 +204,18 @@ class JobRepo(Protocol):
         ...
 
     async def finish_job_with_result(
-        self, job_id: UUID, result: ResultRef, content: bytes, completed_at: datetime
+        self,
+        job_id: UUID,
+        result: ResultRef,
+        content: bytes,
+        completed_at: datetime,
+        *,
+        claim: int | None = None,
     ) -> bool:
         """End a ``running`` job ``succeeded`` and keep its result, in one transaction: the state and the
         ``ResultRef``, the bytes (until ``result.expires_at``), and the deletion of the stored request.
-        Nothing is written unless all of it is, so no job is ``succeeded`` without its bytes."""
+        Nothing is written unless all of it is, so no job is ``succeeded`` without its bytes. With
+        ``claim``, only while that claim holds the job: ``False``, and no bytes, otherwise."""
         ...
 
     async def read_result(self, job_id: UUID, now: datetime) -> bytes | None:

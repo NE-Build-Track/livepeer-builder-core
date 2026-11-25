@@ -12,6 +12,14 @@ Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes
 6. Opening a stream is bounded by ``first_byte_timeout_s`` and the job's ``timeout_s`` (D35). The
    transport enforces it and keeps the payment evidence; the engine's backstop catches a transport
    that does not, and treats the payment as unknown.
+
+7. A job that is not a stream has one deadline, its ``timeout_s`` counted from its start (an async
+   job's from its claim): each attempt is given only the time left, and none starts after it.
+
+An async job runs under a claim (ISS-26), and ``dispatch`` is told its number. Every write for the job
+then carries the number and applies only while that claim holds the job: a miss is ``ClaimLost``, and
+nothing more is written. And a job that cannot be dispatched for a reason that passes, before anything
+was attempted, is not failed: ``NotNow`` hands it back to the worker, which lets it wait.
 """
 
 import asyncio
@@ -20,6 +28,7 @@ import hashlib
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import cast
+from uuid import UUID
 
 from livepeer_builder.contracts import (
     ActorContext,
@@ -52,8 +61,8 @@ from livepeer_builder.services.evidence import SignedSessionRecorder, store_evid
 from livepeer_builder.services.failover import (
     Candidates,
     attempt_verdict,
+    error_end,
     failure_of,
-    payment_unresolved,
     returned_failover,
     stream_timings,
 )
@@ -65,6 +74,21 @@ _LOG = logging.getLogger(__name__)
 # How a succeeded job ends: given the job, the runner's reply and the attempts, write the end and return
 # the job as it ended.
 KeepResult = Callable[[Job, RunnerReply, Sequence[Attempt]], Awaitable[Job]]
+
+
+class ClaimLost(Exception):
+    """A write for an async job found that the claim it was made under no longer holds the job: the job
+    was put back and claimed again, or ended by another writer. Nothing was written, and whoever
+    catches this writes nothing more for the job and does not end it."""
+
+    def __init__(self, job_id: UUID, claim: int | None) -> None:
+        super().__init__(f"job {job_id}: claim {claim} no longer holds it")
+
+
+class NotNow(Exception):
+    """A claimed async job cannot be dispatched for a reason that passes, and nothing was attempted: no
+    runner is listed for its app, every runner that would be paid advertises no room, or the actor's
+    credential could not be read. The job is not failed: its worker gives the claim back."""
 
 
 class Dispatcher:
@@ -95,33 +119,72 @@ class Dispatcher:
         here when it is submitted, to fail fast, and again when it is dispatched (ISS-26)."""
         await self._credentials.credential(actor)
 
+    def waits(self, app: str) -> bool:
+        """Whether a queued job of ``app`` could not be dispatched now, for a reason that passes: no
+        runner is listed for it, or every runner an attempt would pay advertises no room. The async
+        worker leaves such a job in the queue, as it leaves one whose app is at its limit (ISS-26)."""
+        candidates = self._discovery.candidates(app)
+        if not candidates:
+            return True
+        return bool(getattr(self._transport, "pays", True)) and not paid_candidates(candidates)
+
     async def _candidates(
-        self, job: Job, actor: ActorContext, request: JobRequest, attempts: list[Attempt]
+        self,
+        job: Job,
+        actor: ActorContext,
+        request: JobRequest,
+        attempts: list[Attempt],
+        claim: int | None = None,
     ) -> tuple[Candidates, PaymentKey]:
-        """Who could run this, and with which credential. Fails the job (before payment) when nobody can."""
+        """Who could run this, and with which credential. Fails the job (before payment) when nobody
+        can. An async job (``claim``) is not failed for what may pass: that is ``NotNow``."""
         candidates = self._discovery.candidates(request.app)
         if not candidates:
-            raise await self.fail(job, attempts, "no_offering", f"no runner advertises app {request.app!r}")
+            raise await self._nobody(
+                job, attempts, claim, "no_offering", f"no runner advertises app {request.app!r}"
+            )
         try:
             credential = await self._credentials.credential(actor)
         except NotProvisioned as exc:
-            raise await self.fail(job, attempts, "not_provisioned", str(exc)) from exc
+            raise await self.fail(job, attempts, "not_provisioned", str(exc), claim=claim) from exc
+        except Exception as blip:
+            if claim is None:
+                raise
+            raise NotNow(f"the actor's credential could not be read ({type(blip).__name__})") from blip
         paid = credential.token is not None and getattr(self._transport, "pays", True)  # no signer, no pay
         # A runner advertising zero capacity stays a candidate (#114, C17): the hint can lag, selection
         # tries it last, and if every runner refuses the job fails ``refused`` through failover. A job
         # that pays is not tried on runners that all advertise zero: a full runner's refusal can cost a
         # ticket.
         if paid and not (candidates := paid_candidates(candidates)):
-            raise await self.fail(job, attempts, "no_capacity", f"every runner for {request.app!r} is busy")
+            raise await self._nobody(
+                job, attempts, claim, "no_capacity", f"every runner for {request.app!r} is busy"
+            )
         ordered = tuple(self._selection.order(candidates, request))
         if paid:  # a runner with no usable ceiling is refused at its 402 (D62)
             ordered = capped_first(ordered)
         if not ordered:  # an enterprise SelectionPolicy may filter every runner out
-            raise await self.fail(job, attempts, "no_offering", f"no runner for {request.app!r} selected")
+            message = f"no runner for {request.app!r} selected"
+            raise await self.fail(job, attempts, "no_offering", message, claim=claim)
         return Candidates(ordered, request.max_attempts, self._max_paid_attempts, job.id), credential
 
+    async def _nobody(
+        self, job: Job, attempts: list[Attempt], claim: int | None, kind: FailureKind, message: str
+    ) -> Exception:
+        """No runner can take the job now. An immediate job or a stream fails with ``kind``; an async
+        job waits for one, so it is handed back."""
+        if claim is not None:
+            return NotNow(message)
+        return await self.fail(job, attempts, kind, message)
+
     async def _start_attempt(
-        self, job: Job, number: int, runner: Runner, credential: PaymentKey, attempts: list[Attempt]
+        self,
+        job: Job,
+        number: int,
+        runner: Runner,
+        credential: PaymentKey,
+        attempts: list[Attempt],
+        claim: int | None = None,
     ) -> Attempt:
         attempt = Attempt(
             job_id=job.id,
@@ -136,9 +199,29 @@ class Dispatcher:
             started_at=self._clock.now(),
             ended_at=None,
         )
-        await self._store.start_attempt(attempt)
+        if claim is None:
+            await self._store.start_attempt(attempt)
+        elif await self._store.start_attempt(attempt, claim=claim) is False:
+            raise ClaimLost(job.id, claim)  # before any runner call
         attempts.append(attempt)
         return attempt
+
+    async def _in_time(
+        self, job: Job, request: JobRequest, attempts: list[Attempt], deadline: float, claim: int | None
+    ) -> JobRequest:
+        """The request the next attempt is called with: its ``timeout_s`` is the time left until
+        ``deadline``, so a job's attempts share one ``timeout_s`` between them, the whole job's. With
+        none left the job ends ``timeout`` here, and no runner is called or paid again. The attempts
+        before this one failed over, so none of them left the work in doubt: the job is ``failed``."""
+        left = deadline - asyncio.get_running_loop().time()
+        if left > 0:
+            return request.model_copy(update={"timeout_s": left})
+        failure = Failure(
+            kind="timeout",
+            message=f"timeout_s ran out before {'another' if attempts else 'a'} runner was called",
+            payment_sent=any(attempt.payment_sent for attempt in attempts),
+        )
+        raise JobFailed(await self.finish(job, "failed", failure, None, attempts, claim=claim))
 
     async def _attempt_failed(
         self,
@@ -147,6 +230,7 @@ class Dispatcher:
         error: RunnerCallError,
         runner: Runner,
         candidates: Candidates,
+        claim: int | None = None,
     ) -> JobFailed | None:
         """Record the error on the current attempt. Returns the JobFailed to raise, or None to fail over.
 
@@ -171,13 +255,15 @@ class Dispatcher:
             return None
         state: JobState = "uncertain" if verdict == "uncertain" else "failed"
         failure = failure_of(error, any(attempt.payment_sent for attempt in attempts))  # earlier ones too
-        return JobFailed(await self.finish(job, state, failure, None, attempts))
+        return JobFailed(await self.finish(job, state, failure, None, attempts, claim=claim))
 
-    async def _exhausted(self, job: Job, attempts: list[Attempt], last: RunnerCallError) -> JobFailed:
+    async def _exhausted(
+        self, job: Job, attempts: list[Attempt], last: RunnerCallError, claim: int | None = None
+    ) -> JobFailed:
         """Every runner tried failed over, so none ran the work: the job is ``failed`` with the last
         runner's words. ``last`` is set: ``_candidates`` fails a job with no runner to try."""
         failure = failure_of(last, any(attempt.payment_sent for attempt in attempts), tried=len(attempts))
-        return JobFailed(await self.finish(job, "failed", failure, None, attempts))
+        return JobFailed(await self.finish(job, "failed", failure, None, attempts, claim=claim))
 
     async def dispatch(
         self,
@@ -186,22 +272,30 @@ class Dispatcher:
         request: JobRequest,
         attempts: list[Attempt],
         *,
+        deadline: float,
         keep: KeepResult | None = None,
         keep_bytes: int | None = None,
+        claim: int | None = None,
     ) -> JobResult:
-        """Run ``job`` on the runners that can do it, until one answers or none is left. ``keep`` ends a
-        succeeded job in place of the default, which records the shape of a result returned inline: the
-        async worker stores the bytes there (ISS-26). ``keep_bytes`` is the most of a reply ``keep`` has
-        a use for: a transport that can (``BoundedRunnerTransport``) then holds no more of it."""
-        candidates, credential = await self._candidates(job, actor, request, attempts)
+        """Run ``job`` on the runners that can do it, until one answers or none is left.
+
+        ``deadline`` is the loop time at which the job's ``timeout_s`` runs out: counted from the job's
+        start for an immediate job and from its claim for an async one, once for all its attempts
+        (``_in_time``). ``keep`` ends a succeeded job in place of the default, which records the shape of
+        a result returned inline: the async worker stores the bytes there (ISS-26). ``keep_bytes`` is the
+        most of a reply ``keep`` has a use for: a transport that can (``BoundedRunnerTransport``) then
+        holds no more of it. ``claim`` is the number of the claim an async job runs under: every write
+        then checks it (``ClaimLost``), and a job nobody can take now is ``NotNow``."""
+        candidates, credential = await self._candidates(job, actor, request, attempts, claim)
         last: RunnerCallError | None = None
         for number, runner in enumerate(candidates, start=1):
-            await self._start_attempt(job, number, runner, credential, attempts)
+            timed = await self._in_time(job, request, attempts, deadline, claim)
+            await self._start_attempt(job, number, runner, credential, attempts, claim)
             recorder = SignedSessionRecorder(self._store, attempts)
             try:
-                reply = await self._call(runner, request, credential.token, recorder, keep_bytes)
+                reply = await self._call(runner, timed, credential.token, recorder, keep_bytes)
             except RunnerCallError as error:
-                failed = await self._attempt_failed(job, attempts, error, runner, candidates)
+                failed = await self._attempt_failed(job, attempts, error, runner, candidates, claim)
                 if failed is not None:
                     raise failed from error
                 last = error
@@ -223,7 +317,7 @@ class Dispatcher:
                 content_type=response_content_type(reply.content_type),
                 data=reply.data,
             )
-        raise await self._exhausted(job, attempts, cast(RunnerCallError, last))
+        raise await self._exhausted(job, attempts, cast(RunnerCallError, last), claim)
 
     async def _call(
         self,
@@ -297,22 +391,41 @@ class Dispatcher:
         with contextlib.suppress(Exception):
             await self._store.finish_attempt(attempt)
 
-    async def fail(self, job: Job, attempts: list[Attempt], kind: FailureKind, message: str) -> JobFailed:
+    async def fail(
+        self,
+        job: Job,
+        attempts: list[Attempt],
+        kind: FailureKind,
+        message: str,
+        *,
+        claim: int | None = None,
+    ) -> JobFailed:
         failure = Failure(kind=kind, message=message)
-        return JobFailed(await self.finish(job, "failed", failure, None, attempts))
+        return JobFailed(await self.finish(job, "failed", failure, None, attempts, claim=claim))
 
     async def close_after_error(self, job: Job, attempts: list[Attempt], exc: BaseException) -> None:
-        maybe_paid = payment_unresolved(attempts)  # as recover_interrupted
-        failure = Failure(
-            kind="runner_error",
-            message=f"engine error: {type(exc).__name__}",
-            payment_sent=any(a.payment_sent for a in attempts),
-        )
-        await store_evidence(self._store, attempts)  # the write at signing may have failed (D42)
+        """End a job the engine, not a runner, stopped: ``uncertain`` if it may have paid. A write that
+        fails is logged, not raised: what stopped the job is what its caller is told."""
+        state, failure = error_end(attempts, type(exc).__name__)
         try:
-            await self.finish(job, "uncertain" if maybe_paid else "failed", failure, None, attempts)
+            await self.close(job, attempts, state, failure)
         except Exception:
             _LOG.exception("could not close job", extra={"event": "jobs.close_failed", "job_id": str(job.id)})
+
+    async def close(
+        self,
+        job: Job,
+        attempts: Sequence[Attempt],
+        state: JobState,
+        failure: Failure,
+        *,
+        claim: int | None = None,
+    ) -> None:
+        """Write the end of a job that was stopped: the evidence its attempts hold, then its state.
+        Raises what the store raises, so the async worker, which owns a claimed job's end, can write it
+        again later: both writes can be repeated."""
+        await store_evidence(self._store, attempts)  # the write at signing may have failed (D42)
+        await self.finish(job, state, failure, None, attempts, claim=claim)
 
     async def _returned_inline(self, job: Job, reply: RunnerReply, attempts: Sequence[Attempt]) -> Job:
         return await self.finish(job, "succeeded", None, _result_ref(reply), attempts)
@@ -326,15 +439,20 @@ class Dispatcher:
         attempts: Sequence[Attempt],
         *,
         content: bytes | None = None,
+        claim: int | None = None,
     ) -> Job:
         """Write the job's end. With ``content``, the bytes of a succeeded job's result are stored in the
         same transaction (ISS-26). Only a running job ends: one that already ended is left as it is, and
-        that is logged, not raised, since the caller has nothing to undo."""
+        that is logged, not raised, since the caller has nothing to undo. With ``claim``, an async
+        job's, the job ends only while that claim holds it, and a miss is ``ClaimLost``."""
         completed = self._clock.now()
+        fence = {} if claim is None else {"claim": claim}  # a store never asked to claim is never told
         if content is not None and result is not None:
-            ended = await self._store.finish_job_with_result(job.id, result, content, completed)
+            ended = await self._store.finish_job_with_result(job.id, result, content, completed, **fence)
         else:
-            ended = await self._store.finish_job(job.id, state, failure, result, completed)
+            ended = await self._store.finish_job(job.id, state, failure, result, completed, **fence)
+        if ended is False and claim is not None:
+            raise ClaimLost(job.id, claim)
         if ended is False:  # a supplied store that answers nothing has written, as it did before the guard
             _LOG.warning(
                 "the job had already ended; its record is unchanged",

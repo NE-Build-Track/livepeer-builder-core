@@ -139,9 +139,12 @@ class BuilderEngine:
         self._tasks.append(task)
 
     async def stop(self) -> None:
+        # First, and with no await before it: from here on no async job is claimed, so none is claimed
+        # and paid while the streams below are given their time (ISS-26). Running ones carry on.
+        self.jobs.worker.close()
         await self.jobs.close_streams()  # before the store closes: open streams drain, then end abandoned
         self._stop.set()
-        await self.jobs.worker.drain()  # running async jobs end or are cancelled; none is claimed after
+        await self.jobs.worker.drain()  # running async jobs end or are cancelled, and every end is written
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:

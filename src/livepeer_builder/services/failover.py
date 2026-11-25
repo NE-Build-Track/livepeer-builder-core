@@ -12,6 +12,7 @@ from livepeer_builder.contracts import (
     CallTimings,
     Failure,
     FailureKind,
+    JobState,
     Runner,
     reason_fits,
 )
@@ -81,13 +82,8 @@ async def recover_interrupted(store: JobRepo, clock: Clock) -> int:
         if unstarted and await store.requeue_unstarted(job.id, MAX_CLAIMS):
             requeued += 1
             continue
-        maybe_paid = payment_unresolved(job.attempts)
-        failure = Failure(
-            kind="interrupted",
-            message="the engine stopped while this job was running",
-            payment_sent=any(a.payment_sent for a in job.attempts),
-        )
-        await store.finish_job(job.id, "uncertain" if maybe_paid else "failed", failure, None, clock.now())
+        state, failure = interrupted_end(job.attempts)
+        await store.finish_job(job.id, state, failure, None, clock.now())
         recovered += 1
     if recovered or requeued:
         _LOG.warning(
@@ -95,6 +91,29 @@ async def recover_interrupted(store: JobRepo, clock: Clock) -> int:
             extra={"event": "jobs.recovered", "count": recovered, "requeued": requeued},
         )
     return recovered
+
+
+def interrupted_end(attempts: Sequence[Attempt]) -> tuple[JobState, Failure]:
+    """How a job ends that the engine stopped running and will not run again: ``uncertain`` if it may
+    hold a payment for work with an unknown outcome. A restart ends a ``running`` job so, and the async
+    worker ends so a job it stopped before its first attempt that cannot go back to the queue."""
+    failure = Failure(
+        kind="interrupted",
+        message="the engine stopped while this job was running",
+        payment_sent=any(attempt.payment_sent for attempt in attempts),
+    )
+    return ("uncertain" if payment_unresolved(attempts) else "failed"), failure
+
+
+def error_end(attempts: Sequence[Attempt], cause: str) -> tuple[JobState, Failure]:
+    """How a job ends that an error of the engine's own stopped, ``cause`` being the error's name: as
+    ``interrupted_end``, with kind ``runner_error``."""
+    failure = Failure(
+        kind="runner_error",
+        message=f"engine error: {cause}",
+        payment_sent=any(attempt.payment_sent for attempt in attempts),
+    )
+    return ("uncertain" if payment_unresolved(attempts) else "failed"), failure
 
 
 def failure_kind(outcome: AttemptOutcome, status_code: int | None) -> FailureKind:

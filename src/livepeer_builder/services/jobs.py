@@ -103,13 +103,14 @@ class JobService:
         (``OperationInProgress`` while the reference's job runs) and OperationConflict."""
         if request.return_http_errors:
             raise InvalidRequest("return_http_errors requires jobs.streaming.stream")
+        deadline = asyncio.get_running_loop().time() + request.timeout_s  # timeout_s counts from here
         fingerprint, retrying = await self._admit_request(actor, request)
         async with self._admission.admit(request.app):
             job = self._new_job(actor, request)
             await claim_operation(self._store, job, fingerprint, retrying)
             attempts: list[Attempt] = []
             try:
-                return await self._dispatcher.dispatch(job, actor, request, attempts)
+                return await self._dispatcher.dispatch(job, actor, request, attempts, deadline=deadline)
             except JobFailed:
                 raise
             except BaseException as exc:

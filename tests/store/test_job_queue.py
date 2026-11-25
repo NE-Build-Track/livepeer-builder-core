@@ -94,7 +94,8 @@ async def test_a_queued_job_keeps_its_request_and_the_actor_it_runs_as(
 
     taken = await sql.claim_job(job.id, clock.now())
     assert taken is not None
-    running, request, actor = taken
+    running, request, actor, number = taken
+    assert number == 1  # the claim's number: what the worker's later writes for the job carry
     assert (running.state, running.started_at, running.mode) == ("running", clock.now(), "async")
     # the request as it was sent: what was not set is still not set, so its checks read the same
     assert request == REQUEST and request.model_fields_set == REQUEST.model_fields_set
@@ -334,7 +335,7 @@ async def test_a_cancel_and_a_claim_at_the_same_moment_do_not_both_win(
 
 
 async def test_jobs_queued_past_the_time_limit_end_together(sql: SqlStore, clock: FixedClock) -> None:
-    expired = Failure(kind="no_capacity", message="no worker was free within the queue's time limit")
+    expired = Failure(kind="no_capacity", message="not dispatched within the queue's time limit")
     old = await enqueued(sql, clock)
     older_but_running = await claimed(sql, clock)
     cutoff = clock.now()

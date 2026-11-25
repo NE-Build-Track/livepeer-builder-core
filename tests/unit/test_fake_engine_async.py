@@ -100,15 +100,18 @@ async def test_a_failed_async_job_is_read_as_its_failure(side: Side) -> None:
         assert raised.value.job == failed
 
 
-async def test_a_job_for_an_app_nobody_serves_is_queued_and_fails_when_it_is_run(side: Side) -> None:
-    """Nothing is discovered at submit: the app is looked for when the job is dispatched."""
+async def test_a_job_for_an_app_nobody_serves_is_queued_and_waits_for_a_runner(side: Side) -> None:
+    """Nothing is discovered at submit, and a queued job is not failed because no runner is listed when
+    a worker reaches it: it waits, up to the queue's time limit (which the fake does not model)."""
     async with side() as engine:
         job = await engine.jobs.submit(ALICE, queued(app=NONE))
         assert job.state == "queued"
-        await advance(engine)
-        failed = await engine.jobs.get(ALICE, job.id)
-        assert failed.failure is not None
-        assert (failed.state, failed.failure.kind, failed.attempts) == ("failed", "no_offering", ())
+        assert [await advance(engine), await advance(engine)] == [0, 0]
+        waiting = await engine.jobs.get(ALICE, job.id)
+        assert (waiting.state, waiting.failure, waiting.attempts) == ("queued", None, ())
+        assert (await engine.costs.for_job(ALICE, job.id)).status == "pending"  # it may yet pay
+        with pytest.raises(JobNotFinished):
+            await engine.jobs.result(ALICE, job.id)
 
 
 async def test_submit_and_run_each_refuse_the_other_mode(side: Side) -> None:

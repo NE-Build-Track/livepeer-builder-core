@@ -3,11 +3,16 @@ waits with (``lpb_job_requests``) and the result it leaves (``lpb_job_results``)
 
 Every move is one conditional statement on the job's state, so two writers never both win: a claim
 (``queued`` to ``running``), a cancel or the queue's time limit (``queued`` to ``failed``), a requeue
-after a restart (``running`` to ``queued``) and the end of a job (``running`` to an ended state). The
-transaction that ends a job also writes its result and deletes its stored request, so a job is never
-``succeeded`` without its bytes and no request outlives its job. Each of those statements reports
-whether it changed a row: that is where a ``job.finished`` event will be written, in the same
-transaction, when the events feed is built (ISS-46).
+(``running`` to ``queued``) and the end of a job (``running`` to an ended state). The transaction that
+ends a job also writes its result and deletes its stored request, so a job is never ``succeeded``
+without its bytes and no request outlives its job. Each of those statements reports whether it changed
+a row: that is where a ``job.finished`` event will be written, in the same transaction, when the events
+feed is built (ISS-46).
+
+A claim has a number, the row's ``claims`` once it is made, and ``claim_job`` answers with it. A write
+that names a claim applies only while the job is ``running`` under that number (``held``): a worker
+whose claim was taken from it, because the job was put back and claimed again or ended by another
+writer, changes nothing and is told so.
 
 Neither the stored request nor the stored result is encrypted here: the database is the operator's to
 protect (docs/contracts/persistence.md).
@@ -43,6 +48,19 @@ def request_values(job_id: UUID, request: JobRequest, actor: ActorContext) -> di
     }
 
 
+def held(job_id: UUID, claim: int | None) -> Any:
+    """The job while it is ``running`` and, when a claim is named, under that claim."""
+    mine = and_(t.jobs.c.id == str(job_id), t.jobs.c.state == RUNNING)
+    return mine if claim is None else and_(mine, t.jobs.c.claims == claim)
+
+
+async def holds(conn: AsyncConnection, job_id: UUID, claim: int) -> bool:
+    """Whether ``claim`` still holds the job, asked as a write that changes nothing: the transaction
+    starts as a writer, as ``_end`` does, so the answer stands until it commits."""
+    kept = update(t.jobs).where(held(job_id, claim)).values(claims=t.jobs.c.claims)
+    return (await conn.execute(kept)).rowcount == 1
+
+
 async def end_running(
     conn: AsyncConnection,
     job_id: UUID,
@@ -50,9 +68,14 @@ async def end_running(
     failure: Failure | None,
     result: ResultRef | None,
     completed_at: datetime,
+    claim: int | None = None,
 ) -> bool:
-    """``running`` to an ended state, and the stored request deleted. ``False`` when it was not running."""
-    return await _end(conn, t.jobs.c.id == str(job_id), RUNNING, state, failure, result, completed_at) == 1
+    """``running`` to an ended state, and the stored request deleted. ``False`` when it was not running,
+    or not under ``claim`` when one is named."""
+    which = t.jobs.c.id == str(job_id)
+    if claim is not None:
+        which = and_(which, t.jobs.c.claims == claim)
+    return await _end(conn, which, RUNNING, state, failure, result, completed_at) == 1
 
 
 async def _end(
@@ -101,7 +124,7 @@ class SqlJobQueue:
 
     async def claim_job(
         self, job_id: UUID, started_at: datetime
-    ) -> tuple[Job, JobRequest, ActorContext] | None:
+    ) -> tuple[Job, JobRequest, ActorContext, int] | None:
         mine = and_(t.jobs.c.id == str(job_id), t.jobs.c.state == QUEUED)
         claim = {"state": RUNNING, "started_at": started_at, "claims": t.jobs.c.claims + 1}
         async with self.engine.begin() as conn:
@@ -115,21 +138,22 @@ class SqlJobQueue:
             )
             [job] = await load_jobs(conn, [row])
         request = JobRequest.model_validate(dict(kept["request"]) | _raw_body(kept["raw_body"]))
-        return job, request, ActorContext.model_validate(kept["actor"])
+        return job, request, ActorContext.model_validate(kept["actor"]), int(row["claims"])
 
-    async def requeue_unstarted(self, job_id: UUID, max_claims: int) -> bool:
+    async def requeue_unstarted(
+        self, job_id: UUID, max_claims: int, *, claim: int | None = None, counted: bool = True
+    ) -> bool:
         attempted = exists().where(t.attempts.c.job_id == t.jobs.c.id)
         kept = exists().where(t.job_requests.c.job_id == t.jobs.c.id)
-        unstarted = and_(
-            t.jobs.c.id == str(job_id),
-            t.jobs.c.state == RUNNING,
-            t.jobs.c.claims < max_claims,
-            ~attempted,
-            kept,
-        )
+        unstarted = and_(held(job_id, claim), ~attempted, kept)
+        back: dict[str, Any] = {"state": QUEUED, "started_at": None}
+        if counted:
+            unstarted = and_(unstarted, t.jobs.c.claims < max_claims)
+        else:  # the claim is given back: it never counts against ``max_claims``
+            back["claims"] = t.jobs.c.claims - 1
         async with self.engine.begin() as conn:
-            back = await conn.execute(update(t.jobs).where(unstarted).values(state=QUEUED, started_at=None))
-        return back.rowcount == 1
+            moved = await conn.execute(update(t.jobs).where(unstarted).values(back))
+        return moved.rowcount == 1
 
     async def cancel_queued(self, job_id: UUID, failure: Failure, completed_at: datetime) -> bool:
         async with self.engine.begin() as conn:
@@ -142,7 +166,13 @@ class SqlJobQueue:
             return await _end(conn, which, QUEUED, "failed", failure, None, completed_at)
 
     async def finish_job_with_result(
-        self, job_id: UUID, result: ResultRef, content: bytes, completed_at: datetime
+        self,
+        job_id: UUID,
+        result: ResultRef,
+        content: bytes,
+        completed_at: datetime,
+        *,
+        claim: int | None = None,
     ) -> bool:
         kept = {
             "job_id": str(job_id),
@@ -153,7 +183,7 @@ class SqlJobQueue:
             "expires_at": result.expires_at,
         }
         async with self.engine.begin() as conn:  # all of it, or none of it
-            if not await end_running(conn, job_id, "succeeded", None, result, completed_at):
+            if not await end_running(conn, job_id, "succeeded", None, result, completed_at, claim):
                 return False
             await conn.execute(insert(t.job_results).values(kept))
         return True

@@ -111,9 +111,15 @@ class SqlJobs:
             rows = list((await conn.execute(select(t.jobs).where(t.jobs.c.state == state))).mappings())
             return await load_jobs(conn, rows)
 
-    async def start_attempt(self, attempt: Attempt) -> None:
+    async def start_attempt(self, attempt: Attempt, *, claim: int | None = None) -> bool:
+        """Insert the attempt, before its call. With ``claim``, an async job's (ISS-26), only while the
+        job is ``running`` under that claim, in the same transaction: ``False``, and nothing written,
+        for a worker that no longer holds the job."""
         async with self.engine.begin() as conn:
+            if claim is not None and not await queue.holds(conn, attempt.job_id, claim):
+                return False
             await conn.execute(insert(t.attempts).values(_attempt_values(attempt)))
+        return True
 
     async def finish_attempt(self, attempt: Attempt) -> None:
         key = and_(t.attempts.c.job_id == str(attempt.job_id), t.attempts.c.number == attempt.number)
@@ -150,12 +156,15 @@ class SqlJobs:
         failure: Failure | None,
         result: ResultRef | None,
         completed_at: datetime,
+        *,
+        claim: int | None = None,
     ) -> bool:
         """End a ``running`` job, and only a running one (ISS-26): a late writer never reopens a job that
-        ended, and a queued one ends by its own writes (``store/job_queue.py``). The request stored for
-        an async job goes in the same transaction."""
+        ended, and a queued one ends by its own writes (``store/job_queue.py``). With ``claim``, only
+        while that claim holds the job. The request stored for an async job goes in the same
+        transaction."""
         async with self.engine.begin() as conn:
-            return await queue.end_running(conn, job_id, state, failure, result, completed_at)
+            return await queue.end_running(conn, job_id, state, failure, result, completed_at, claim)
 
     async def set_usage(self, job_id: UUID, usage: MeasuredUsage) -> None:
         async with self.engine.begin() as conn:

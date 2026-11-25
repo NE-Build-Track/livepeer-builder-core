@@ -171,12 +171,12 @@ async def test_a_claim_cut_short_for_the_last_time_ends_the_job_unpaid(
 
     ended = await engine.jobs.get(alice, job.id)
     assert ended.failure is not None
-    assert (ended.state, ended.failure.kind, ended.failure.payment_sent) == ("failed", "runner_error", False)
+    assert (ended.state, ended.failure.kind, ended.failure.payment_sent) == ("failed", "interrupted", False)
     assert (ended.attempts, transport.calls, engine.admission.running) == ((), [], 0)
     assert await engine.jobs.worker.run_once() == 0  # nothing is left to claim
 
 
-async def test_a_claim_that_fails_on_a_job_another_step_holds_leaves_that_job_running(
+async def test_a_step_leaves_alone_a_job_another_step_holds(
     make_engine: EngineFactory,
     alice: ActorContext,
     transport: ScriptedTransport,
@@ -184,8 +184,9 @@ async def test_a_claim_that_fails_on_a_job_another_step_holds_leaves_that_job_ru
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Two steps at once, as when the queue is also driven by hand: the second read the queue before
-    the first claimed, and its own claim of the same job then failed. The job is ``running`` because the
-    first step holds it, so the failed claim resolves nothing: it is neither put back nor ended."""
+    the first claimed. The job is the first step's from before its claim, so the second does not go
+    for it at all: no claim is tried, and so none can fail and be taken for one nobody runs
+    (``test_async_one_owner.py`` holds the case where the first claim is still being written)."""
     engine = await make_engine(async_workers=2)
     await allot(engine, alice)
     job = await engine.jobs.submit(alice, queued())
@@ -202,8 +203,7 @@ async def test_a_claim_that_fails_on_a_job_another_step_holds_leaves_that_job_ru
     with monkeypatch.context() as patched:
         patched.setattr(engine.store, "queued_jobs", read_before_the_claim)
         patched.setattr(engine.store, "claim_job", fails)
-        with pytest.raises(OSError, match="the database went away"):
-            await engine.jobs.worker.run_once()
+        assert await engine.jobs.worker.run_once() == 0
 
     assert (await engine.jobs.get(alice, job.id)).state == "running"
     transport.gate.set()
@@ -213,31 +213,27 @@ async def test_a_claim_that_fails_on_a_job_another_step_holds_leaves_that_job_ru
     assert (len(transport.calls), engine.admission.running) == (1, 0)
 
 
-async def test_a_cut_claim_that_cannot_be_resolved_is_logged_and_the_step_reports_what_stopped_it(
+async def test_a_claim_that_fails_before_it_is_written_gives_its_slot_back(
     make_engine: EngineFactory,
     alice: ActorContext,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The look that resolves a cut claim uses the same database. If it fails too, the step still
-    raises what stopped the claim, the slot goes back, and a restart resolves the job."""
+    """The claim raised and nothing was written: the step raises what stopped the claim, the job is
+    still ``queued`` and the slot goes back. (A cut claim the store cannot resolve at once is
+    ``test_async_ends.py``'s.)"""
     engine = await make_engine()
     await allot(engine, alice)
-    await engine.jobs.submit(alice, queued())
+    job = await engine.jobs.submit(alice, queued())
 
     async def claim_fails(*_: Any, **__: Any) -> None:
         raise OSError("the database went away")
 
-    async def read_fails(*_: Any, **__: Any) -> None:
-        raise OSError("and it is still away")
-
     monkeypatch.setattr(engine.store, "claim_job", claim_fails)
-    monkeypatch.setattr(engine.store, "get_job", read_fails)
     with pytest.raises(OSError, match="the database went away"):
         await engine.jobs.worker.run_once()
 
     assert engine.admission.running == 0
-    assert "jobs.async_unclaim_failed" in [getattr(record, "event", None) for record in caplog.records]
+    assert (await engine.jobs.get(alice, job.id)).state == "queued"
 
 
 async def test_a_job_put_back_by_a_cut_claim_wakes_the_loop(

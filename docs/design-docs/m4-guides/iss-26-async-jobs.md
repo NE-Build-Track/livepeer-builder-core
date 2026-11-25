@@ -87,8 +87,9 @@ two halves and a role (`LPB_ROLE`, #164, #169), and `AdmissionLimiter` refuses a
   `JobFailed` (402), as `run` does, and nothing is queued.
 - **A job stopped by `engine.stop()` before its first attempt** goes back to the queue, as a restart
   would put it (Q2's rule, applied at stop).
-- **The queue limit** is counted before the insert (T45). **The time limit** counts from the submit,
-  across a restart.
+- **The queue limit** is a hard one: the store asks it in the transaction that stores the job, behind a
+  lock, so submits at the same moment never pass it between them (T45, closed on 25 November 2026,
+  after the reviewer's review). **The time limit** counts from the submit, across a restart.
 - **Results retention alone** purges first one interval after start, so the default settings add no
   write at start.
 - **`start()` counts the queue before the worker's loop runs**, so jobs a restart left queued are

@@ -102,7 +102,8 @@ request id is ISS-48's.
   and reason `cancelled`, needs `jobs.run`, and answers 200 with itself when cancelled again; a repeat
   after a cancel or a queue expiry queues a new job (D57's closed list); an actor with no allocation is
   failed `not_provisioned` at submit, as `run` fails it; a job stopped before its first attempt goes
-  back to the queue; the queue's limit is counted before the insert (T45); results retention alone
+  back to the queue; the queue's limit was counted before the insert (T45, closed on 25 November: it is
+  asked in the transaction that stores the job); results retention alone
   purges first one interval after start, so the default settings add no write at start; `start()`
   counts the queue before the worker's loop runs. Source: the guide's rules, applied; for Mike's review.
 - **20 November 2026, review of #184.** The result limit is applied while the reply is read. The bound

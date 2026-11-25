@@ -209,6 +209,31 @@ async def test_a_full_queue_refuses_the_submit_and_stores_nothing(
     await engine.jobs.submit(alice, queued(operation_ref="order-3"))  # there is room again
 
 
+async def test_submits_at_the_same_moment_do_not_pass_the_queues_limit(
+    make_engine: EngineFactory,
+    alice: ActorContext,
+    on_a_file: EngineSupply,
+) -> None:
+    """Eight submits at once, each under a reference of its own, with two places in the queue: two are
+    queued and six are refused with 503, and nothing of those six is stored. Each of them used to count
+    the queue before any had stored its job, so all eight were accepted (the reviewer, #184)."""
+    engine = await make_engine(supply=on_a_file, async_max_queued=2)
+    await allot(engine, alice)
+
+    async def submitted(n: int) -> bool:
+        try:
+            await engine.jobs.submit(alice, queued(operation_ref=f"order-{n}"))
+        except NoCapacity:
+            return False
+        return True
+
+    answers = await asyncio.gather(*(submitted(n) for n in range(8)))
+
+    assert sorted(answers) == [False] * 6 + [True] * 2
+    assert len(await engine.jobs.list_jobs(alice)) == 2
+    assert engine.health().queued_jobs == 2
+
+
 async def test_a_job_queued_past_the_time_limit_fails_unpaid(
     make_engine: EngineFactory, alice: ActorContext, transport: ScriptedTransport, clock: FixedClock
 ) -> None:

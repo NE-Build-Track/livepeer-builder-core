@@ -16,7 +16,7 @@ from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 
 from livepeer_builder.contracts import ActorContext, AuthProvenance, Failure, Job, JobRequest, ResultRef
-from livepeer_builder.errors import OperationConflict, OperationExists
+from livepeer_builder.errors import NoCapacity, OperationConflict, OperationExists
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FixedClock
@@ -151,6 +151,41 @@ async def test_queued_jobs_are_listed_oldest_first_and_an_app_can_be_left_out(
     assert await sql.queued_stats() == (4, first.created_at)
     await sql.claim_job(first.id, clock.now())
     assert await sql.queued_stats() == (3, second.created_at)
+
+
+async def test_the_queues_limit_holds_for_submits_at_the_same_moment(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    """The limit is asked in the transaction that stores the job, behind a lock every such transaction
+    takes: of several jobs stored at once with one place free, one is stored and the others are told
+    the queue is full and store nothing. The count was read before the insert, in a transaction of its
+    own, so each of them saw the free place (the reviewer, #184; T45)."""
+    await enqueued(sql, clock)  # one of two places is taken
+    jobs = [waiting(clock) for _ in range(6)]
+
+    async def stored(job: Job) -> bool:
+        try:
+            await sql.enqueue_job(job, None, JobRequest(app=job.app, mode="async"), ALICE, max_queued=2)
+        except NoCapacity:
+            return False
+        return True
+
+    answers = await asyncio.gather(*(stored(job) for job in jobs))
+
+    assert sorted(answers) == [False] * 5 + [True]
+    assert (await sql.queued_stats())[0] == 2
+    for job, kept in zip(jobs, answers, strict=True):  # a refused job left nothing: no row, no request
+        assert (await sql.get_job(job.id) is not None) == kept
+        assert await count(sql, t.job_requests, job.id) == int(kept)
+
+
+async def test_a_job_is_stored_whatever_the_queue_holds_when_no_limit_is_named(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    """A store asked with no limit applies none, as before the limit was the store's to hold."""
+    for _ in range(3):
+        await enqueued(sql, clock)
+    assert (await sql.queued_stats())[0] == 3
 
 
 async def test_an_empty_queue_has_no_oldest_job(sql: SqlStore) -> None:

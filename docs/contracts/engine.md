@@ -672,7 +672,7 @@ actor has an allocation. It discovers nothing, pays nothing and takes no admissi
 | The reference names an existing job | That job, in whatever state it is. REST: **200**, `Idempotent-Replayed: true`, `Location` and `Livepeer-Job-Id` ([below](#a-repeated-submit)) |
 | `return_http_errors`, or a stream (`?stream=true`, `Accept: text/event-stream`) | 400 `InvalidRequest`: only a stream hands back a runner's error answer, and an async job's answer is read once it has ended |
 | The actor has no allocation | The job is recorded `failed`, `not_provisioned`, and raised as `JobFailed` (402), as `jobs.run` fails it. Nothing is queued |
-| `LPB_ASYNC_MAX_QUEUED` jobs are already queued | `NoCapacity`, 503 + `Retry-After`. Nothing is stored |
+| `LPB_ASYNC_MAX_QUEUED` jobs are already queued | `NoCapacity`, 503 + `Retry-After`. Nothing is stored. The limit is asked in the transaction that stores the job, so submits at the same moment never pass it between them |
 
 The job is stored with what it will run with, in one transaction: its request (a `raw_body` as its bytes)
 and a snapshot of the actor it was authorized for: `actor_id`, `tenant_id`, `permissions`,

@@ -157,11 +157,16 @@ class JobRepo(Protocol):
         actor: ActorContext,
         *,
         retry_of: UUID | None = None,
+        max_queued: int | None = None,
     ) -> None:
         """Insert a ``queued`` job with what it will run with, in one transaction: its request, and of the
         actor it was authorized for the id, the tenant, the permissions, the credential kind and the
         attributes (never ``auth`` or ``display_name``). A reference already held, and ``retry_of``, are
-        answered as ``create_job`` answers them."""
+        answered as ``create_job`` answers them.
+
+        ``max_queued`` is the queue's limit: with it, the store raises ``NoCapacity`` and stores nothing
+        when that many jobs are ``queued``, and it decides that in the same transaction, so that jobs
+        stored at the same moment never pass the limit between them."""
         ...
 
     async def queued_jobs(self, limit: int, skip_apps: Collection[str] = ()) -> list[tuple[UUID, str]]:

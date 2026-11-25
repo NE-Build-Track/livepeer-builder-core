@@ -38,7 +38,6 @@ from livepeer_builder.errors import (
     JobFailed,
     JobNotFinished,
     JobNotQueued,
-    NoCapacity,
     NotFound,
     NotProvisioned,
     ResultExpired,
@@ -206,8 +205,6 @@ class JobService:
             job = self._new_job(actor, request, "queued")
             held = await self._unallotted(actor, job, fingerprint, retrying)
         if held is None:
-            if await self.worker.count_queue() >= self.worker.limits.max_queued:
-                raise NoCapacity("the queue is full; submit again later")
             # Shielded as run's final write is (D34): the worker is told in the task that stored the job,
             # so a request cancelled after the commit still leaves a job the loop looks at (#184 review).
             held = await run_shielded(self._enqueue(actor, request, job, fingerprint, retrying))
@@ -222,7 +219,9 @@ class JobService:
         """Store ``job`` queued and tell the worker, as one step: ``None`` once both are done, or the job
         that holds its reference. The loop reads the queue only while it knows of a waiting job, so a
         stored job it was never told of would wait for the next submit or a restart."""
-        queue = functools.partial(self._store.enqueue_job, job, fingerprint, request, actor)
+        # the store holds the queue's limit, in the transaction that stores the job (NoCapacity)
+        limit = self.worker.limits.max_queued
+        queue = functools.partial(self._store.enqueue_job, job, fingerprint, request, actor, max_queued=limit)
         held = await claim_async_operation(queue, retrying)
         if held is None:
             self.worker.queued(job)

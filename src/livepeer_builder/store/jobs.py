@@ -51,19 +51,29 @@ class SqlJobs:
         actor: ActorContext,
         *,
         retry_of: UUID | None = None,
+        max_queued: int | None = None,
     ) -> None:
         """``create_job`` for a ``queued`` async job (ISS-26): the same transaction stores what it will
-        run with, so a job is never queued without its request."""
-        await self._insert_job(job, fingerprint, retry_of, queue.request_values(job.id, request, actor))
+        run with, so a job is never queued without its request, and asks the queue's limit first when
+        ``max_queued`` names one (``queue.room``): ``NoCapacity``, and nothing stored, when it is full."""
+        waiting = queue.request_values(job.id, request, actor)
+        await self._insert_job(job, fingerprint, retry_of, waiting, max_queued)
 
     async def _insert_job(
-        self, job: Job, fingerprint: str | None, retry_of: UUID | None, waiting: dict[str, Any] | None
+        self,
+        job: Job,
+        fingerprint: str | None,
+        retry_of: UUID | None,
+        waiting: dict[str, Any] | None,
+        max_queued: int | None = None,
     ) -> None:
         values = _job_values(job) | {"request_fingerprint": fingerprint}
         if retry_of is not None:
             values["retry_of"] = str(retry_of)
         try:
             async with self.engine.begin() as conn:
+                if max_queued is not None:
+                    await queue.room(conn, max_queued)
                 if retry_of is not None:
                     await refs.supersede(conn, retry_of, job)
                 await conn.execute(insert(t.jobs).values(values))
@@ -75,7 +85,7 @@ class SqlJobs:
             found = await self.job_by_operation_ref(job.tenant_id, job.actor_id, job.operation_ref)
             if found is None:
                 if retry_of is not None:  # the failed job is gone (retention): the reference is free
-                    return await self._insert_job(job, fingerprint, None, waiting)
+                    return await self._insert_job(job, fingerprint, None, waiting, max_queued)
                 raise
             raise refs.taken(*found, fingerprint) from None
 

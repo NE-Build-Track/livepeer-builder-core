@@ -25,10 +25,11 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, delete, exists, func, insert, or_, select, update
+from sqlalchemy import and_, delete, exists, false, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from livepeer_builder.contracts import ActorContext, Failure, Job, JobRequest, JobState, ResultRef
+from livepeer_builder.errors import NoCapacity
 from livepeer_builder.store import schema as t
 from livepeer_builder.store.rows import load_jobs
 
@@ -48,6 +49,26 @@ def request_values(job_id: UUID, request: JobRequest, actor: ActorContext) -> di
         "raw_body": request.raw_body,
         "actor": snapshot | {"permissions": sorted(snapshot["permissions"])},
     }
+
+
+QUEUE_LOCK = 0x4C50424A  # PostgreSQL's advisory lock for the queue's limit: one key, the engine's own
+
+
+async def room(conn: AsyncConnection, max_queued: int) -> None:
+    """Refuse (``NoCapacity``) when the queue already holds ``max_queued`` jobs. Asked in the transaction
+    that stores a job, behind a lock every such transaction takes first, so no two of them see the same
+    free place: the limit holds for submits at the same moment (T45, closed).
+
+    On PostgreSQL the lock is a transaction-level advisory lock, which the commit or the rollback
+    releases. SQLite has one writer at a time: a write that changes no row makes this transaction that
+    writer before it counts."""
+    if conn.dialect.name == "postgresql":
+        await conn.execute(select(func.pg_advisory_xact_lock(QUEUE_LOCK)))
+    else:
+        await conn.execute(update(t.jobs).where(false()).values(claims=t.jobs.c.claims))
+    queued = (await conn.execute(select(func.count()).where(t.jobs.c.state == QUEUED))).scalar_one()
+    if queued >= max_queued:
+        raise NoCapacity("the queue is full; submit again later")
 
 
 def held(job_id: UUID, claim: int | None) -> Any:

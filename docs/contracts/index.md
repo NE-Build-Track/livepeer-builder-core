@@ -445,9 +445,10 @@ allocation's key are as they were. There is no migration.
 ISS-26 built async jobs (D69): a job queued in the engine's own database, run by a worker in the
 engine's process, and read back by id with its stored result ([engine.md](engine.md#async-jobs)). The
 database migrates to revision 0016 ([persistence.md](persistence.md#migrations)). An engine that is sent
-no async job runs as before, with three exceptions: results retention is on by default, the result
-route of an immediate job answers 410, not 501, and a runner's very long error answer or 402 is no
-longer read to its end (the last row but one).
+no async job runs as before, with four exceptions: results retention is on by default, the result
+route of an immediate job answers 410, not 501, a runner's very long error answer or 402 is no
+longer read to its end (the last row but one), and an immediate job's `timeout_s` is one deadline for
+all its attempts (the row on `timeout_s`).
 
 | What | Before | Now |
 | --- | --- | --- |
@@ -458,7 +459,11 @@ longer read to its end (the last row but one).
 | `jobs.run`, `jobs.streaming.stream` with `mode="async"` | `NotImplementedInMilestone` (501) | `InvalidRequest` (400): queue it with `jobs.submit` |
 | `jobs.submit`, `jobs.result` | `NotImplementedInMilestone`; `submit` was not on `JobsApi` | `submit` returns the queued `Job`; `result` returns the `JobResult`, or raises `JobNotFinished`, `JobFailed` or `ResultExpired` |
 | `JobsApi` (the facade) | | `submit` and `cancel`: a caller's own implementation of the facade adds them |
-| `JobRepo` (a supplied store) | `finish_job` returned `None` and wrote whatever the job's state | `finish_job` returns whether it ended the job, and ends only a `running` one. Nine methods for the queue: `enqueue_job`, `queued_jobs`, `claim_job`, `requeue_unstarted`, `cancel_queued`, `expire_queued`, `finish_job_with_result`, `read_result`, `queued_stats` |
+| `JobRepo` (a supplied store) | `finish_job` returned `None` and wrote whatever the job's state. `start_attempt(attempt)` returned `None` | `finish_job` returns whether it ended the job, and ends only a `running` one. Nine methods for the queue: `enqueue_job`, `queued_jobs`, `claim_job`, `requeue_unstarted`, `cancel_queued`, `expire_queued`, `finish_job_with_result`, `read_result`, `queued_stats`. `claim_job` answers with the claim's number as its fourth item, and four writes take it as a keyword, `claim`, `None` unless given: `start_attempt`, `finish_job`, `finish_job_with_result` and `requeue_unstarted` (which also takes `counted`). With a claim, each applies only while the job is `running` with that count of claims, and answers `False` otherwise; `start_attempt` now returns whether it wrote. The engine passes `claim` for async jobs only: for an immediate job and a stream it calls `start_attempt(attempt)` and `finish_job(...)` with no keyword, as before, and a `start_attempt` that returns `None` has written ([persistence.md](persistence.md#store)) |
+| `timeout_s` of an immediate job (`jobs.run`, `POST /v1/jobs`) | Each attempt was given the whole `timeout_s`: a job that failed over could take `max_attempts` times as long (15 minutes at the defaults, 3 attempts of 300 s) | One deadline from the start of the job, as the contract always said ("the whole job"): each attempt is called with the time left, and when none is left before a further attempt the job ends `failed`, `timeout` (504), with no further runner called or paid. An async job counts the same way from its claim. A supplied `RunnerTransport` sees the time left as `request.timeout_s` ([engine.md](engine.md#behavior-the-contract-fixes), 6) |
+| A queued async job nobody can run yet | | It waits: no runner listed for its app, no room on any runner it would pay, or a credential that cannot be read does not fail it. It ends `no_capacity` at `LPB_ASYNC_QUEUE_TTL_S` ([engine.md](engine.md#running)) |
+| The cost class of an async job's paid answer | | `delivered` only when the job ended `succeeded`; `failed_after_payment` when the answer was not stored, for any reason ([payments.md](payments.md#cost-classification)) |
+| `AdmissionLimiter` | `AdmissionLimiter(max_concurrent, max_per_app, runs_jobs=...)` | and `async_workers` (4 unless said), the async worker's cap, with `async_lane`, the gate the worker takes its slots through. `BuilderEngine.stop()` closes it before anything else |
 | Contracts | | `Job.started_at`; `ResultRef.expires_at`; the failure kind `result_not_stored`; `FailureReason`, the type of `Failure.reason`, which adds `cancelled` to the four payment reasons; `EngineHealth.queued_jobs`, `oldest_queued_s`; `PurgeReport.results_deleted` |
 | Errors | | `JobNotFinished` (409), `ResultExpired` (410), `JobNotQueued` (409), exported from `livepeer_builder` |
 | `BoundedRunnerTransport` (a supplied transport) | | New and optional, as `StreamingRunnerTransport` is: `call_bounded(runner, request, credential, on_signed, *, max_bytes)` beside `call`. The async worker calls it, with `LPB_ASYNC_RESULT_MAX_BYTES`, on a transport that has it, and `call` on one that has not, which then reads an async answer whole. `SdkRunnerTransport` has it. `RunnerTransport` itself is unchanged |
@@ -470,7 +475,7 @@ longer read to its end (the last row but one).
 | `lpb purge`, `BuilderEngine.purge()` | `jobs_deleted`, `usage_rows_deleted` | and `results_deleted` |
 | Background loops | | `lpb-async-jobs`, in the `both` and `work` roles |
 | A runner's error answer or 402 payment challenge, for every kind of job | Read whole, whatever its length | An error answer is read for 16 KiB: `failure.body` is its first 4096 characters, as before, and an error still arriving at the job's deadline now fails with the runner's status, not `timeout`. A 402 is read up to 64 KiB; a longer one is refused unsigned, `http` (402) ([engine.md](engine.md#failures)) |
-| The log | | `jobs.async_step_failed`, `jobs.async_failed`, `jobs.async_unclaim_failed`, `jobs.async_drained`, `jobs.queue_expired`, `jobs.finish_missed`; `jobs.recovered` gains `requeued` |
+| The log | | `jobs.async_step_failed`, `jobs.async_failed`, `jobs.async_end_failed` (a job's end could not be written; it is written again), `jobs.async_claim_lost`, `jobs.async_requeued`, `jobs.async_drained`, `jobs.queue_expired`, `jobs.finish_missed`; `jobs.recovered` gains `requeued` |
 
 **Before you start the new release:**
 
@@ -482,6 +487,12 @@ longer read to its end (the last row but one).
 - **Decide how long results are kept.** `LPB_RETENTION_RESULTS_DAYS` is 7 unless set. The stored
   requests and results are not encrypted by the engine: protect the database and its backups.
 - **A supplied store** implements the queue's methods of `JobRepo`, and `finish_job` returns `bool`.
+  To run async jobs it also takes the keyword `claim` on `start_attempt`, `finish_job`,
+  `finish_job_with_result` and `requeue_unstarted`, and checks it in the same statement or transaction
+  as the write: without that check a worker that lost a job could still write for it. A store that
+  runs immediate jobs and streams only is called as before.
+- **A caller that relied on an immediate job outliving its `timeout_s` through failover** raises
+  `timeout_s`: the job now ends `timeout` when that time is up, whatever attempt it is on.
 - **A caller's own implementation of `JobsApi`** adds `submit` and `cancel`.
 - **A test that relied on `FakeEngine` running `mode="async"` at once** calls `jobs.submit` and then
   `jobs.advance()`; one that read an immediate job's result from the fake expects `ResultExpired`.

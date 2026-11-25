@@ -26,7 +26,15 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   engine once and kept none, and the reference is a receipt that no store resolves. The column is never
   derived from the reference's text ([payments.md](payments.md#payment-keys)).
 - **An async job's request and result** (ISS-26, migration 0016). `lpb_jobs` is the queue: an async
-  job waits there `queued`, and `started_at` and `claims` record a worker's claim. `lpb_job_requests`
+  job waits there `queued`, and `started_at` and `claims` record a worker's claim. `claims` after a
+  claim is that claim's number: `claim_job` answers with it, and the writes the worker makes for the
+  job afterwards (`start_attempt`, `requeue_unstarted`, `finish_job`, `finish_job_with_result`, each
+  with `claim=`) apply only while the job is `running` with that count, in the same statement or
+  transaction. A worker that lost the job to a requeue or to another writer's end therefore writes
+  nothing, and is told so. A claim given back for a job that only has to wait
+  (`requeue_unstarted(..., counted=False)`) takes one off `claims` again, so waiting never uses up the
+  three claims a job has ([engine.md](engine.md#running)). A write that names no claim, an immediate
+  job's or a stream's, is guarded by the job's state alone, as before. `lpb_job_requests`
   holds what a queued job will run with: its request (a raw body as its bytes) and the actor it was
   authorized for (id, tenant, permissions, credential kind and attributes; never the credential's
   provenance or a display name). The transaction that ends the job deletes the row. `lpb_job_results`

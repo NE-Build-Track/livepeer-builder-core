@@ -346,12 +346,14 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> queued: submit (async)
     [*] --> running: run (immediate)
-    queued --> running: a worker claims it, a slot first, then a compare-and-set
+    queued --> running: a worker claims it, its gate first (a worker, a slot, the job), then a compare-and-set
     queued --> failed: cancelled, or past the queue's time limit, nothing paid
     running --> queued: restart or stop before its first attempt, three claims at most
+    running --> queued: claimed when no runner could take it, given back uncounted
     running --> succeeded: runner 2xx, an async job's answer stored with its end
     running --> failed: refused everywhere, no allocation, runner 4xx/5xx, signer refusal
     running --> failed: an async answer too large to store, paid
+    running --> failed: timeout_s up before a further attempt, no runner called
     running --> uncertain: paid, then timeout or unreachable
     running --> uncertain: restart with an in_flight or paid attempt
     running --> failed: restart, nothing could have paid

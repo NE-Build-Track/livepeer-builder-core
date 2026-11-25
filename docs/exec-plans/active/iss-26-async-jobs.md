@@ -62,6 +62,16 @@ From ISS-26, as amended on 13 November 2026.
   An exit of `serve()` that does not wait for callers still stops the engine, so a running async job is
   drained or cancelled and its end written before the database closes
   (`tests/unit/test_async_forced_exit.py`).
+- [x] **25 November 2026, rework after three reviews.** A claimed job has one owner
+  (`services/async_held.py`): the worker's cap, the admission slot and the job's id are taken in one
+  call before the claim (`AdmissionLimiter.async_lane`), which `stop()` closes first, and every write
+  after the claim checks the claim's number. A job's `timeout_s` is one deadline for all its attempts,
+  for an immediate job too. A paid answer that was not stored is `failed_after_payment` in every case.
+  The worker writes again an end the store refused, backs off after a failed step, and steps past a
+  job whose claim raises. A queued job waits for a runner, for room and for a readable credential.
+  `drain()` waits for every ending write. Tests: `test_async_one_owner.py`, `test_async_ends.py`,
+  `test_async_waiting.py`, `test_async_deadline.py`, `test_job_deadline.py`, `test_admission_lane.py`,
+  `tests/store/test_claim_fence.py`.
 - [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log
@@ -86,6 +96,30 @@ From ISS-26, as amended on 13 November 2026.
   `size_bytes` and `sha256`, optional. A reply over the limit is still read to its end, so the job
   keeps the true size and hash (D69 (4)). The submit's shield adds no idle query. Source: the review,
   applied; for Mike's review.
+- **25 November 2026, after three reviews of #184.** The design is kept (the database is the queue,
+  one conditional claim, an in-process worker, the result stored with the job's end, no job with an
+  attempt run again). Decided: (1) every write after a claim checks the claim's number, and a writer
+  that misses stops and does not end the job; (2) one gate, taken before the claim with no await,
+  holds the worker cap, the admission slot, the job's id and "closed", and `stop()` closes it before
+  it waits for streams; (3) `timeout_s` is one deadline for all of a job's attempts, from the claim
+  for an async job and from the start of the job for an immediate one, which until now gave each
+  attempt the whole of it: with none left the job ends `timeout` with no further paid call, and a
+  stream's opening is left as it is; (4) a paid answer that was not stored costs
+  `failed_after_payment` whatever kept it from being stored (Q4, applied to a failed finishing write
+  and to a restart); (5) the worker owns an end it could not write and writes it again, keeping no
+  answer bytes for that; (6) a queued job waits through what may pass, when nothing was attempted (no
+  runner listed, no room, a credential that cannot be read), and fails `no_capacity` only at
+  `LPB_ASYNC_QUEUE_TTL_S`, the wait never using the three claims. `JobRepo` changes for a supplied
+  store are in [the upgrade notes](../../contracts/index.md#upgrading-to-async-jobs), and what a
+  second engine still breaks is in T44. Source: Mike.
+- **25 November 2026, where those decisions are silent.** A job stopped on its third claim before its
+  first attempt ends `interrupted` at stop as at the next start (Q2). A job given back, or whose claim
+  raised, is left alone for one poll interval, doubling up to 32, so a cause that lasts costs a claim
+  now and then and the jobs behind it are still reached. A job whose end is owed keeps its worker and
+  its slot until the end is written, which bounds what the worker keeps to one job per worker. The
+  worker's backstop is 5 seconds past the deadline, the grace a stream's opening has, with no setting
+  of its own. A job scripted `no_offering` stays queued in the `FakeEngine`. Source: the decisions
+  above, applied; for Mike's review.
 - **19 November 2026, not built.** No worker lease (T44): #112 left the detection of a second engine to
   ISS-26's leases, and the locked guide builds none. No events feed (ISS-46) and no provider request id
   (ISS-48); their seams are kept. Source: the guide and D64.

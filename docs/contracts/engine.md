@@ -114,7 +114,7 @@ names the runner `app`; `capability` and `model` are labels only.
 ## Jobs and attempts
 
 `JobRequest`: `app`, `path`, `method`, `payload`, `operation_ref`, `mode`, `max_attempts`,
-`timeout_s` (the whole job), `first_byte_timeout_s` and `idle_timeout_s` (streams only, 60 s each; see
+`timeout_s` (the whole job, one deadline for all its attempts: [behavior](#behavior-the-contract-fixes), 6), `first_byte_timeout_s` and `idle_timeout_s` (streams only, 60 s each; see
 [Streaming](#deadlines-d35)), plus the labels `capability` and `model`. The SDK transport sends a
 missing `payload` as the JSON object `{}` (D41).
 
@@ -297,6 +297,16 @@ before this, or from a transport that doesn't measure. Each call also logs them 
    actor with no allocation fails with `not_provisioned`.
 5. **A cost that hasn't arrived is `pending`.** So is a job still running, which may yet pay. Only a job
    that ended without reaching payment has cost status `none`.
+6. **`timeout_s` is the whole job, and one deadline.** It counts from the job's start, once for all its
+   attempts: from the call to `jobs.run` for an immediate job, and from the claim for an async job,
+   which has not started while it is queued ([async jobs](#running)). Each attempt is called with the
+   time that is left as its `timeout_s`, so a job that fails over is not given `timeout_s` again for
+   every runner it tries. When the time is up before a further attempt, no runner is called or paid
+   again: the job ends `failed`, `timeout`, and `failure.payment_sent` says whether an earlier attempt
+   was paid. It is `failed`, not `uncertain`, because every attempt before it failed over, so none
+   left the work in doubt. What decides a failover is as in rule 1: a paid attempt that itself timed
+   out ends the job `uncertain` and is never failed over. A stream has one deadline too, counted from
+   the call to `jobs.streaming.stream` ([deadlines](#deadlines-d35)).
 
 ### Idempotency
 
@@ -376,8 +386,8 @@ the last kind alone.
 
 | `Failure.kind` | `reason` | Payment possible? | REST status | What it means · what to do |
 | --- | --- | --- | --- | --- |
-| `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings`; nothing ran, so the same `operation_ref` runs again |
-| `no_capacity` | | no | 503 + `Retry-After` | Every runner for the app advertises zero capacity, and the job would pay each of them. Nothing was tried and nothing was signed: an attempt on a full priced runner can cost a ticket, because livepeer/node before v1.0.7 asks for payment before it checks capacity (#114, C17; [discovery.md](discovery.md#advertised-capacity)). Retry after the header, with the same `operation_ref`. An unpaid job tries such runners anyway, since advertised capacity can lag, and fails `refused` if they all refuse. The engine's own admission limits are not this kind: a full engine or app raises `NoCapacity`, 503 + `Retry-After`, before any job is written |
+| `no_offering` | | no | 404 | No runner serves the app. Check the name against `GET /v1/offerings`; nothing ran, so the same `operation_ref` runs again. A queued async job is not failed because no runner is listed when a worker reaches it: it waits ([running](#running)) |
+| `no_capacity` | | no | 503 + `Retry-After` | Every runner for the app advertises zero capacity, and the job would pay each of them. Nothing was tried and nothing was signed: an attempt on a full priced runner can cost a ticket, because livepeer/node before v1.0.7 asks for payment before it checks capacity (#114, C17; [discovery.md](discovery.md#advertised-capacity)). Retry after the header, with the same `operation_ref`. An unpaid job tries such runners anyway, since advertised capacity can lag, and fails `refused` if they all refuse. The engine's own admission limits are not this kind: a full engine or app raises `NoCapacity`, 503 + `Retry-After`, before any job is written. A queued async job is not failed for this either: it waits, and `no_capacity` is how it ends when it was not dispatched within `LPB_ASYNC_QUEUE_TTL_S`, whatever it waited for ([running](#running)) |
 | `not_provisioned` | | no | 402 | The actor has no allocation. An operator allots one; retrying alone does not help. Then the same `operation_ref` runs again |
 | `refused`, `unreachable` (all runners) | | no | 503 + `Retry-After` | Every runner tried refused or could not be reached. Retry after the header. When every attempt was `refused`, nothing ran and the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first; after `unreachable` the request may have reached a free runner, so a repeat under the same reference is 409: read the job and send a new reference |
 | `payment` | `not_authorized` | no | **403**, no `Retry-After` | The signer refused the payer: Batteries answered 401 (invalid or revoked key) or 403 (grant or allocation inactive, paused included, or a session binding mismatch). The manifest is `unpaid`. An operator checks the actor's allocation and key; retrying before that does not help. Once it is fixed, the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
@@ -385,10 +395,10 @@ the last kind alone.
 | `payment` | `signer_unavailable` | no | 503 + `Retry-After: 10` | The signer could not be reached, or failed, before anything was signed: a refused connection or a DNS failure on any signer call (Q3), or a 5xx, a timeout or a dropped connection at `/sign-orchestrator-info`. A manifest already stored becomes `unpaid`. No other runner is tried, because they all share the signer. Retry after the header: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first. An operator checks the signer if it lasts |
 | `payment` | none | no | 503 + `Retry-After: 10` | Any other payment failure: the manifest could not be stored before signing (nothing was signed), every runner was `payment_refused` (a signer 400 or 481, a refresh past its budget, or a challenge whose manifest id the engine cannot record), the signer refused with another status, or its identity reply was malformed. Retry after the header: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): after failover, an earlier `unreachable` or unpaid `timeout` attempt makes a repeat 409, so read the job's `attempts` first |
 | `payment_unknown` | `signer_unknown` | maybe | 503, no `Retry-After` | The signer was asked and gave no validated answer while signing (a 5xx, a timeout, a dropped or malformed reply): it may have charged. The job is `uncertain` and the cost `pending` until usage settles it. Do not retry blindly: a repeat under the same `operation_ref` is 409, and a new one could pay twice |
-| `timeout` | | maybe → `uncertain` when paid, else `failed` | 504 | The runner did not answer in time; it may still have run the work. Read the job: when `uncertain`, wait for its cost before running it again. A repeat under the same `operation_ref` is 409, so a new attempt needs a new reference |
+| `timeout` | | maybe → `uncertain` when paid, else `failed` | 504 | The runner did not answer in time; it may still have run the work. Read the job: when `uncertain`, wait for its cost before running it again. A repeat under the same `operation_ref` is 409, so a new attempt needs a new reference. It is also the end, `failed`, of a job whose `timeout_s` was up before a further attempt after a failover: no runner was called then ([behavior](#behavior-the-contract-fixes), 6) |
 | `runner_rejected` (4xx) | | yes | the runner's own 4xx | The runner ran and refused the request; `failure.body` holds its words. Fix the request and send it with a new `operation_ref`. A paid attempt is `failed_after_payment`, never billable ([payments.md](payments.md#cost-classification)) |
 | `runner_error` (5xx) | | yes | 502 | The runner failed after it ran, or the engine did (`engine error: …`). Not run again automatically: try later with a new `operation_ref`. Every `runner_error` answers HTTP 502; the runner's own status is `failure.status_code`. A paid runner **500** ran and is `failed_after_payment`, never billable, and the job is `failed`. A paid runner **502 or 504** may still be running behind the orchestrator's proxy, so that attempt is `uncertain` until usage settles it (D52). Read `job.state`: when it is `uncertain`, wait for the cost before running it again |
-| `interrupted` (restart) | | maybe | 502 | The engine stopped while the job ran; the next start resolves it `uncertain` when anything may have paid, else `failed`. Read the job: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): no attempt, or every attempt refused before the app ran with nothing paid, as after a restart mid-failover. Otherwise treat it as `timeout` |
+| `interrupted` (restart) | | maybe | 502 | The engine stopped while the job ran; the next start resolves it `uncertain` when anything may have paid, else `failed`. Read the job: the same `operation_ref` runs again only if the job never reached a runner ([the closed list](#idempotency)): no attempt, or every attempt refused before the app ran with nothing paid, as after a restart mid-failover. Otherwise treat it as `timeout`. An async job the engine's stop found on its third claim, before its first attempt, ends so too, `failed` ([restart and stop](#restart-and-stop)) |
 | `abandoned` (the caller stopped reading a stream) | | maybe → `uncertain` when paid, else `failed` | n/a: the response had already started | The caller left the stream before its end ([how a stream ends](#how-a-stream-ends)); the bytes it did not read are gone. Read the job for the outcome and cost. To get the result, run it again with a new `operation_ref` |
 | `abandoned` (an async job cancelled while queued) | `cancelled` | no | 410 from `GET /v1/jobs/{id}/result` | Its owner cancelled it before a worker claimed it ([cancel](#cancel)): nothing ran, nothing was paid, and its cost is `none`. Submit it again to run it: the same `operation_ref` queues a new job, since it never reached a runner |
 | `result_not_stored` (async) | | yes | 502 | The runner answered an async job and was paid, and the answer was larger than `LPB_ASYNC_RESULT_MAX_BYTES`, so the engine kept none of it ([results](#results-of-an-async-job)). The job's `ResultRef` keeps the answer's size and `sha256`. The payment is `failed_after_payment`, never billable. Ask for a smaller answer (a runner's own option, a smaller output), or run it as an immediate job, whose answer is returned inline. A repeat under the same `operation_ref` answers with this job |
@@ -666,25 +676,51 @@ allocation revoked while the job waited fails it `not_provisioned`, and one that
 
 ### Running
 
-- **A slot, then a claim.** The worker takes an admission slot first (`LPB_MAX_CONCURRENT_JOBS` and
-  `LPB_MAX_CONCURRENT_JOBS_PER_APP`, shared with immediate jobs and streams), then claims the job with
-  one conditional write (`queued` to `running`). A claim that finds the job gone (a cancel, the queue's
-  time limit) gives the slot back. No async job runs outside the admission limits, and at most
-  `LPB_ASYNC_WORKERS` of them run at once. A claimed job is started even when the worker's step fails
-  after its claim (a later claim that the database refuses, for example): the step is logged and tried
-  again, and no job is left `running` with nobody running it.
-- **Oldest first**, leaving out a runner app at its per-app limit, so one busy runner app does not hold
-  up the others.
+- **One gate, then a claim.** Before it claims a job the worker takes, in one step that nothing can
+  come between, a worker (`LPB_ASYNC_WORKERS`), an admission slot (`LPB_MAX_CONCURRENT_JOBS` and
+  `LPB_MAX_CONCURRENT_JOBS_PER_APP`, shared with immediate jobs and streams) and the job itself. Then
+  it claims the job with one conditional write (`queued` to `running`). A claim that finds the job
+  gone (a cancel, the queue's time limit) gives all three back. So no async job runs outside the
+  admission limits, at most `LPB_ASYNC_WORKERS` of them run at once, and no two steps of the worker
+  go for the same job, also when the queue is driven by hand (`run_once()`) beside the worker's own
+  loop. A job keeps what it took until its end is written.
+- **Every write after the claim checks the claim.** A claim has a number, the job's count of claims
+  once it is made. The first attempt, a return to the queue and the end of the job are each written
+  only while the job is `running` under that number. A worker that no longer holds the job, because it
+  was put back and claimed again or ended by another writer, writes nothing more for it, calls and
+  pays no runner if it had not yet, and does not end it (`jobs.async_claim_lost` in the log).
+- **Oldest first**, leaving out a runner app at its per-app limit and one that no runner can take
+  now, so one busy or absent runner app does not hold up the others.
+- **A job waits through what may pass.** A queued job is not failed because, when a worker reaches
+  it, no runner is listed for its app (after a restart whose first discovery read failed, for
+  example), every runner an attempt would pay advertises no room, or the actor's credential could not
+  be read (any error but "no allocation"). An app that nobody can run now is left in the queue
+  unclaimed. A job claimed before that was known is given back with nothing attempted, and its claim
+  does not count toward [the three](#restart-and-stop); it is not claimed again before
+  `LPB_ASYNC_POLL_S` has passed, and each time it is given back again it waits twice as long, up to
+  32 poll intervals. What is an answer still fails the job at once, unpaid: an actor with no
+  allocation (`not_provisioned`), a payment the signer refused (`payment`), and a `SelectionPolicy`
+  that selects no runner (`no_offering`).
+- **The queue's time limit.** A job still `queued` `LPB_ASYNC_QUEUE_TTL_S` after it was submitted ends
+  `failed`, `no_capacity`, with no attempt: nothing was paid, and its cost is `none`. That is the end
+  of a job that waited for a worker and of one that waited for a runner or a credential alike.
 - **When.** A submit wakes the worker at once, and so does the end of a job of its own: a woken worker
   looks at the queue once, whatever it last counted. While jobs wait it also looks every
   `LPB_ASYNC_POLL_S`. An engine nobody submits to makes no query for the queue. The worker's count of
   the queue is a memory, and the queue is in the database: a count that was being read while a job was
   queued never takes that job back out of what the worker knows, so `queued_jobs` does not say the
-  queue is empty with a job in it.
-- **`timeout_s` counts from the claim**, which `Job.started_at` records. `started_at` is `null` while
-  the job is queued, and for an immediate job, which starts when it is created.
-- **The queue's time limit.** A job still `queued` `LPB_ASYNC_QUEUE_TTL_S` after it was submitted ends
-  `failed`, `no_capacity`, with no attempt: nothing was paid, and its cost is `none`.
+  queue is empty with a job in it. A step that fails (the database is away, a claim raises) is logged
+  (`jobs.async_step_failed`) and tried again after `LPB_ASYNC_POLL_S`, not sooner, whatever wakes the
+  worker meanwhile. A job whose claim raises is set aside as one given back is, and the jobs behind it
+  are claimed in the same step. A job claimed before the step failed is started all the same: no job
+  is left `running` with nobody running it.
+- **`timeout_s` counts from the claim**, which `Job.started_at` records, once for all the job's
+  attempts ([behavior](#behavior-the-contract-fixes), 6). `started_at` is `null` while the job is
+  queued, and for an immediate job, which starts when it is created. The time a job waits in the queue
+  is not part of it. The worker also stops a paid call that runs 5 seconds past the job's deadline,
+  which a transport that keeps to `timeout_s` never does: the job then ends as one the engine stopped,
+  `runner_error` ("engine error: TimeoutError"), `uncertain` when it may have paid, and its worker
+  and slot are free again.
 - **A client that goes away changes nothing.** The job belongs to the worker, not to the request that
   submitted it. That holds from the moment the job is stored: a request cancelled just after that
   write still wakes the worker, in a task the caller's cancellation cannot stop.
@@ -720,7 +756,23 @@ and `sha256` with no `location`. The attempt keeps outcome `succeeded` and its p
 is `failed_after_payment`, never billable: the cost follows the job (D69 (4)). The same holds when the
 transaction that ends the job fails: no bytes are stored, and the job ends as an immediate job that
 lost its end does, `runner_error` and `uncertain` when it was paid. It is never `succeeded` without its
-bytes.
+bytes. And the same holds when the engine stops between the runner's answer and that transaction: the
+next start ends the job `interrupted`.
+
+**The cost rule.** An async job's owner reads the answer from where the engine stored it. So a
+`succeeded` attempt of an async job is `delivered` only when the job itself ended `succeeded`. On a
+job that ended any other way it is `failed_after_payment`, in each of the three cases above: the
+runner answered and was paid, so nothing about the charge is in doubt, and nobody can read the answer
+([payments.md](payments.md#cost-classification)). An immediate job's answer went to the caller that
+waited for it, and its cost is as before.
+
+**A job's end that could not be written.** The end of a claimed job is the worker's to write. When the
+store refuses it (the database is away as the job finishes), the worker keeps the job, with its worker
+and its slot, and writes the end again at its next steps, every `LPB_ASYNC_POLL_S`, until it is
+written (`jobs.async_end_failed` in the log each time it is not). No restart is needed, and the job
+is not left `running` once the store answers again. The worker keeps the job and its attempts for
+this, at most `LPB_ASYNC_WORKERS` of them, and never the runner's answer: an answer whose storing
+transaction failed is dropped, and the job ends `uncertain`, `runner_error`, as said above.
 
 **What the worker holds of an answer.** `LPB_ASYNC_RESULT_MAX_BYTES` also bounds the memory an async
 job's answer takes. The worker hands the limit to a transport that is a `BoundedRunnerTransport`
@@ -773,17 +825,22 @@ other is answered with it.
 | `running`, **no attempt** | Back to `queued` while it was claimed fewer than 3 times; then `failed`, `interrupted` | The attempt row is written before any runner call, so nothing went out. The claim count stops a job that brings the engine down before its first attempt from being claimed for ever |
 | `running`, with an attempt | `uncertain` or `failed`, as for any job ([behavior](#behavior-the-contract-fixes), 3) | It may have run or paid. The engine never runs it again (no replacement execution) |
 
-`engine.stop()` stops claiming, lets running async jobs end for up to `LPB_ASYNC_DRAIN_TIMEOUT_S`, then
-cancels the rest: one stopped before its first attempt goes back to the queue, and any other ends as a
-cancelled immediate job does, `uncertain` when it may have paid. `stop()` returns once every end is
-written.
+`engine.stop()` first closes the worker's gate, before it waits for anything: from that call on no job
+is claimed, also not by a step that is half way through a page of the queue, and not while open
+streams are given their time to end. A submit is still accepted, and its job waits for the next start.
+Then it lets running async jobs end for up to `LPB_ASYNC_DRAIN_TIMEOUT_S` and cancels the rest: one
+stopped before its first attempt goes back to the queue, or, on its third claim, ends `failed`,
+`interrupted`, as the next start would end it; any other ends as a cancelled immediate job does,
+`uncertain` when it may have paid. `stop()` returns once every write of an end has ended, also one
+whose task was cancelled while it wrote.
 
 A claim is committed before the worker has its answer. A step that is cancelled in between, or whose
-claim fails after its commit, does not leave the job `running` with nobody running it: nothing went out
-for it, so it is resolved at once as a job stopped before its first attempt is, back to `queued` while it
-was claimed fewer than 3 times, then `failed`. The worker is woken, so a job put back is looked at
-again at once. If that write fails too it is logged (`jobs.async_unclaim_failed`), and the next start
-resolves the job as the table says.
+claim fails after its commit, does not leave the job `running` with nobody running it: the job was the
+step's from before its claim, so no other step touches it, and nothing went out for it. It is
+resolved at once as a job stopped before its first attempt is, back to `queued` while it was claimed
+fewer than 3 times, then `failed`, `interrupted`. The worker is woken, so a job put back is looked at
+again. If that write fails too, the worker keeps the job and resolves it at a later step, as it does
+[an end it could not write](#results-of-an-async-job).
 
 ### Polling
 
@@ -812,8 +869,10 @@ sessions are distinct from continuous media streaming, which is stretch scope. T
 These are the explicit decisions for ISS-02.
 
 - **No HA.** One engine process per database. Neither SQLite nor PostgreSQL implies multi-instance
-  scheduling. The async worker runs in that one process: a job's claim is a compare-and-set, but there
-  is no lease, so a second engine on the same database is not detected (tech debt T44).
+  scheduling. The async worker runs in that one process: a job's claim is a compare-and-set and every
+  later write checks the claim's number, so a worker that lost a job writes nothing more for it, but
+  there is no lease, so a second engine on the same database is not detected, and its start ends or
+  requeues the jobs the first one is running (tech debt T44).
 - **No exactly-once.** At most one job per `operation_ref` reaches a runner (a job that never did may
   be dispatched again, see [idempotency](#idempotency)). Paid-but-unknown is `uncertain`;
   the engine never retries it automatically.

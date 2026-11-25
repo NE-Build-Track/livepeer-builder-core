@@ -303,10 +303,19 @@ before this, or from a transport that doesn't measure. Each call also logs them 
    time that is left as its `timeout_s`, so a job that fails over is not given `timeout_s` again for
    every runner it tries. When the time is up before a further attempt, no runner is called or paid
    again: the job ends `failed`, `timeout`, and `failure.payment_sent` says whether an earlier attempt
-   was paid. It is `failed`, not `uncertain`, because every attempt before it failed over, so none
-   left the work in doubt. What decides a failover is as in rule 1: a paid attempt that itself timed
-   out ends the job `uncertain` and is never failed over. A stream has one deadline too, counted from
-   the call to `jobs.streaming.stream` ([deadlines](#deadlines-d35)).
+   was paid. It is `failed`, not `uncertain`, because every attempt that was called failed over, so
+   none left the work in doubt. What decides a failover is as in rule 1: a paid attempt that itself
+   timed out ends the job `uncertain` and is never failed over. A stream has one deadline too, counted
+   from the call to `jobs.streaming.stream` ([deadlines](#deadlines-d35)).
+
+   The time left is measured twice for each attempt: before the attempt's row is written (rule 3), so
+   that no row is written for a call that will not be made, and again once it is written, because the
+   write takes time and a transport counts its timeout from the call. When the write used up what was
+   left, the runner is not called, so no call begins after the deadline. The row that was written is
+   then ended `refused`, with `payment_sent` false and no status code, session or timings: the engine
+   refused the call itself, and what `refused` tells a reader holds, which is that nothing ran,
+   nothing was paid and the same `operation_ref` may run again ([the closed list](#idempotency)). The
+   job's failure says what happened: `timeout`, "timeout_s ran out before a runner was called".
 
 ### Idempotency
 
@@ -695,14 +704,31 @@ allocation revoked while the job waited fails it `not_provisioned`, and one that
   now, so one busy or absent runner app does not hold up the others.
 - **A job waits through what may pass.** A queued job is not failed because, when a worker reaches
   it, no runner is listed for its app (after a restart whose first discovery read failed, for
-  example), every runner an attempt would pay advertises no room, or the actor's credential could not
-  be read (any error but "no allocation"). An app that nobody can run now is left in the queue
-  unclaimed. A job claimed before that was known is given back with nothing attempted, and its claim
-  does not count toward [the three](#restart-and-stop), though its number is spent; it is not claimed again before
-  `LPB_ASYNC_POLL_S` has passed, and each time it is given back again it waits twice as long, up to
-  32 poll intervals. What is an answer still fails the job at once, unpaid: an actor with no
-  allocation (`not_provisioned`), a payment the signer refused (`payment`), and a `SelectionPolicy`
-  that selects no runner (`no_offering`).
+  example), every runner it would pay advertises no room, or the actor's credential could not be read
+  (any error but "no allocation"). It is given back with nothing attempted, and its claim does not
+  count toward [the three](#restart-and-stop), though its number is spent; it is not claimed again
+  before `LPB_ASYNC_POLL_S` has passed, and each time it is given back again it waits twice as long,
+  up to 32 poll intervals.
+- **What a queued job is asked, in order.** First its actor: an actor with no allocation fails the
+  job `not_provisioned`, unpaid, whatever the runners say, so an allocation revoked after the submit
+  ends the job also while its app has no runner. A credential that cannot be read makes the job wait.
+  Then its runners: none listed makes it wait. Then, only for a job that pays (its credential has a
+  key, and the transport pays), every priced runner advertising no room makes it wait. A job that does
+  not pay goes on to its runners, full or not, as an immediate job does: its refusal costs nothing,
+  and advertised capacity is a hint ([behavior](#behavior-the-contract-fixes), 1). A payment the
+  signer refused (`payment`) and a `SelectionPolicy` that selects no runner (`no_offering`) fail the
+  job, unpaid, as they fail any job. An immediate job and a stream are asked as before: runners
+  first, so `no_offering` comes before `not_provisioned`, and nothing makes them wait.
+- **An app nobody can run now is set aside, and still looked at.** An app with no runner listed, or
+  whose priced runners are all full where the transport pays, is left out of a step as an app at its
+  limit is, but not before one of its due jobs is claimed, at most once in `LPB_ASYNC_POLL_S` for each
+  such app, however often the worker is woken. That claim is how the questions above reach the job: a
+  revoked actor's job fails, a job that does not pay runs, and a job that has to wait is given back
+  and left alone for longer each time, so the next look takes the job behind it and every waiting job
+  is looked at in turn. A queue of waiting jobs therefore costs one claim and one return an app in a
+  poll interval, whatever its length. When the job that was looked at did not have to wait, the next
+  job of its app is looked at at once. The look takes a worker for the moment of the claim and its
+  return: with one worker, another app's job behind it is claimed in the step that follows at once.
 - **The queue's time limit.** A job still `queued` `LPB_ASYNC_QUEUE_TTL_S` after it was submitted ends
   `failed`, `no_capacity`, with no attempt: nothing was paid, and its cost is `none`. That is the end
   of a job that waited for a worker and of one that waited for a runner or a credential alike.
@@ -849,8 +875,11 @@ accepted, and its job waits for the next start.
 Then it lets running async jobs end for up to `LPB_ASYNC_DRAIN_TIMEOUT_S` and cancels the rest: one
 stopped before its first attempt goes back to the queue, or, on the third claim that counts, ends `failed`,
 `interrupted`, as the next start would end it; any other ends as a cancelled immediate job does,
-`uncertain` when it may have paid. `stop()` returns once every write of an end has ended, also one
-whose task was cancelled while it wrote.
+`uncertain` when it may have paid. A step of the worker that is under way gets the same time and is
+then cancelled, the worker's own and one a caller drives with `run_once()` alike: what it claimed goes
+back to the queue, a claim it was writing is resolved as below, and its `run_once()` answers 0, without
+cancelling its caller. `stop()` returns once no step is under way and every write of an end has ended,
+also one whose task was cancelled while it wrote, so nothing of the worker writes to the store after it.
 
 A claim is committed before the worker has its answer. A step that is cancelled in between, or whose
 claim fails after its commit, does not leave the job `running` with nobody running it: the job was the

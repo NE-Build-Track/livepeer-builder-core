@@ -84,6 +84,10 @@ request id is ISS-48's.
   neighbouring guides say what is built. Tests: `tests/store/test_async_migration.py`,
   `tests/store/test_claim_fence.py`, `test_async_results.py`, `test_async_http.py`,
   `test_fake_engine_async.py`.
+- [x] **25 November 2026, review of 19986ef.** No runner call begins after a job's deadline, also when
+  the attempt's own write used up the time; the drain stops a hand-driven step that outlasts it; a
+  queued job is asked about its actor first, and an app that waits is looked at once a poll interval;
+  results that have their time are purged with no retention setting on.
 - [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log
@@ -151,6 +155,28 @@ request id is ISS-48's.
   with `body` as the answer; a scripted `health` wins over the fake's own count of the queue; a
   stored result expires 7 days after its job ended. Source: the decision and the reviews, applied;
   for Mike's review.
+- **25 November 2026, from the review of 19986ef.** Five points, each with a test that failed first.
+  (1) The time a job has left is measured again once an attempt's row is written, and with none left
+  the runner is not called: the row is ended `refused`, unpaid, with no status code, because that is
+  the outcome whose every consequence is true of a call the engine itself did not make (nothing ran,
+  nothing paid, the reference may run again), where `timeout` would say a runner was asked and may
+  have run. (2) Each step of the worker runs in a task of the worker's own, so `drain()` cancels and
+  awaits a step driven with `run_once()` that outlasts it, as it does the loop's; what the step
+  claimed goes back to the queue, and its caller is answered 0, not cancelled. (3) and (5) A queued
+  job is asked about its actor before its runners, so a revoked allocation fails it `not_provisioned`
+  whatever the runners say, and a job that does not pay goes on to runners that advertise no room. An
+  app nobody can run now is still set aside for a step, after one of its due jobs was claimed as a
+  look, at most once a poll interval for each app, so a waiting queue costs one claim an app in an
+  interval and every waiting job is looked at in turn. An immediate job and a stream are asked in the
+  order they always were. (4) The retention loop runs in every engine that runs jobs, so a result
+  that already has an `expires_at` is deleted when it is due with no retention setting on; the first
+  purge still waits one interval unless job or usage retention is on. Where the review is silent,
+  for Mike's review: the `refused` record of (1); when a job that was looked at did not have to wait
+  (it ran, or it failed with an answer), the next job of its app is looked at at once, not a poll
+  interval on, so jobs that can run are not held to one an interval; with one worker the look takes
+  that worker for a moment, and another app's job is claimed in the step that follows. Who could run
+  a job moved to `services/job_runners.py` to keep `services/dispatch.py` under its size limit.
+  Source: the review, applied.
 - **19 November 2026, not built.** No worker lease (T44): #112 left the detection of a second engine to
   ISS-26's leases, and the locked guide builds none. No events feed (ISS-46) and no provider request id
   (ISS-48); their seams are kept. Source: the guide and D64.

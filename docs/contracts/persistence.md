@@ -156,12 +156,14 @@ Neither setting deletes from `lpb_operations` (the operation ledger) or from `lp
 the record of usage rows cost sync left out (#114, C13; migration 0012;
 [payments.md](payments.md#cost-classification)): each row there is an id, a reason and two fees.
 
-The purge runs every `LPB_RETENTION_INTERVAL_S` (default 21600 s, 6 h) when a retention setting is on,
-or on demand with `lpb purge` (it prints a `PurgeReport`: `jobs_deleted`, `usage_rows_deleted` and,
-since ISS-26, `results_deleted`). With job or usage retention on, the first purge runs at start. With
-results retention alone, the default, it runs one interval after start, so an engine with the
-default settings writes nothing at start beside its caller's own first writes; an expired result is
-never served meanwhile. Every purge deletes the results whose time has passed: a result keeps the
+The purge runs every `LPB_RETENTION_INTERVAL_S` (default 21600 s, 6 h) in every engine that runs jobs,
+whether or not a retention setting is on, or on demand with `lpb purge` (it prints a `PurgeReport`: `jobs_deleted`, `usage_rows_deleted` and,
+since ISS-26, `results_deleted`). With job or usage retention on, the first purge runs at start.
+Otherwise (results retention alone, the default, or no retention setting at all) it runs one interval
+after start, so an engine with the default settings writes nothing at start beside its caller's own
+first writes; an expired result is never served meanwhile. With no setting on, a purge deletes only
+the results whose time has passed: a result stored while `LPB_RETENTION_RESULTS_DAYS` was set keeps
+its `expires_at` after the setting is turned off, and is deleted when that time comes. Every purge deletes the results whose time has passed: a result keeps the
 `expires_at` it was given when its job ended, whatever the setting is now, and `lpb purge` deletes
 them whatever the settings. It runs through the store's `maintenance`
 capability, which `SqlStore` provides; a store without one purges nothing. Batteries stays the

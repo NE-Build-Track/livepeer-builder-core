@@ -31,7 +31,9 @@ _PAID_FAILOVER_OUTCOMES: frozenset[AttemptOutcome] = frozenset({"refused", "paym
 NOT_RUN_STATUSES = frozenset({404, 409})
 # 502 and 504: the proxy lost the runner, so the work may have run. A 500 ran and failed.
 MAY_HAVE_RUN_STATUSES = frozenset({502, 504})
-# An async job claimed this often with no attempt ever written is not claimed again (D69 (2)).
+# An async job claimed this often with no attempt ever written is not claimed again (D69 (2)). The
+# claims counted are the ones that were not given back by a job that only had to wait (the store's
+# ``requeue_unstarted``): a claim given back keeps its number and uses up none of these.
 MAX_CLAIMS = 3
 
 
@@ -73,8 +75,8 @@ async def recover_interrupted(store: JobRepo, clock: Clock) -> int:
 
     An async job a worker claimed and wrote no attempt for is the exception (D69 (2), ISS-26): the
     attempt row is written before any runner call, so nothing went out, and it goes back to the queue.
-    ``MAX_CLAIMS`` claims in all, so a job that brings the engine down before its first attempt is not
-    claimed for ever: after the last it is resolved like any other. A job with an attempt is never run
+    ``MAX_CLAIMS`` claims that count, so a job that brings the engine down before its first attempt is
+    not claimed for ever: after the last it is resolved like any other. A job with an attempt is never run
     again by the engine. Returns the jobs resolved, not the ones put back."""
     recovered = requeued = 0
     for job in await store.jobs_in_state("running"):

@@ -144,7 +144,7 @@ async def stored(engine: AsyncEngine, old_names: bool) -> dict[str, list[dict[st
 # (ISS-26).
 ADDED_AT_HEAD: dict[str, dict[str, Any]] = {
     "lpb_actors": {"credential_custody": "secret_store"},
-    "lpb_jobs": {"started_at": None, "claims": 0},
+    "lpb_jobs": {"started_at": None, "claims": 0, "claims_given_back": 0},
 }
 
 

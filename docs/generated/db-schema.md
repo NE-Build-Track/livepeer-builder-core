@@ -105,6 +105,7 @@ erDiagram
         string superseded_by
         datetime started_at
         integer claims
+        integer claims_given_back
     }
     lpb_operations {
         string tenant_id PK
@@ -298,6 +299,7 @@ Indexes:
 | `superseded_by` | VARCHAR(36) | yes |  |
 | `started_at` | DATETIME | yes |  |
 | `claims` | INTEGER | no |  |
+| `claims_given_back` | INTEGER | no |  |
 
 Indexes:
 

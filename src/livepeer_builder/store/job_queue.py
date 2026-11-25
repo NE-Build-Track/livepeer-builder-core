@@ -12,7 +12,9 @@ feed is built (ISS-46).
 A claim has a number, the row's ``claims`` once it is made, and ``claim_job`` answers with it. A write
 that names a claim applies only while the job is ``running`` under that number (``held``): a worker
 whose claim was taken from it, because the job was put back and claimed again or ended by another
-writer, changes nothing and is told so.
+writer, changes nothing and is told so. A number is issued once: ``claims`` only ever grows. A claim
+given back by a job that only has to wait is counted in ``claims_given_back``, and the claims a job
+may use before its first attempt (``max_claims``) are the ones that were not given back.
 
 Neither the stored request nor the stored result is encrypted here: the database is the operator's to
 protect (docs/contracts/persistence.md).
@@ -147,10 +149,11 @@ class SqlJobQueue:
         kept = exists().where(t.job_requests.c.job_id == t.jobs.c.id)
         unstarted = and_(held(job_id, claim), ~attempted, kept)
         back: dict[str, Any] = {"state": QUEUED, "started_at": None}
+        given_back = t.jobs.c.claims_given_back
         if counted:
-            unstarted = and_(unstarted, t.jobs.c.claims < max_claims)
-        else:  # the claim is given back: it never counts against ``max_claims``
-            back["claims"] = t.jobs.c.claims - 1
+            unstarted = and_(unstarted, t.jobs.c.claims - given_back < max_claims)
+        else:  # the claim is given back: it never counts against ``max_claims``, and its number is spent
+            back["claims_given_back"] = given_back + 1
         async with self.engine.begin() as conn:
             moved = await conn.execute(update(t.jobs).where(unstarted).values(back))
         return moved.rowcount == 1

@@ -24,7 +24,7 @@ from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, M
 from livepeer_builder.errors import NotProvisioned
 from livepeer_builder.services.async_held import Waiting
 from livepeer_builder.testing import FixedClock, ScriptedStreamTransport, ScriptedTransport
-from tests.store.test_async_restart import claims
+from tests.store.test_async_restart import claims, given_back
 from tests.unit.discovery_wire import ALICE, wire_engine
 from tests.unit.test_job_deadline import LoopTime, loop_time  # noqa: F401 - loop_time: a fixture
 from tests.unit.test_zero_capacity import APP, OPERATOR, PRICED, answer, full_and_priced, runner_record
@@ -194,15 +194,19 @@ async def test_a_job_whose_credential_cannot_be_read_is_given_back_and_its_claim
         assert await engine.jobs.worker.run_once() == 1  # claimed, and given back
         waiting = await engine.jobs.get(ALICE, job.id)
         assert (waiting.state, waiting.failure, waiting.attempts) == ("queued", None, ())
-        assert (waiting.started_at, await claims(engine, job.id)) == (None, 0)
+        assert waiting.started_at is None
+        assert (await claims(engine, job.id), await given_back(engine, job.id)) == (1, 1)
         await step_until(engine, lambda: credentials.asked >= 5, "the job was given back five times")
         assert (await engine.jobs.get(ALICE, job.id)).state == "queued"
-        assert (await claims(engine, job.id), engine.admission.running) == (0, 0)
+        waited = await given_back(engine, job.id)
+        assert waited >= 5 and await claims(engine, job.id) == waited  # every claim given back: none counted
+        assert engine.admission.running == 0
 
         credentials.away = False
         await step_until(engine, lambda: bool(transport.calls), "the job ran")
         assert (await engine.jobs.get(ALICE, job.id)).state == "succeeded"
-        assert await claims(engine, job.id) == 1
+        # the claim it ran under is the one claim that counts, and its number is past every one given back
+        assert await claims(engine, job.id) == await given_back(engine, job.id) + 1 > waited
 
 
 async def test_a_job_given_back_is_not_claimed_again_before_the_poll_interval() -> None:
@@ -220,7 +224,8 @@ async def test_a_job_given_back_is_not_claimed_again_before_the_poll_interval() 
 
         assert credentials.asked == 1
         assert (await engine.jobs.get(ALICE, job.id)).state == "queued"
-        assert (await claims(engine, job.id), engine.admission.running) == (0, 0)
+        assert (await claims(engine, job.id), await given_back(engine, job.id)) == (1, 1)
+        assert engine.admission.running == 0
 
 
 async def test_an_actor_with_no_allocation_still_fails_the_job_at_once() -> None:
@@ -257,7 +262,8 @@ async def test_a_runner_that_went_away_after_the_claim_gives_the_job_back() -> N
 
         waiting = await engine.jobs.get(ALICE, job.id)
         assert (waiting.state, waiting.failure, waiting.attempts) == ("queued", None, ())
-        assert (await claims(engine, job.id), engine.admission.running, transport.calls) == (0, 0, [])
+        assert (await claims(engine, job.id), await given_back(engine, job.id)) == (1, 1)
+        assert (engine.admission.running, transport.calls) == (0, [])
 
 
 async def test_a_job_given_back_under_a_claim_it_lost_is_left_to_whoever_holds_it() -> None:

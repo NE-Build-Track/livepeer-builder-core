@@ -89,7 +89,10 @@ jobs = Table(
     Column("superseded_by", String(36), nullable=True),  # the job that retried this one
     # 0016 (ISS-26): an async job's claim by a worker
     Column("started_at", UTCDateTime, nullable=True),  # when it was claimed; None while it is queued
-    Column("claims", Integer, nullable=False, server_default=text("0")),  # times a worker claimed it
+    # Times a worker claimed it, which is also the number of its latest claim: it only ever grows.
+    Column("claims", Integer, nullable=False, server_default=text("0")),
+    # How many of those claims were given back by a job that only had to wait: not counted toward the three
+    Column("claims_given_back", Integer, nullable=False, server_default=text("0")),
 )
 Index(  # the job holding a reference is the one not superseded; superseded ones keep theirs for history
     "lpb_jobs_operation_ref",

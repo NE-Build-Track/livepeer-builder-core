@@ -86,8 +86,16 @@ async def until(condition: Callable[[], Any], what: str) -> None:
 
 
 async def claims(engine: BuilderEngine, job_id: object) -> int:
+    """How often the job was claimed, which is also the number of its latest claim."""
     async with engine.store.engine.connect() as conn:  # type: ignore[attr-defined]
         found = await conn.execute(select(t.jobs.c.claims).where(t.jobs.c.id == str(job_id)))
+        return int(found.scalar_one())
+
+
+async def given_back(engine: BuilderEngine, job_id: object) -> int:
+    """How many of those claims a job that only had to wait gave back: they use up none of its three."""
+    async with engine.store.engine.connect() as conn:  # type: ignore[attr-defined]
+        found = await conn.execute(select(t.jobs.c.claims_given_back).where(t.jobs.c.id == str(job_id)))
         return int(found.scalar_one())
 
 

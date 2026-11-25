@@ -178,19 +178,23 @@ class JobRepo(Protocol):
 
         The number is what the worker's later writes for the job carry (``claim=``): ``start_attempt``,
         ``requeue_unstarted``, ``finish_job`` and ``finish_job_with_result`` each apply only while the
-        job is ``running`` with that count of claims, so a worker that lost the job writes nothing."""
+        job is ``running`` with that count of claims, so a worker that lost the job writes nothing.
+        A number is issued once: the count of claims only ever grows, whatever became of a claim, so
+        each claim's number is higher than every earlier one of its job."""
         ...
 
     async def requeue_unstarted(
         self, job_id: UUID, max_claims: int, *, claim: int | None = None, counted: bool = True
     ) -> bool:
         """Put a ``running`` job back in the queue when nothing went out for it: it has no attempt row,
-        its request is still stored, and it was claimed fewer than ``max_claims`` times. One statement.
+        its request is still stored, and fewer than ``max_claims`` of its claims count. One statement.
         With ``claim``, only while that claim holds the job.
 
-        ``counted=False`` gives the claim back: the job's count of claims goes down by one and
-        ``max_claims`` is not looked at. It is for a job that could not be dispatched for a reason that
-        passes (no runner listed, none with room), which may wait as often as it takes."""
+        ``counted=False`` gives the claim back: it is counted apart, as a claim that does not count
+        toward ``max_claims``, and ``max_claims`` is not looked at. The job's count of claims stays as it
+        is, so the claim's number is never issued again. It is for a job that could not be dispatched
+        for a reason that passes (no runner listed, none with room), which may wait as often as it
+        takes. The claims that count are the ones that were not given back."""
         ...
 
     async def cancel_queued(self, job_id: UUID, failure: Failure, completed_at: datetime) -> bool:

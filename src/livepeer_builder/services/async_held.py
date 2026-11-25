@@ -54,6 +54,7 @@ class End:
     cause: str  # the name of what stopped it, for the failure's message
     back: bool = False  # it goes back to the queue if nothing went out for it
     counted: bool = True  # going back uses up one of its claims (not for a job that only has to wait)
+    # Counted or not, the claim's number is spent: the store never issues it again.
     reason: str = ""  # why it has to wait, for the log
 
 
@@ -144,7 +145,7 @@ class Ends:
         await self._dispatcher.close(job, held.attempts, state, failure, claim=held.claim)
 
     async def _back(self, job: Job, held: Held, end: End) -> bool:
-        """Put the job back in the queue. ``False`` when it was claimed ``MAX_CLAIMS`` times."""
+        """Put the job back in the queue. ``False`` when ``MAX_CLAIMS`` of its claims have counted."""
         if await self._store.requeue_unstarted(job.id, MAX_CLAIMS, claim=held.claim, counted=end.counted):
             _LOG.info(
                 "async job put back in the queue",

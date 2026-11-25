@@ -20,7 +20,7 @@ the same paid call an immediate job runs (``services/dispatch.py``), in the engi
 - **One deadline.** ``timeout_s`` counts from the claim, once for all of the job's attempts.
 - **Nothing is run twice.** A job that was claimed is never dispatched again by the engine, with one
   exception: one that was stopped before its first attempt was written goes back to the queue, at most
-  ``MAX_CLAIMS`` claims in all (``services/failover.py`` at start, ``Ends`` here).
+  ``MAX_CLAIMS`` claims that count (``services/failover.py`` at start, ``Ends`` here).
 - **The end is the worker's to write.** One the store refused is kept, with the job's slot, and written
   by a later step: no job this worker claimed stays ``running`` once the store answers again.
 

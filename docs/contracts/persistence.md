@@ -26,15 +26,19 @@ implements it with SQLAlchemy Core (async) for **SQLite (default)** and **Postgr
   engine once and kept none, and the reference is a receipt that no store resolves. The column is never
   derived from the reference's text ([payments.md](payments.md#payment-keys)).
 - **An async job's request and result** (ISS-26, migration 0016). `lpb_jobs` is the queue: an async
-  job waits there `queued`, and `started_at` and `claims` record a worker's claim. `claims` after a
-  claim is that claim's number: `claim_job` answers with it, and the writes the worker makes for the
-  job afterwards (`start_attempt`, `requeue_unstarted`, `finish_job`, `finish_job_with_result`, each
-  with `claim=`) apply only while the job is `running` with that count, in the same statement or
-  transaction. A worker that lost the job to a requeue or to another writer's end therefore writes
-  nothing, and is told so. A claim given back for a job that only has to wait
-  (`requeue_unstarted(..., counted=False)`) takes one off `claims` again, so waiting never uses up the
-  three claims a job has ([engine.md](engine.md#running)). A write that names no claim, an immediate
-  job's or a stream's, is guarded by the job's state alone, as before. `lpb_job_requests`
+  job waits there `queued`, and `started_at`, `claims` and `claims_given_back` record a worker's
+  claim. `claims` after a claim is that claim's number: `claim_job` answers with it, and the writes
+  the worker makes for the job afterwards (`start_attempt`, `requeue_unstarted`, `finish_job`,
+  `finish_job_with_result`, each with `claim=`) apply only while the job is `running` with that
+  count, in the same statement or transaction. A worker that lost the job to a requeue or to another
+  writer's end therefore writes nothing, and is told so. **`claims` only ever grows, so a claim's
+  number is issued once**: no later claim of the job has the number of an earlier one, whatever
+  became of that one. A claim given back for a job that only has to wait
+  (`requeue_unstarted(..., counted=False)`) adds one to `claims_given_back` and leaves `claims` as
+  it is. The three claims a job has are the ones that were not given back
+  (`claims - claims_given_back`), so waiting never uses them up ([engine.md](engine.md#running)). A
+  write that names no claim, an immediate job's or a stream's, is guarded by the job's state alone,
+  as before. `lpb_job_requests`
   holds what a queued job will run with: its request (a raw body as its bytes) and the actor it was
   authorized for (id, tenant, permissions, credential kind and attributes; never the credential's
   provenance or a display name). The transaction that ends the job deletes the row. `lpb_job_results`
@@ -112,13 +116,29 @@ like a source checkout. Version table: `lpb_alembic_version`.
   the engine starts on it without a refusal and `lpb migrate` changes nothing, yet it has no
   `lpb_actors.credential_custody` and neither of the async jobs' tables. It is recreated too. A
   database at 0014 or earlier has neither the table nor the column, and is migrated as usual.
-- **0016, async jobs (ISS-26):** it adds `lpb_jobs.started_at` and `lpb_jobs.claims` (0 for every
-  job already stored) and the tables `lpb_job_requests` and `lpb_job_results`, and changes no
-  existing row. A downgrade drops both tables and both columns. A job still `queued` then could never
-  run, since its request goes with its table and the earlier release has no worker: the downgrade
-  ends it `failed`, `interrupted`, so its `operation_ref` may run again. Stored results are deleted;
-  the jobs keep their record. The run is one transaction on SQLite and on PostgreSQL, in both
-  directions (`tests/store/test_async_migration.py`).
+- **0016, async jobs (ISS-26):** it adds `lpb_jobs.started_at`, `lpb_jobs.claims` and
+  `lpb_jobs.claims_given_back` (both counts 0 for every job already stored) and the tables
+  `lpb_job_requests` and `lpb_job_results`, and changes no existing row. A downgrade drops both
+  tables and the three columns. A job still `queued` then could never run, since its request goes
+  with its table and the earlier release has no worker: the downgrade ends it `failed`,
+  `interrupted`, so its `operation_ref` may run again. Stored results are deleted; the jobs keep
+  their record.
+
+  The downgrade also rewrites each kept job's `result` and `failure` into what the release at 0015
+  reads. That release refuses an unknown field or value, so a job left as this one wrote it would
+  fail to load there, with every page of `GET /v1/jobs` that holds it:
+
+  | Written since 0016 | After the downgrade | Why |
+  | --- | --- | --- |
+  | `ResultRef.expires_at`, on every reference, an immediate job's too | Removed | 0015 has no such field |
+  | `ResultRef.location` of a stored result | `null`; `storage` stays `stored` | The bytes went with their table, and 0015 answers the path with 501. The reference still says the engine kept the result, and its type, size and hash. A later upgrade reads it as a result that expired (410) |
+  | Failure kind `result_not_stored` | `runner_error`; the message, `payment_sent` and the job's reference are kept | The kind this release gives a paid answer it could not store when the finishing write failed. The message says the answer was over the size the engine stores |
+  | Failure reason `cancelled` | `null`; the kind stays `abandoned` and the message ("cancelled before it ran") is kept | 0015 allows a reason only on a payment failure. `abandoned` is the caller giving the job up |
+
+  Nothing else a job of this release holds is new to 0015: `mode="async"` and the state `queued`
+  were in its contracts already. The run is one transaction on SQLite and on PostgreSQL, in both
+  directions, so a run that dies changes no table, no column and no document
+  (`tests/store/test_async_migration.py`).
 - **Drift:** `tests/store/test_durability.py::test_migrations_match_the_schema` fails if `schema.py`
   and the migrations disagree.
 - **Retained records:** `test_upgrade_preserves_records_written_at_each_revision` writes rows at

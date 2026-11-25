@@ -303,7 +303,7 @@ sequenceDiagram
     BE->>J: on start, before serving
     J->>DB: jobs_in_state("running")
     loop each interrupted job
-        alt an async job with no attempt, claimed fewer than 3 times (ISS-26)
+        alt an async job with no attempt, fewer than 3 of its claims counted (ISS-26)
             J->>DB: requeue_unstarted: back to queued, nothing went out
         else any attempt in_flight or payment_sent
             J->>DB: finish_job(uncertain, Failure(interrupted))

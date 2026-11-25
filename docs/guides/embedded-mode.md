@@ -188,6 +188,9 @@ job = await engine.jobs.get(actor, job.id)  # poll: queued, running, then its en
 result = await engine.jobs.result(actor, job.id)  # JobNotFinished until it has ended
 await engine.jobs.cancel(actor, job.id)  # only while it is queued
 ```
+
+`jobs.result` answers the actor the job belongs to and nobody else: an admin or an auditor reads the
+job with `jobs.get` and gets `NotFound` for its result, whatever `AccessPolicy` you supply.
 `cost` is wholesale network cost, and stays `pending` until Batteries reports the charge.
 
 Failures are Python exceptions, not HTTP statuses:
@@ -233,7 +236,8 @@ Two test doubles ship in `livepeer_builder.testing`, and a contract test keeps t
   the runner's settle window, as on the engine), and rejects a repeated
   `operation_ref` and a path with no leading `/`. It does not model admission, failover or payment.
   `jobs.submit` queues an async job, and the test's own `await fake.jobs.advance()` runs what is queued
-  by its script; `result` and `cancel` answer by the engine's rules (ISS-26). Until ISS-26 the fake ran
+  by its script; `result` and `cancel` answer by the engine's rules (ISS-26), and
+  `Fails(kind="result_not_stored")` scripts a paid answer the engine did not keep. Until ISS-26 the fake ran
   `mode="async"` as an immediate job and served an immediate job's result: a test that relied on
   either needs the change.
 - **`make_engine(...)`** queues async jobs and starts no loop: step the worker with

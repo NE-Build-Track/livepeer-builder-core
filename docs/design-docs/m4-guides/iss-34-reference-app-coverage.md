@@ -36,7 +36,7 @@ The console's Builder area (`web/src/app/builder/`) covers immediate jobs only, 
 | Need | Console today | Engine today |
 | --- | --- | --- |
 | Immediate job, buffered and streamed | Done: generic form, presets, output views (`components/console/run/`, `app/builder/run/route.ts`) | Done |
-| Async job | **Not found.** `JobRequestBody` omits `mode` (`domain/builder.ts:67-68`); the job record already maps `queued` to "unknown" (`job-record.tsx`, `JOB_STATES`) | `mode="async"` answers 501 (`engine.md#async-jobs-reserved-m4--iss-26`) |
+| Async job | **Not found.** `JobRequestBody` omits `mode` (`domain/builder.ts:67-68`); the job record already maps `queued` to "unknown" (`job-record.tsx`, `JOB_STATES`) | Built (ISS-26): `POST /v1/jobs` with `mode="async"` answers 202 with the queued job, and `GET /v1/jobs/{id}/result` serves its stored result to its owner (`engine.md#async-jobs`) |
 | Persistent endpoint | **Not found** | `POST /v1/sessions` answers 501 (`services/reserved.py:17-26`); `Session.proxy_path` reserved |
 | Stored result read | **Not found.** `KeyedEngine` has no result call (`ports/keyed.ts:34-52`) | `GET /v1/jobs/{id}/result` exists; immediate results are not retained |
 | Job record by URL | Job record polled after a run; `app/builder/api/jobs/[id]/route.ts`; **no page per job id** under `/builder/jobs` | `GET /v1/jobs/{id}` |

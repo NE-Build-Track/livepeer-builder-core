@@ -8,7 +8,7 @@
 > **Amended on 18 November 2026** by the payment clearinghouse (D82 to D86). See [Amended on 18
 > November 2026](#amended-on-18-november-2026).
 >
-> **Built on 19 November 2026** on `tasks/m4/iss-26-async-jobs`, from P8's branch (#169), and in review.
+> **Built on 19 November 2026** on `tasks/m4/iss-26-async-jobs` (base `releases/m4`), and in review as #184.
 > [Current state](#current-state-verified) says what is built and where, the [test plan](#test-plan-test-driven)
 > is marked, and the contract is [engine.md](../../contracts/engine.md#async-jobs). The work is tracked in
 > [the exec plan](../../exec-plans/active/iss-26-async-jobs.md).
@@ -18,17 +18,22 @@
 > deadline, and a queued job waits through what may pass. See [Decided where this guide is
 > silent](#current-state-verified).
 
-**Status:** proposal for discussion, 29 October 2026. Nothing here is decided until it is locked; locked
-rules become a decision in the M4 decision record.\
+**Status:** locked (D69) and built; in review as #184. The proposal below, from "Decision proposed"
+on, is kept as it was locked: where a locked answer, the amendment or a later decision differs, that
+one wins, and [Current state](#current-state-verified) says what the code does.\
 **Tracker:** ISS-26 ([Network-Engineering-SPE#40](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/40)).\
 **Owner:** John (engine). **Reviewers:** Mike, John.\
-**Verified against:** builder-core `releases/m3` at `d3df806`; livepeer/node `406b248` (pin) and `a4b68ed`
-(main); livepeer-python-gateway `2017a80`; Clearinghouse Batteries `ca09e47`.
+**Verified against:** builder-core `tasks/m4/iss-26-async-jobs` on `releases/m4` at `ee5975e`, on
+25 November 2026. The upstream facts were read on 29 October 2026 at livepeer/node `406b248` (pin) and
+`a4b68ed` (main), livepeer-python-gateway `2017a80` and Clearinghouse Batteries `ca09e47`.
 
 ## Done when
 
+The ticket's acceptance, as amended on 25 November 2026.
+
 - A job outlives the request that created it. It has a durable status and, in the end, a result or a
-  failure, reached through the supported handle.
+  failure, reached through the supported handle. That handle is the engine's own: the job id, the
+  `operation_ref`, and each attempt's manifest and payment session. A provider request id is ISS-48's.
 - A disconnect or a restart keeps the job's identity and recovery references, and never starts a
   replacement execution.
 - **Depends on** ISS-14 (repeat rules, [iss-11-14-idempotency.md](../m3-guides/iss-11-14-idempotency.md)),
@@ -37,15 +42,12 @@ rules become a decision in the M4 decision record.\
 
 ## Current state (verified)
 
-Re-verified on 19 November 2026 against P8's branch at `699d759`, where the work started. What had
-changed since 29 October: `application_id` is `tenant_id` and the admin kinds are `clearinghouse_admin`
-and `tenant_admin` (#163); the engine has two halves and a role (`LPB_ROLE`, #164, #169), and
-`AdmissionLimiter` refuses a job in the `clearinghouse` role; the router split has happened, so the
-result route was `http/work.py:99`, not `http/app.py:256`; the latest migration was `0015`; a second
-`start()` was already refused (#113); and the line numbers had moved (`services/jobs.py:193-200` for
-`submit` and `result`, `:244` for the 501 of `run`, `api.py:109` for `JobsApi`,
-`services/failover.py:67` for `recover_interrupted`, `store/sql.py:205` for `finish_job`, and the
-FakeEngine's gaps at `testing/fake_engine.py:198,313`). Each row of the 29 October table still held.
+What is built, read on 25 November 2026 on the branch (base `releases/m4` at `ee5975e`). The proposal
+below was written on 29 October, and some of its names have changed since: `application_id` is
+`tenant_id`, and the admin kinds are `clearinghouse_admin` and `tenant_admin` (#163); the engine has
+two halves and a role (`LPB_ROLE`, #164, #169), and `AdmissionLimiter` refuses a job in the
+`clearinghouse` role; the job routes are in `http/work.py` and `http/job_handles.py`; a second
+`start()` is refused (#113); the migration is `0016`.
 
 | Item | State since ISS-26 | Where |
 | --- | --- | --- |
@@ -54,21 +56,21 @@ FakeEngine's gaps at `testing/fake_engine.py:198,313`). Each row of the 29 Octob
 | The paid call | `Dispatcher`, the one paid call for an immediate job, a stream and an async job (the tidy slice, no behavior change) | `services/dispatch.py` |
 | The worker | `AsyncJobWorker`: one gate (a worker, an admission slot and the job's id, taken together with no await), then a compare-and-set claim, oldest first, skipping a runner app at its limit and one nobody can run now; the queue's time limit; `run(stop)`, `run_once()`, `close()`, `drain()`. Started by `start()` after `recover_interrupted`, counted there; `stop()` closes its gate first and drains it | `services/async_jobs.py`, `services/admission.py` (`AsyncLane`), `runtime/engine.py` |
 | One owner for a claimed job | `Held`: the slot, the claim's number, the deadline, the attempts and the end the worker owes, from before the claim until the end is written. An end the store refused is kept with the slot and written again at each later step (`Ends`); the reply's bytes are never kept for that | `services/async_held.py` |
-| The claim's number | `claim_job` answers with it (`lpb_jobs.claims` after the claim). `start_attempt`, `requeue_unstarted`, `finish_job` and `finish_job_with_result` take `claim=` and apply only while the job is `running` under it; a miss is `ClaimLost`, and the worker writes nothing more | `store/job_queue.py`, `store/jobs.py`, `services/dispatch.py` |
+| The claim's number | `claim_job` answers with it (`lpb_jobs.claims` after the claim). `start_attempt`, `requeue_unstarted`, `finish_job` and `finish_job_with_result` take `claim=` and apply only while the job is `running` under it; a miss is `ClaimLost`, and the worker writes nothing more. A number is issued once: `claims` only grows, a claim given back is counted in `lpb_jobs.claims_given_back`, and the three claims are the ones not given back | `store/job_queue.py`, `store/jobs.py`, `services/dispatch.py` |
 | One deadline | `timeout_s` once for all attempts: from the claim for an async job, from the start of `jobs.run` for an immediate one. Each attempt is called with the time left; none starts after it (`timeout`, `failed`). The worker stops a call that runs 5 s past the deadline | `services/dispatch.py` (`_in_time`), `services/jobs.py`, `services/async_jobs.py` |
-| A job nobody can run yet | Left `queued`: an app with no runner listed, or none with room that it would pay, is skipped as an app at its limit is; one found out after the claim (`NotNow`, a credential that cannot be read too) is given back with its claim uncounted and set aside for a poll interval, doubling to 32 | `services/dispatch.py` (`waits`, `NotNow`), `services/async_held.py` (`Waiting`) |
+| A job nobody can run yet | Left `queued`: an app with no runner listed, or none with room that it would pay, is skipped as an app at its limit is; one found out after the claim (`NotNow`, a credential that cannot be read too) is given back with its claim uncounted (its number is spent all the same) and set aside for a poll interval, doubling to 32 | `services/dispatch.py` (`waits`, `NotNow`), `services/async_held.py` (`Waiting`) |
 | Cost of a paid answer that was not stored | `failed_after_payment` whenever an async job's attempt succeeded and the job did not: too large, the finishing write failed, or a restart cut it | `services/cost_classes.py` |
 | `queued` state | Real. `recover_interrupted` requeues a `running` async job with no attempt, three claims at most | `services/failover.py`, `store/job_queue.py` |
 | `ResultRef.storage="stored"` | An async job's answer, in `lpb_job_results`, written in the transaction that ends the job; `location` and `expires_at` | `services/async_jobs.py`, `store/job_queue.py` |
-| `jobs.result`, `GET /v1/jobs/{id}/result` | The stored bytes; 409 `job_not_finished` before the end; the failure for a failed job; 410 `result_expired` for an immediate job and an expired result. The 501 is gone | `services/jobs.py`, `http/job_handles.py`, `http/app.py` |
-| Cancel | `jobs.cancel`, `POST /v1/jobs/{id}/cancel`: one conditional write, `queued` to `failed`, kind `abandoned`, reason `cancelled`; 409 `job_not_queued` otherwise | `services/jobs.py`, `store/job_queue.py` |
+| `jobs.result`, `GET /v1/jobs/{id}/result` | The stored bytes; 409 `job_not_finished` before the end; the failure for a failed job; 410 `result_expired` for an immediate job and an expired result. The 501 is gone. Each answer goes to the job's own actor only: an auditor, a tenant admin and a clearinghouse admin read the job's record and get 404 here, by a rule of the engine's own that no supplied policy widens (`check_result_owner`) | `services/jobs.py`, `services/ownership.py`, `http/job_handles.py`, `http/app.py` |
+| Cancel | `jobs.cancel`, `POST /v1/jobs/{id}/cancel`: one conditional write, `queued` to `failed`, kind `abandoned`, reason `cancelled`; 409 `job_not_queued` otherwise. Whoever the policy lets run the job may cancel it: with the default policy the owner, a tenant admin of its tenant and a clearinghouse admin | `services/jobs.py`, `store/job_queue.py` |
 | Request bodies | An async job's request is kept in `lpb_job_requests` until the job ends; an immediate job's still only as a fingerprint, which gains `mode` only when it is `async` | `store/job_queue.py`, `services/request_identity.py` |
 | `finish_job` | Ends only a `running` job and says whether it did; a miss is logged (`jobs.finish_missed`), not raised. With a claim it ends the job only under that claim, and a miss is `ClaimLost` (`jobs.async_claim_lost`). The same transaction deletes the stored request | `store/jobs.py`, `store/job_queue.py`, `services/dispatch.py` |
 | Retention | Expired result bytes go on every purge; the job purge also deletes an async job's result and request, by table; `queued` and `running` jobs are never taken. `LPB_RETENTION_RESULTS_DAYS` (7) is on by default and alone purges first one interval after start | `store/retention.py`, `runtime/engine.py` |
 | Health | `EngineHealth.queued_jobs`, `oldest_queued_s` | `contracts/health.py`, `services/async_jobs.py` |
 | Roles | Async jobs are the work half's: `both` and `work` run them; `clearinghouse` refuses `submit` and a worker step, starts no worker and mounts no job route | `services/admission.py`, `runtime/engine.py`, `http/work.py` |
-| Migration | `0016`: `lpb_jobs.started_at`, `claims`; `lpb_job_requests`; `lpb_job_results` | `store/migrations/versions/0016_async_jobs.py`, `store/schema.py` |
-| FakeEngine | The three parity gaps are closed: `submit` queues and records `async`, `advance()` runs what is queued, `result()` follows the engine (410 for an immediate job), and `run(mode="async")` is refused. A queued job scripted `Fails(kind="no_offering")` stays queued at `advance()`, as the engine lets it wait | `testing/fake_async.py`, `testing/fake_jobs.py` |
+| Migration | `0016`: `lpb_jobs.started_at`, `claims`, `claims_given_back`; `lpb_job_requests`; `lpb_job_results`. Its downgrade ends a queued job and rewrites every kept job's `result` and `failure` into what revision 0015 reads ([persistence.md](../../contracts/persistence.md#migrations)) | `store/migrations/versions/0016_async_jobs.py`, `store/schema.py` |
+| FakeEngine | The three parity gaps are closed: `submit` queues and records `async`, `advance()` runs what is queued, `result()` follows the engine (410 for an immediate job; the owner only; `data` from the stored bytes; the content type a header can hold), and `run(mode="async")` is refused. A stored result expires after 7 days, `Fails(kind="result_not_stored")` scripts a paid answer that was not kept, and `health()` counts the queue. A queued job scripted `Fails(kind="no_offering")` stays queued at `advance()`, as the engine lets it wait. Not modelled: the queue's limit, admission, a restart, retention, a claim's number, a deadline | `testing/fake_async.py`, `testing/fake_jobs.py`, `testing/scripts.py`, `testing/fake_engine.py` |
 | Deployment | One engine process per database, as before; no lease (T44) | [engine.md](../../contracts/engine.md#deployment-performance-and-recovery-assumptions) |
 
 **Decided where this guide is silent** (19 November 2026, for Mike's review):
@@ -89,6 +91,14 @@ FakeEngine's gaps at `testing/fake_engine.py:198,313`). Each row of the 29 Octob
   across a restart.
 - **Results retention alone** purges first one interval after start, so the default settings add no
   write at start.
+- **`start()` counts the queue before the worker's loop runs**, so jobs a restart left queued are
+  looked at without waiting for a submit, and an engine nobody submits to makes no further query for it.
+- **The result limit is applied while the reply is read** (20 November 2026, the review of #184). The
+  bound reaches the transport through an optional protocol, `BoundedRunnerTransport`
+  (`call_bounded`), as streaming reached it through `open` (D33): `RunnerTransport` and `call` are
+  unchanged, a supplied transport without it is called as before, and an immediate job is read
+  whole. `RunnerReply` gains `size_bytes` and `sha256`, optional. A reply over the limit is still
+  read to its end, so the job keeps the true size and hash (D69 (4)).
 
 **Decided on 25 November 2026** (Mike, after three reviews of #184):
 
@@ -113,7 +123,29 @@ Applied from those rules where they are silent, for Mike's review: a job stopped
 before its first attempt ends `failed`, `interrupted`, at `engine.stop()` as at the next start (Q2); a
 job given back waits one poll interval, and twice as long each time it is given back again, up to 32
 intervals; a job whose end is owed keeps its worker and its slot until the end is written; the worker
-stops a paid call 5 seconds past the job's deadline.
+stops a paid call 5 seconds past the job's deadline; a job scripted `no_offering` stays queued in the
+`FakeEngine`.
+
+**Decided while finishing the rework** (25 November 2026, for Mike's review, except the first, which
+Mike decided):
+
+- **A result's bytes go to the job's owner only** (Mike, 25 November 2026). The rule is the engine's
+  own, asked after the access policy's checks (`check_result_owner`), because the contract promises
+  it without condition: a supplied `AccessPolicy` can narrow it and cannot widen it. The owner is the
+  actor the job belongs to, in its tenant. For Mike's review: where the rule sits. `jobs.cancel` is
+  unchanged and answers whoever the policy lets run the job.
+- **A claim's number is issued once.** `lpb_jobs.claims` only grows. A claim given back by a job that
+  only had to wait is counted in a second column, `claims_given_back`, and the three claims of Q2
+  are `claims - claims_given_back`.
+- **What a downgrade of 0016 leaves.** Every kept job's documents are rewritten into revision 0015's
+  words: `expires_at` removed; a reference's `location` null with `storage` kept (`stored`, nowhere:
+  what this release, too, calls a result of which only the size and hash are left);
+  `result_not_stored` becomes `runner_error`, the kind a paid answer gets here when the finishing
+  write failed; reason `cancelled` becomes null on `abandoned`. Each message is kept.
+- **The FakeEngine's script for a paid answer that was not kept** is `Fails(kind="result_not_stored")`,
+  with `body` as the answer whose size and hash the job's reference keeps. A scripted `health` wins
+  over the fake's own count of the queue, as a scripted cost wins. A stored result expires 7 days
+  after its job ended, the engine's default.
 
 **Upstream facts.** livepeer/node `406b248` serves single-shot work only through `/apps/{runner_id}/app/...`
 (`orchestrator/http.go:68`), its proxy bound to the caller's request (`context.WithCancel(r.Context())`):
@@ -144,8 +176,9 @@ submit ──► queued ──claim (CAS, admission slot held)──► running 
   then `UPDATE lpb_jobs SET state='running', started_at=:now, claims=claims+1 WHERE id=:id AND
   state='queued'`. A row count of 0 means someone else moved it (a cancel, the TTL): release the slot.
   Oldest first, skipping apps at their per-app cap so one app cannot block the rest.
-- **Dispatch** is today's `_dispatch` unchanged: discovery, selection, credential, failover (D52), the
-  paid-attempt cap (D55), attempts written before the call, the manifest stored before signing (D54).
+- **Dispatch** is `Dispatcher.dispatch` (`services/dispatch.py`), the paid call `run` makes:
+  discovery, selection, credential, failover (D52), the paid-attempt cap (D55), attempts written
+  before the call, the manifest stored before signing (D54).
   `return_http_errors` and streaming are refused for async at submit (400), as `run` refuses the first.
 - **Finish** writes the state, the failure or the `ResultRef`, **the result bytes**, and deletes the
   stored request, in one transaction guarded by `state='running'`.
@@ -161,7 +194,8 @@ submit ──► queued ──claim (CAS, admission slot held)──► running 
 | `running`, with attempts | `recover_interrupted` as today: `uncertain` or `failed` | It may have run or paid. Never re-dispatched (no replacement execution) |
 
 A client disconnect does nothing: the job belongs to the worker. `engine.stop()` stops claiming, waits
-`LPB_ASYNC_DRAIN_TIMEOUT_S`, then cancels; a cancelled paid dispatch ends `uncertain` (`_close_after_error`).
+`LPB_ASYNC_DRAIN_TIMEOUT_S`, then cancels; a cancelled paid dispatch ends `uncertain`
+(`Dispatcher.close_after_error` for an immediate job, `Ends` in `services/async_held.py` for an async one).
 
 ### Idempotency (extends the ISS-14 guide)
 
@@ -205,8 +239,8 @@ and `oldest_queued_s`: alert on the age of the oldest job, not on depth.
 
 Payment happens at dispatch, never at submit, so an allocation revoked or exhausted while the job waited
 fails it unpaid (`not_provisioned`, or `payment` with the ISS-12 reason). D52, D55, D54 and cost
-classification are as for `run`. A queued job's cost is `pending` (`services/costs.py:323` treats any
-state outside `succeeded`/`failed`/`uncertain` as running).
+classification are as for `run`. A queued job's cost is `pending` (`classify` in
+`services/cost_classes.py` treats any state outside `succeeded`/`failed`/`uncertain` as running).
 
 ### Surfaces
 
@@ -220,23 +254,28 @@ state outside `succeeded`/`failed`/`uncertain` as running).
 
 ## Code areas
 
-| File | Change |
+Where each part is, under `src/livepeer_builder/`.
+
+| File | What it holds |
 | --- | --- |
-| `contracts/jobs.py` | Comments un-reserved; `ResultRef.expires_at`; `Job.started_at`; `result_not_stored` |
-| `api.py` | `JobsApi.submit` |
-| `protocols/__init__.py`, `adapters/reply_body.py`, `adapters/sdk.py` (#184 review) | `BoundedRunnerTransport`, optional: `call_bounded` reads an async job's reply in pieces and keeps at most `LPB_ASYNC_RESULT_MAX_BYTES` of it; `RunnerReply.size_bytes`, `sha256` |
-| `errors.py` | Reuse `OperationConflict`, `NoCapacity`; add `ResultExpired` (410), `JobNotFinished` (409) |
-| `protocols/__init__.py` | `JobRepo`: `enqueue_job(job, fingerprint, request, actor)`, `claim_job`, `requeue_unstarted`, `finish_job_with_result`, `read_result`, `queued_stats`; `finish_job` gains the state guard |
-| `store/schema.py`, a new migration (numbered when written: #114 and #115 add migrations first) | `lpb_job_requests`, `lpb_job_results`; `lpb_jobs.started_at`, `claims` |
-| `store/sql.py`, `store/retention.py` | The methods above; explicit deletes and the result-bytes purge |
-| `services/jobs.py` | Tidy first: extract the paid-call core (`_candidates` … `_finish`) into `services/dispatch.py` (`Dispatcher`), no behavior change; then `submit` and `result` |
-| `services/async_jobs.py` (new) | `AsyncJobWorker(store, dispatcher, admission, clock, limits)`: `run(stop)`, `run_once()`, `drain()` |
-| `services/failover.py` | `recover_interrupted` requeues `running` async jobs with no attempt row |
-| `services/request_identity.py` | `mode` in the fingerprint when async |
-| `runtime/assembly.py`, `runtime/engine.py` | Build the worker once; start its task after `recover_interrupted`; drain in `stop()` |
+| `contracts/jobs.py`, `contracts/health.py` | `ResultRef.expires_at`; `Job.started_at`; the failure kind `result_not_stored`; `FailureReason`, which adds `cancelled`; `RunnerReply.size_bytes`, `sha256`; `EngineHealth.queued_jobs`, `oldest_queued_s`; `PurgeReport.results_deleted` |
+| `api.py` | `JobsApi.submit` and `JobsApi.cancel`, beside `result` |
+| `errors.py` | `JobNotFinished` (409), `ResultExpired` (410), `JobNotQueued` (409); `OperationConflict` and `NoCapacity` are reused |
+| `protocols/persistence.py` | `JobRepo`: `enqueue_job`, `queued_jobs`, `claim_job`, `requeue_unstarted`, `cancel_queued`, `expire_queued`, `finish_job_with_result`, `read_result`, `queued_stats`; `finish_job` ends only a running job; `start_attempt`, `requeue_unstarted` and both ends take the claim's number |
+| `protocols/__init__.py`, `adapters/reply_body.py`, `adapters/runner_call.py`, `adapters/sdk.py` | `BoundedRunnerTransport`, optional: `call_bounded` reads an async job's reply in pieces and keeps at most `LPB_ASYNC_RESULT_MAX_BYTES` of it |
+| `store/schema.py`, `store/migrations/versions/0016_async_jobs.py` | `lpb_job_requests`, `lpb_job_results`; `lpb_jobs.started_at`, `claims`, `claims_given_back`; the downgrade's rewrite of the kept documents |
+| `store/jobs.py`, `store/job_queue.py`, `store/retention.py` | The job writes and the queue (the claim, the requeue, the cancel, the time limit, the end with its result); the explicit deletes and the result-bytes purge |
+| `services/dispatch.py` | `Dispatcher`: the paid call of an immediate job, a stream and an async job; the one deadline; `ClaimLost`, `NotNow` |
+| `services/jobs.py`, `services/ownership.py` | `submit`, `result`, `cancel`; the rule that a result is its owner's alone |
+| `services/async_jobs.py`, `services/async_held.py` | `AsyncJobWorker` (`run(stop)`, `run_once()`, `close()`, `drain()`); `Held`, `Ends`, `Waiting` |
+| `services/admission.py` | `AsyncLane`: the gate a job passes before its claim, and the worker's cap |
+| `services/failover.py` | `recover_interrupted` requeues a `running` async job with no attempt; `MAX_CLAIMS` |
+| `services/operations.py`, `services/request_identity.py` | The repeat rule of an async submit; `mode` in the fingerprint when async |
+| `services/cost_classes.py` | The cost class of a paid answer that was not stored |
+| `runtime/assembly.py`, `runtime/engine.py` | The worker is built once, started after `recover_interrupted`, and closed first and drained in `stop()`; health; the results purge |
 | `config.py` | The `LPB_ASYNC_*` and `LPB_RETENTION_RESULTS_DAYS` settings |
-| `http/app.py` | 202 + `Location`; `/result` mapping; `Retry-After` on non-ended reads |
-| `testing/fake_engine.py`, `testing/fakes.py` | Parity; a gated transport hook |
+| `http/work.py`, `http/job_handles.py`, `http/app.py` | 202 with `Location`; `Retry-After` on a job that has not ended; the result and cancel routes; the error answers |
+| `testing/fake_async.py`, `testing/fake_jobs.py`, `testing/scripts.py`, `testing/fake_engine.py`, `testing/engine.py` | The FakeEngine's parity; `make_engine` steps the worker with `run_once()` |
 
 ## Test plan (test-driven)
 
@@ -244,7 +283,7 @@ state outside `succeeded`/`failed`/`uncertain` as running).
 transport (`tests/unit/test_async_jobs.py`); store contract tests for the claim, the finishing
 transaction, requeue and purge on **SQLite and PostgreSQL** (`tests/store/`, `LPB_TEST_POSTGRES_URL`);
 restart tests that open a second engine on the same file (`tests/store/test_durability.py` style); one
-HTTP test per answer; FakeEngine parity in `test_fake_engine_contract.py`.
+HTTP test per answer; FakeEngine parity in `tests/unit/test_fake_engine_async.py`.
 
 **Seams.** `FixedClock` for the TTL and result expiry; `AsyncJobWorker.run_once()` drives the worker
 step by step (no sleeps); an `asyncio.Event`-gated transport holds a dispatch `running`; a store wrapper
@@ -352,6 +391,21 @@ From the decisions of 25 November
 [x] a queued job waits for a runner, for room and for a readable credential, its claim uncounted
     (test_async_waiting.py; on the fake and the engine:
     test_fake_engine_async::test_a_job_for_an_app_nobody_serves_is_queued_and_waits_for_a_runner)
+
+From finishing the rework, 25 November
+[x] a claim's number is never issued twice; the three claims are the ones not given back (store, both backends)
+    (test_claim_fence::test_a_claims_number_is_never_issued_twice,
+    ::test_the_three_claims_are_the_ones_that_were_not_given_back)
+[x] a downgrade of 0016 leaves only documents revision 0015 reads; an interrupted run changes no document
+    (test_async_migration::test_a_downgrade_leaves_only_documents_the_earlier_release_reads,
+    ::test_an_interrupted_run_on_sqlite_changes_nothing)
+[x] a result's bytes go to the job's owner only: an auditor, a tenant admin and a clearinghouse admin get 404,
+    under any supplied policy
+    (test_async_results::test_a_results_bytes_go_to_the_jobs_owner_and_to_nobody_who_may_read_its_record,
+    ::test_no_supplied_policy_hands_a_results_bytes_to_another_actor; over REST test_async_http; on the
+    fake and the engine test_fake_engine_async::test_a_reader_of_another_actors_job_is_not_given_its_result)
+[x] FakeEngine: result_not_stored, result().data, expires_at, health's queue count and the content type
+    (test_fake_engine_async.py, each on the fake and the engine)
 ```
 
 **Definition of done.** Every item `[x]`, `[=]` or `[-]` with a reason, every `[?]` answered; `AGENTS.md`
@@ -413,8 +467,7 @@ Locked by Mike on 13 November 2026.
 
 **Other decisions that touch this guide.**
 
-- **Migration numbers.** The guide names migration `0009`. #114 and #115 each add a migration first, so
-  this one is numbered when it is written.
+- **Migration number.** The migration is `0016` (`0016_async_jobs.py`), after credential custody's `0015`.
 - **A second `start()`** on a running engine is refused (#113), in a standalone pull request before this
   ticket adds workers to `start()`.
 - **The router split** (#25) lands before this ticket, so the cancel and result routes go in their own

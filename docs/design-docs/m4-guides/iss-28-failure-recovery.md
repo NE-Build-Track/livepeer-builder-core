@@ -70,7 +70,7 @@ A failed finishing write leaves the job `running` for the next start (D34).
 | G5 | **T17:** a metered stream the orchestrator released can end `succeeded` | tech-debt T17; the SDK's `run_payments()` already returns `True` on a release, and the engine drops it |
 | G6 | **Unpaid `timeout` and `unreachable` cannot be told apart from "never reached a runner"**, so neither is retryable under ISS-14 (its Q2) | `services/failover.py:18-19`; `network_kind` in `adapters/runner_call.py` |
 | G7 | **Reporting failures have no job-level signal.** Cost sync errors are only `EngineHealth.cost_sync_error`; `quarantined` usage rows and `ambiguous` matches (T13, T16) show only as `pending`/`uncertain` cost | `contracts/health.py`, `contracts/costs.py:17,54` |
-| G8 | **Async and persistent rows do not exist** | ISS-26 reserved; `services/reserved.py` `ReservedSessions` |
+| G8 | **Persistent rows do not exist. Async jobs do, since ISS-26 (D69), and their ends have no category or recovery yet**: a queue expiry (`no_capacity`), a cancel (`abandoned`, reason `cancelled`), `result_not_stored`, and a job requeued after a restart | `services/async_jobs.py`, T47; `services/reserved.py` `ReservedSessions` |
 | G9 | `finish_job` overwrites any state (`store/sql.py:260`); a late writer could reopen an ended job. A concrete case (found for ISS-46, at `1514212`, where the update is `store/sql.py:229-230`): a cancel that lands after a `succeeded` finish has committed but before `run` returns reaches `_close_after_error`, which finishes the job again as `failed` or `uncertain` | No guard on `state` |
 
 ## Decision proposed

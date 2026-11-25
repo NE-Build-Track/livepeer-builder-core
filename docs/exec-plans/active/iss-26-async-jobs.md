@@ -5,12 +5,13 @@
 - **Owners:** Mike decides and reviews; John owns the engine design.
 - **Ticket:** ISS-26
   ([Network-Engineering-SPE#40](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/40)), amended
-  on 13 November 2026. The first M4 engine ticket after the payment clearinghouse (ISS-31).
+  on 13 November and on 25 November 2026. The first M4 engine ticket after the payment clearinghouse
+  (ISS-31).
 - **Guide:** [iss-26-async-jobs.md](../../design-docs/m4-guides/iss-26-async-jobs.md), with its current
   state brought up to date and its test plan marked.
 - **Decisions:** D69 in [m4-decisions.md](../../design-docs/m4-decisions.md), and the guide's amendment of
   18 November 2026 (async jobs are the work half's; `tenant_id`).
-- **Branch:** `tasks/m4/iss-26-async-jobs`, from P8's branch (#169) at `699d759`. One pull request.
+- **Branch:** `tasks/m4/iss-26-async-jobs`, based on `releases/m4`. One pull request, #184.
 - **Progress:** built and in review.
 
 ## Goal
@@ -22,10 +23,12 @@ recovery references and never starts a replacement execution.
 
 ## Acceptance
 
-From ISS-26, as amended on 13 November 2026.
+From ISS-26, as amended on 25 November 2026: the supported handle is the engine's own, and a provider
+request id is ISS-48's.
 
 - [ ] A job outlives its original request and exposes durable status and an eventual result or
-  failure, through the supported handle: the engine's own job id, `GET /v1/jobs/{id}` and
+  failure, through the supported handle: the engine's own job id, the `operation_ref`, and each
+  attempt's manifest and payment session, read with `GET /v1/jobs/{id}` and
   `GET /v1/jobs/{id}/result` ([engine.md](../../contracts/engine.md#async-jobs)).
 - [ ] A disconnect and a restart preserve the job's identity and recovery references without submitting
   a replacement execution ([restart and stop](../../contracts/engine.md#restart-and-stop)).
@@ -72,6 +75,15 @@ From ISS-26, as amended on 13 November 2026.
   `drain()` waits for every ending write. Tests: `test_async_one_owner.py`, `test_async_ends.py`,
   `test_async_waiting.py`, `test_async_deadline.py`, `test_job_deadline.py`, `test_admission_lane.py`,
   `tests/store/test_claim_fence.py`.
+- [x] **25 November 2026, finishing the rework.** A downgrade of migration 0016 rewrites every kept
+  job's `result` and `failure` into what revision 0015 reads. A claim's number is issued once:
+  `lpb_jobs.claims` only grows, and a claim given back is counted in `claims_given_back`. A result's
+  bytes go to the job's owner only, by a rule of the engine's own (`check_result_owner`). The
+  `FakeEngine` agrees with the engine on a paid answer that was not stored, a result's `data`,
+  `expires_at` and content type, and health's count of the queue. The guide, the contracts and the
+  neighbouring guides say what is built. Tests: `tests/store/test_async_migration.py`,
+  `tests/store/test_claim_fence.py`, `test_async_results.py`, `test_async_http.py`,
+  `test_fake_engine_async.py`.
 - [ ] **ISS-26.** Built and in review: [#184](https://github.com/NE-Build-Track/livepeer-builder-core/pull/184).
 
 ## Decision log
@@ -120,6 +132,25 @@ From ISS-26, as amended on 13 November 2026.
   worker's backstop is 5 seconds past the deadline, the grace a stream's opening has, with no setting
   of its own. A job scripted `no_offering` stays queued in the `FakeEngine`. Source: the decisions
   above, applied; for Mike's review.
+- **25 November 2026, a result is its owner's alone.** `jobs.result` and `GET /v1/jobs/{id}/result`
+  answer only the actor the job belongs to; an auditor, a tenant admin and a clearinghouse admin, who
+  read the job as a record, get the 404 the contract states. `jobs.cancel` is left as it is. Source:
+  Mike.
+- **25 November 2026, the ticket's wording.** "The supported provider handle" is the engine's own
+  handle: the job id, the `operation_ref`, and each attempt's manifest and payment session. A provider
+  request id is ISS-48's. Source: the ticket, as amended.
+- **25 November 2026, where that decision and the reviews are silent.** The owner rule sits in the
+  engine, after the access policy's checks, so a supplied policy can narrow it and cannot widen it;
+  the owner is the actor of the job's tenant. Given-back claims are counted in a second column,
+  `lpb_jobs.claims_given_back`, in migration 0016, and the three claims of Q2 are
+  `claims - claims_given_back`. The downgrade of 0016 maps what revision 0015 has no word for:
+  `ResultRef.expires_at` is removed; a reference's `location` becomes null and its `storage` is kept;
+  the kind `result_not_stored` becomes `runner_error`, the kind a paid answer gets here when the
+  finishing write failed; the reason `cancelled` becomes null on `abandoned`; each message is kept.
+  In the `FakeEngine`, a paid answer that was not kept is scripted `Fails(kind="result_not_stored")`
+  with `body` as the answer; a scripted `health` wins over the fake's own count of the queue; a
+  stored result expires 7 days after its job ended. Source: the decision and the reviews, applied;
+  for Mike's review.
 - **19 November 2026, not built.** No worker lease (T44): #112 left the detection of a second engine to
   ISS-26's leases, and the locked guide builds none. No events feed (ISS-46) and no provider request id
   (ISS-48); their seams are kept. Source: the guide and D64.

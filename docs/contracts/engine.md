@@ -568,9 +568,9 @@ returns; the engine cannot give it again.
 
 `storage="stored"`, with a `location` to read it from and an `expires_at`, is an async job's result
 ([results of an async job](#results-of-an-async-job)). For an immediate job, `GET /v1/jobs/{id}/result` checks the
-permission (403) and the owner (404 for another actor's job or a missing one), then answers 410,
-`code: result_expired`, with the job: its result was returned once and never kept. Until ISS-26 it
-answered 501.
+permission (403) and the owner (404 for a missing job and for anybody but the actor the job belongs
+to), then answers 410, `code: result_expired`, with the job: its result was returned once and never
+kept. Until ISS-26 it answered 501.
 
 ### Provider-hosted assets
 
@@ -688,7 +688,9 @@ allocation revoked while the job waited fails it `not_provisioned`, and one that
   once it is made. The first attempt, a return to the queue and the end of the job are each written
   only while the job is `running` under that number. A worker that no longer holds the job, because it
   was put back and claimed again or ended by another writer, writes nothing more for it, calls and
-  pays no runner if it had not yet, and does not end it (`jobs.async_claim_lost` in the log).
+  pays no runner if it had not yet, and does not end it (`jobs.async_claim_lost` in the log). A
+  number is issued once: the count only grows, also when a claim is given back, so each claim of a
+  job has a higher number than every claim before it.
 - **Oldest first**, leaving out a runner app at its per-app limit and one that no runner can take
   now, so one busy or absent runner app does not hold up the others.
 - **A job waits through what may pass.** A queued job is not failed because, when a worker reaches
@@ -696,7 +698,7 @@ allocation revoked while the job waited fails it `not_provisioned`, and one that
   example), every runner an attempt would pay advertises no room, or the actor's credential could not
   be read (any error but "no allocation"). An app that nobody can run now is left in the queue
   unclaimed. A job claimed before that was known is given back with nothing attempted, and its claim
-  does not count toward [the three](#restart-and-stop); it is not claimed again before
+  does not count toward [the three](#restart-and-stop), though its number is spent; it is not claimed again before
   `LPB_ASYNC_POLL_S` has passed, and each time it is given back again it waits twice as long, up to
   32 poll intervals. What is an answer still fails the job at once, unpaid: an actor with no
   allocation (`not_provisioned`), a payment the signer refused (`payment`), and a `SelectionPolicy`
@@ -737,14 +739,23 @@ allocation revoked while the job waited fails it `not_provisioned`, and one that
 
 A succeeded async job's answer is stored in `lpb_job_results`, in the transaction that ends the job, so
 a job is never `succeeded` without its bytes. Its `ResultRef` is `storage="stored"`, with the
-`content_type` the runner sent, `size_bytes`, `sha256`, `location` (`/v1/jobs/{id}/result`) and
-`expires_at`, when the bytes go (`LPB_RETENTION_RESULTS_DAYS` after the job ended; `null` keeps them as
-long as the job). `jobs.result(actor, job_id)` (REST: `GET /v1/jobs/{id}/result`) checks the permission
-(`jobs.read`, 403) and the owner (404 for another actor's job or a missing one) first (D44), then:
+`content_type` the runner sent (`application/octet-stream` in place of one no response header can
+hold, by [the one rule](#rest-d37) for a runner's content type), `size_bytes`, `sha256`, `location`
+(`/v1/jobs/{id}/result`) and `expires_at`, when the bytes go (`LPB_RETENTION_RESULTS_DAYS` after the
+job ended; `null` keeps them as long as the job).
+
+**Only the job's owner reads its result.** `jobs.result(actor, job_id)` (REST:
+`GET /v1/jobs/{id}/result`) checks the permission first (`jobs.read`, 403), then the job (404 for a
+missing one, and for one the [access policy](access.md#answers) does not let the caller read), and
+then that the caller is the actor the job belongs to, in its tenant. Anybody else gets the same 404,
+whatever their kind of credential: an auditor, a tenant admin and a clearinghouse admin read another
+actor's job as a record (`GET /v1/jobs/{id}`) and never its result. That last check is the engine's
+own, made after the policy's, so a supplied `AccessPolicy` can narrow it and cannot widen it. The
+owner is then answered:
 
 | The job | `jobs.result` | REST |
 | --- | --- | --- |
-| `succeeded`, its result stored | `JobResult`: the bytes, their content type, and `data` when they are a JSON object | 200, the bytes, with the runner's `Content-Type` unchanged |
+| `succeeded`, its result stored | `JobResult`: the bytes, the content type on the job's `ResultRef`, and `data` when they are a JSON object | 200, the bytes, with that content type as the `Content-Type`: the runner's, or `application/octet-stream` where the engine replaced it |
 | `queued` or `running` | `JobNotFinished` | 409, `code: job_not_finished`, `Retry-After: 1`, the job in the body |
 | `failed` or `uncertain` | `JobFailed`, as `jobs.run` would have raised it | The failure's status from [the failure table](#failures), the job in the body |
 | `succeeded`, its stored result past `expires_at` or purged | `ResultExpired` | 410, `code: result_expired`, the job in the body: its `ResultRef` still says what the result was |
@@ -795,7 +806,11 @@ bytes, and any URL inside them, go only to the job's owner and never into a log.
 ### Cancel
 
 `jobs.cancel(actor, job_id)` (REST: `POST /v1/jobs/{id}/cancel`) cancels a job that is still `queued`
-(D69 (3)). It needs `jobs.run` and the job's owner, as `POST /v1/jobs/{id}/usage` does. One conditional write ends the
+(D69 (3)). **Who may cancel** is who may run the job, by the two checks of `POST /v1/jobs/{id}/usage`:
+the `jobs.run` permission (403), then the [access policy](access.md#answers) on the job (404). With
+the default policy that is the job's owner, a tenant admin of the job's tenant and a clearinghouse
+admin; an auditor, which only reads, gets 403. Unlike the result, a cancel is not kept to the owner
+by a rule of the engine's own. One conditional write ends the
 job `failed`, with kind `abandoned` and reason `cancelled`: nothing was dispatched or paid, and its cost
 is `none`. Cancelling a cancelled job again answers with it, 200, and writes nothing. A job a worker has
 claimed, or one that ended another way, is not cancelled: `JobNotQueued`, 409, `code: job_not_queued`,
@@ -822,14 +837,14 @@ other is answered with it.
 | Left behind | On start | Why |
 | --- | --- | --- |
 | `queued` | Stays queued; the worker takes it | Nothing went out |
-| `running`, **no attempt** | Back to `queued` while it was claimed fewer than 3 times; then `failed`, `interrupted` | The attempt row is written before any runner call, so nothing went out. The claim count stops a job that brings the engine down before its first attempt from being claimed for ever |
+| `running`, **no attempt** | Back to `queued` while fewer than 3 of its claims count; then `failed`, `interrupted` | The attempt row is written before any runner call, so nothing went out. The count stops a job that brings the engine down before its first attempt from being claimed for ever. A claim given back by a job that only had to [wait](#running) does not count |
 | `running`, with an attempt | `uncertain` or `failed`, as for any job ([behavior](#behavior-the-contract-fixes), 3) | It may have run or paid. The engine never runs it again (no replacement execution) |
 
 `engine.stop()` first closes the worker's gate, before it waits for anything: from that call on no job
 is claimed, also not by a step that is half way through a page of the queue, and not while open
 streams are given their time to end. A submit is still accepted, and its job waits for the next start.
 Then it lets running async jobs end for up to `LPB_ASYNC_DRAIN_TIMEOUT_S` and cancels the rest: one
-stopped before its first attempt goes back to the queue, or, on its third claim, ends `failed`,
+stopped before its first attempt goes back to the queue, or, on the third claim that counts, ends `failed`,
 `interrupted`, as the next start would end it; any other ends as a cancelled immediate job does,
 `uncertain` when it may have paid. `stop()` returns once every write of an end has ended, also one
 whose task was cancelled while it wrote.
@@ -837,8 +852,8 @@ whose task was cancelled while it wrote.
 A claim is committed before the worker has its answer. A step that is cancelled in between, or whose
 claim fails after its commit, does not leave the job `running` with nobody running it: the job was the
 step's from before its claim, so no other step touches it, and nothing went out for it. It is
-resolved at once as a job stopped before its first attempt is, back to `queued` while it was claimed
-fewer than 3 times, then `failed`, `interrupted`. The worker is woken, so a job put back is looked at
+resolved at once as a job stopped before its first attempt is, back to `queued` while fewer than 3
+of its claims count, then `failed`, `interrupted`. The worker is woken, so a job put back is looked at
 again. If that write fails too, the worker keeps the job and resolves it at a later step, as it does
 [an end it could not write](#results-of-an-async-job).
 

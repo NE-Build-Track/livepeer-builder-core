@@ -147,10 +147,10 @@ could not be written. Every other 422 is byte for byte what FastAPI sends.
 
 | Route | Permission |
 | --- | --- |
-| `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read`. The result is an async job's stored answer ([engine.md](engine.md#results-of-an-async-job)) |
+| `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read`. The result is an async job's stored answer, and goes to the job's own actor only: an admin or an auditor reads another actor's job and gets 404 for its result ([engine.md](engine.md#results-of-an-async-job)) |
 | `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its tenant. Newest first, paged with `before` ([job history](engine.md#job-history)) |
 | `POST /v1/jobs/{id}/usage` | `jobs.run` (not `jobs.read`) |
-| `POST /v1/jobs/{id}/cancel` | `jobs.run` (not `jobs.read`): the job's owner cancels a queued async job ([engine.md](engine.md#cancel), ISS-26) |
+| `POST /v1/jobs/{id}/cancel` | `jobs.run` (not `jobs.read`): cancels a queued async job. With the default policy the job's owner, a tenant admin of its tenant and a clearinghouse admin may; an auditor may not ([engine.md](engine.md#cancel), ISS-26) |
 | `POST /v1/jobs` (including `mode=async`, which queues the job: [async jobs](engine.md#async-jobs)) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |
 | `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its tenant; summary and allowance take `?actor_id=` to name one |
@@ -174,8 +174,16 @@ from the app, so a route added later that names a tenant is held to the third ro
 can no longer name a tenant in a path at all.
 
 `GET /v1/jobs/{id}/result` and `POST /v1/jobs/{id}/cancel` say what they say of a job (409 while it
-has not ended, 410 for a result the engine does not hold) only to the job's owner: the two checks
-come first (ISS-26). Until then the result route answered 501.
+has not ended, 410 for a result the engine does not hold) only to a caller the two checks let
+through: they come first (ISS-26). Until then the result route answered 501.
+
+**A result is its owner's alone.** After the two checks, `GET /v1/jobs/{id}/result` (`jobs.result`)
+answers only the actor the job belongs to, in its tenant. Everybody else gets the 404 of the second
+check, whatever their kind of credential: an auditor, a tenant admin and a clearinghouse admin read
+the job's record and not its result. This one rule is the engine's and not the policy's, so a policy
+you supply cannot hand a result's bytes to anybody but the owner
+([engine.md](engine.md#results-of-an-async-job)). The cancel has no such rule: it answers whoever the
+policy lets run the job.
 
 Enterprises replace the policy for teams, organization admins or RBAC by implementing `AccessPolicy`.
 

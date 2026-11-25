@@ -68,7 +68,8 @@ curl -sS -X POST "$ENGINE/v1/jobs/$JOB/cancel" -H "Authorization: Bearer $KEY"  
 A repeat of the submit with the same `operation_ref` answers 200 with the same job and
 `Idempotent-Replayed: true`, so a submit whose answer was lost is safe to send again. The result route
 answers 409 with `Retry-After` until the job has ended, the job's failure once it failed, and 410 once
-the stored result has expired.
+the stored result has expired. It answers the key of the actor the job belongs to and no other: an
+admin's or an auditor's key reads the job (`GET /v1/jobs/{id}`) and gets 404 for its result.
 
 ## 3. Page through your history
 

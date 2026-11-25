@@ -109,7 +109,8 @@ async def test_a_job_for_an_app_nobody_serves_is_queued_and_waits_for_a_runner(s
     async with side() as engine:
         job = await engine.jobs.submit(ALICE, queued(app=NONE))
         assert job.state == "queued"
-        assert [await advance(engine), await advance(engine)] == [0, 0]
+        await advance(engine)  # the engine's worker looks at the job and gives it back
+        await advance(engine)
         waiting = await engine.jobs.get(ALICE, job.id)
         assert (waiting.state, waiting.failure, waiting.attempts) == ("queued", None, ())
         assert (await engine.costs.for_job(ALICE, job.id)).status == "pending"  # it may yet pay

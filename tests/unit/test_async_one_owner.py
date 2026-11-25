@@ -294,3 +294,49 @@ async def test_a_claim_that_finds_its_job_gone_gives_back_what_it_took(
     assert (engine.admission.running, lane.room, lane.holds(job.id)) == (0, 1, False)
     assert transport.calls == []
     assert (await engine.jobs.get(alice, job.id)).state == "failed"  # as the cancel left it
+
+
+async def test_a_step_driven_by_hand_that_outlasts_the_drain_is_stopped_and_what_it_claimed_settled(
+    make_engine: EngineFactory,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    clock: FixedClock,
+    on_a_file: EngineSupply,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A step somebody drives with ``run_once()`` has claimed one job and is writing its claim of a
+    second when the engine stops, and the database does not answer within the drain's time. The drain
+    gave up waiting and returned, ``stop()`` went on to close the store, and the step wrote against it
+    later, with a job left ``running``. The drain now stops such a step as it stops the engine's own
+    loop: both jobs are back in the queue, nothing runs, and only then does it return."""
+    engine = await make_engine(supply=on_a_file, async_workers=2, async_drain_timeout_s=0.05)
+    await allot(engine, alice)
+    first = await engine.jobs.submit(alice, queued(payload={"n": 1}))
+    clock.advance(1)
+    second = await engine.jobs.submit(alice, queued(payload={"n": 2}))
+    transport.steps = [echo, echo]
+    claim, written, never = engine.store.claim_job, asyncio.Event(), asyncio.Event()
+
+    async def the_second_claim_never_answers(job_id: Any, *args: Any, **kwargs: Any) -> Any:
+        claimed = await claim(job_id, *args, **kwargs)
+        if job_id == second.id:
+            written.set()
+            await never.wait()  # committed, and the answer does not come
+        return claimed
+
+    monkeypatch.setattr(engine.store, "claim_job", the_second_claim_never_answers)
+    step = asyncio.create_task(engine.jobs.worker.run_once())
+    await written.wait()
+    try:
+        await engine.jobs.worker.drain()
+
+        assert step.done()  # the drain did not return over a step that was still under way
+        assert [(await engine.jobs.get(alice, job.id)).state for job in (first, second)] == [
+            "queued",
+            "queued",
+        ]
+        assert (transport.calls, engine.admission.running) == ([], 0)
+        assert await step == 0  # the step was stopped, not its caller: it started nothing
+    finally:
+        step.cancel()
+        await asyncio.wait([step])

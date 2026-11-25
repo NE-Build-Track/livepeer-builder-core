@@ -11,7 +11,9 @@ the same paid call an immediate job runs (``services/dispatch.py``), in the engi
   requeue and the end of the job apply only while that number holds the job. A worker that lost the
   job writes nothing more for it and does not end it.
 - **Oldest first**, leaving out an app that is at its per-app limit and one no runner can take now, so
-  one busy or absent app does not hold up the others.
+  one busy or absent app does not hold up the others. An app nobody can run now is still looked at:
+  one of its jobs is claimed each poll interval, and the paid call says whether that job has to wait
+  (``_look``).
 - **Payment happens at dispatch, never while a job waits.** The actor's allocation is looked up when the
   job is claimed: one revoked or exhausted in the meantime fails the job unpaid.
 - **A job waits at most ``queue_ttl_s``**, for a worker, for a runner to be listed or to have room, or
@@ -34,9 +36,10 @@ import contextlib
 import functools
 import hashlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from livepeer_builder.contracts import Attempt, Failure, Job, ResultRef, RunnerReply
@@ -45,7 +48,8 @@ from livepeer_builder.errors import JobFailed
 from livepeer_builder.protocols import Clock, JobRepo
 from livepeer_builder.services.admission import AdmissionLimiter
 from livepeer_builder.services.async_held import STOPPED, End, Ends, Held, Waiting, log_lost
-from livepeer_builder.services.dispatch import ClaimLost, Dispatcher, NotNow
+from livepeer_builder.services.dispatch import ClaimLost, Dispatcher
+from livepeer_builder.services.job_runners import NotNow
 
 _LOG = logging.getLogger(__name__)
 
@@ -85,7 +89,7 @@ class AsyncJobWorker:
         self._ends = Ends(store, dispatcher)
         self._waiting = Waiting()  # the jobs not to be claimed again yet
         self._running: set[asyncio.Task[None]] = set()
-        self._steps: set[asyncio.Future[None]] = set()  # the steps under way, for ``drain``
+        self._steps: set[asyncio.Task[list[asyncio.Task[None]]]] = set()  # the steps under way, for ``drain``
         self._wake = asyncio.Event()
         self._halt = asyncio.Event()  # set by ``close``: what a loop that is backing off waits for
         self._loop: asyncio.Task[object] | None = None  # the task running ``run``, for ``drain``
@@ -164,7 +168,8 @@ class AsyncJobWorker:
 
     async def run_once(self) -> int:
         """One step: write the ends an earlier step could not, end the jobs that waited too long, claim
-        what there is room for, and wait for the jobs this step started. Returns how many it started."""
+        what there is room for, and wait for the jobs this step started. Returns how many it started:
+        none when the engine's stop ended the step, which puts back what it had claimed."""
         started = await self._start_ready()
         if started:
             await asyncio.wait(started)
@@ -181,37 +186,44 @@ class AsyncJobWorker:
     async def drain(self) -> None:
         """Engine stop: claim nothing more, let running jobs end for up to ``drain_timeout_s``, then cancel
         the rest. A cancelled job goes back to the queue if nothing went out for it, and otherwise ends
-        as a cancelled immediate one does: ``uncertain`` if it may have paid. Returns once every write of
-        a job's end has ended, also one its task no longer waits for, so the store is never closed
-        under one. An end the store still refuses is left to the next start."""
+        as a cancelled immediate one does: ``uncertain`` if it may have paid. A step that is under way,
+        the loop's or one somebody drives by hand, is given the same time and then cancelled, and what
+        it claimed goes back to the queue. Returns once no step is under way and every write of a job's
+        end has ended, also one its task no longer waits for, so the store is never closed under
+        either. An end the store still refuses is left to the next start."""
         self.close()
         patience = self.limits.drain_timeout_s
         loop, self._loop = self._loop, None
-        if loop is not None and not loop.done():  # let the step it is in finish: its claims then run
-            await asyncio.wait([loop], timeout=patience)
-            loop.cancel()
-            await asyncio.wait([loop])
-        if self._steps:  # a step somebody drives by hand: what it claimed is started before we look
-            await asyncio.wait(list(self._steps), timeout=patience)
-        running = list(self._running)
-        if running:
-            _, late = await asyncio.wait(running, timeout=patience)
-            for task in late:
-                task.cancel()
-            if late:
-                await asyncio.wait(late)
-            _LOG.info("drained async jobs", extra={"event": "jobs.async_drained", "cancelled": len(late)})
+        if loop is not None and not loop.done():  # let the step it is in finish, then end the loop
+            await _ended_within([loop], patience)
+        # a step driven by hand: before the running jobs are looked at, since it may hold a claim
+        await _ended_within(self._steps, patience)
+        if self._running:
+            late = await _ended_within(self._running, patience)
+            _LOG.info("drained async jobs", extra={"event": "jobs.async_drained", "cancelled": late})
         await self._ends.written()
         await self._ends.settle_owed()
 
     async def _start_ready(self) -> list[asyncio.Task[None]]:
+        """One step, in a task of the worker's own, so that ``drain`` can stop a step whoever drives
+        it. A caller that is cancelled takes its step with it. A step the drain cancelled started
+        nothing, and its caller is told so, not cancelled."""
+        self._admission.check_runs_jobs()  # an engine in its clearinghouse role runs no job
+        step = asyncio.create_task(self._step(), name="lpb-async-step")
+        self._steps.add(step)
+        step.add_done_callback(self._steps.discard)
+        try:
+            return await step
+        except asyncio.CancelledError:
+            if _being_cancelled():
+                raise
+            return []  # the engine's stop ended the step: what it claimed went back to the queue
+
+    async def _step(self) -> list[asyncio.Task[None]]:
         """Claim what there is room for, then start it. Every read and write of a step is done before
         any of its jobs starts, so a job's own writes never run beside the step's. A claim that raises
         does not stop the step: its job is left for later, the jobs behind it are claimed, what was
         claimed is started, and then the step raises what the first such claim raised."""
-        self._admission.check_runs_jobs()  # an engine in its clearinghouse role runs no job
-        done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        self._steps.add(done)
         claimed: list[Held] = []
         errors: dict[UUID, Exception] = {}  # the jobs whose claim raised in this step, and what it raised
         try:
@@ -221,8 +233,6 @@ class AsyncJobWorker:
             await self.count_queue()  # before any job starts: nothing else is writing yet
         finally:  # a claimed job runs, whatever stopped the step after its claim
             started = self._started(claimed)
-            self._steps.discard(done)
-            done.set_result(None)
         if (failed := _first(errors)) is not None:
             raise failed
         return started
@@ -257,9 +267,21 @@ class AsyncJobWorker:
                     continue
                 if self._dispatcher.waits(app):
                     absent.add(app)
+                    await self._look(job_id, app, claimed, errors)
                     moved = True
                     continue
                 moved = await self._claim_one(job_id, app, claimed, errors) or moved
+
+    async def _look(self, job_id: UUID, app: str, claimed: list[Held], errors: dict[UUID, Exception]) -> None:
+        """An app nobody can run now is set aside for the step, but not unseen: one of its jobs is
+        claimed all the same, once a poll interval, however often the loop is woken. Whether a job has
+        to wait is the paid call's to say, which knows the job's actor: one whose allocation was revoked
+        fails ``not_provisioned`` there, and one that does not pay runs on a runner that advertises no
+        room. A job that has to wait gives its claim back and is set aside, so the next look takes the
+        job behind it. So a queue of waiting jobs costs one claim an app in a poll interval."""
+        poll_s = self.limits.poll_s
+        if self._waiting.may_look(app, poll_s) and await self._claim_one(job_id, app, claimed, errors):
+            self._waiting.looked(app, poll_s)
 
     async def _claim_one(
         self, job_id: UUID, app: str, claimed: list[Held], errors: dict[UUID, Exception]
@@ -358,7 +380,7 @@ class AsyncJobWorker:
         except Exception as error:  # the worker's backstop too: a transport that ignored its timeout
             _LOG.exception("async job failed", extra={"event": "jobs.async_failed", "job_id": str(job.id)})
             return End(type(error).__name__)
-        self._waiting.forget(job.id)
+        self._waiting.ran(job.id, job.app)
         return None
 
     async def _keep(
@@ -394,6 +416,26 @@ class AsyncJobWorker:
             update={"location": RESULT_LOCATION.format(job_id=job.id), "expires_at": expires}
         )
         return await finish(job, "succeeded", None, kept, attempts, content=reply.content)
+
+
+async def _ended_within(tasks: Collection[asyncio.Task[Any]], patience: float) -> int:
+    """Wait up to ``patience`` for ``tasks`` to end, then cancel the ones still running and wait for
+    them. How many it cancelled."""
+    waiting = [task for task in tasks if not task.done()]
+    if not waiting:
+        return 0
+    _, late = await asyncio.wait(waiting, timeout=patience)
+    for task in late:
+        task.cancel()
+    if late:
+        await asyncio.wait(late)
+    return len(late)
+
+
+def _being_cancelled() -> bool:
+    """Whether the task that runs this is itself being cancelled."""
+    task = asyncio.current_task()
+    return task is not None and task.cancelling() > 0
 
 
 def _first(errors: dict[UUID, Exception]) -> Exception | None:

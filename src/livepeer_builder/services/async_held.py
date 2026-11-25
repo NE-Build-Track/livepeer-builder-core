@@ -170,11 +170,13 @@ class Waiting:
     and could not be dispatched for a reason that passes. Each waits ``poll_s``, and twice as long each
     time it is set aside again, up to ``MAX_WAIT_POLLS`` intervals, so a job that cannot run costs a
     claim now and then and never a loop. What it knows is forgotten once it is stale: it never grows
-    past the jobs set aside within that time."""
+    past the jobs set aside within that time. It also remembers when it last looked at a job of an app
+    nobody can run now (``may_look``): one look an app in a poll interval."""
 
     def __init__(self) -> None:
         self._until: dict[UUID, tuple[float, int]] = {}  # job -> (loop time it is due, times set aside)
         self._stale_s = 0.0
+        self._looked: dict[str, float] = {}  # app -> the loop time one of its jobs was last looked at
 
     def put(self, job_id: UUID, poll_s: float) -> None:
         times = self._until.get(job_id, (0.0, 0))[1]
@@ -187,8 +189,24 @@ class Waiting:
         waits = self._until.get(job_id)
         return waits is None or waits[0] <= asyncio.get_running_loop().time()
 
-    def forget(self, job_id: UUID) -> None:
+    def ran(self, job_id: UUID, app: str) -> None:
+        """The job was dispatched: it did not have to wait. It is forgotten, and so is the look at its
+        app, so the next job of that app is looked at now and not a poll interval on."""
         self._until.pop(job_id, None)
+        self._looked.pop(app, None)
+
+    def may_look(self, app: str, poll_s: float) -> bool:
+        """Whether a job of ``app``, an app nobody can run now, may be claimed to see whether it has to
+        wait: when none of its jobs was looked at within the last ``poll_s``."""
+        looked = self._looked.get(app)
+        return looked is None or asyncio.get_running_loop().time() - looked >= poll_s
+
+    def looked(self, app: str, poll_s: float) -> None:
+        """A job of ``app`` was just claimed for a look. A look older than ``poll_s`` says nothing any
+        more and is forgotten, so what is remembered is the apps looked at within one interval."""
+        now = asyncio.get_running_loop().time()
+        self._looked = {seen: at for seen, at in self._looked.items() if now - at < poll_s}
+        self._looked[app] = now
 
     def set_aside(self) -> int:
         """How many jobs are set aside and not due: the rows of a page of the queue they may take up.

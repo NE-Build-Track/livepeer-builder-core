@@ -14,12 +14,14 @@ Rules this module enforces (docs/contracts/engine.md#behavior-the-contract-fixes
    that does not, and treats the payment as unknown.
 
 7. A job that is not a stream has one deadline, its ``timeout_s`` counted from its start (an async
-   job's from its claim): each attempt is given only the time left, and none starts after it.
+   job's from its claim): each attempt is given only the time left, measured once its row is written,
+   and no runner is called after it.
 
 An async job runs under a claim (ISS-26), and ``dispatch`` is told its number. Every write for the job
 then carries the number and applies only while that claim holds the job: a miss is ``ClaimLost``, and
 nothing more is written. And a job that cannot be dispatched for a reason that passes, before anything
-was attempted, is not failed: ``NotNow`` hands it back to the worker, which lets it wait.
+was attempted, is not failed: ``NotNow`` hands it back to the worker, which lets it wait
+(``services/job_runners.py``, which says who could run a job).
 """
 
 import asyncio
@@ -45,7 +47,7 @@ from livepeer_builder.contracts import (
     RunnerReply,
 )
 from livepeer_builder.contracts.http import response_content_type
-from livepeer_builder.errors import JobFailed, NotProvisioned, RunnerCallError
+from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.protocols import (
     BoundedRunnerTransport,
     Clock,
@@ -56,7 +58,7 @@ from livepeer_builder.protocols import (
     SelectionPolicy,
     StreamingRunnerTransport,
 )
-from livepeer_builder.services.discovery import DiscoveryService, capped_first, paid_candidates
+from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.evidence import SignedSessionRecorder, store_evidence, with_evidence
 from livepeer_builder.services.failover import (
     Candidates,
@@ -66,6 +68,7 @@ from livepeer_builder.services.failover import (
     returned_failover,
     stream_timings,
 )
+from livepeer_builder.services.job_runners import JobRunners, Nobody
 from livepeer_builder.services.streams import StreamLimits
 from livepeer_builder.utils import run_shielded
 
@@ -85,12 +88,6 @@ class ClaimLost(Exception):
         super().__init__(f"job {job_id}: claim {claim} no longer holds it")
 
 
-class NotNow(Exception):
-    """A claimed async job cannot be dispatched for a reason that passes, and nothing was attempted: no
-    runner is listed for its app, every runner that would be paid advertises no room, or the actor's
-    credential could not be read. The job is not failed: its worker gives the claim back."""
-
-
 class Dispatcher:
     def __init__(
         self,
@@ -104,13 +101,11 @@ class Dispatcher:
         max_paid_attempts: int = 2,
     ) -> None:
         self._store = store
-        self._discovery = discovery
         self._transport = transport
-        self._selection = selection
         self._credentials = credentials
         self._clock = clock
         self._stream_limits = stream_limits or StreamLimits()
-        self._max_paid_attempts = max_paid_attempts  # D55
+        self._runners = JobRunners(discovery, transport, selection, credentials, max_paid_attempts)
         # Decided once, as streaming is (D33): only a transport with call_bounded reads with a bound.
         self._bounded = transport if isinstance(transport, BoundedRunnerTransport) else None
 
@@ -120,13 +115,8 @@ class Dispatcher:
         await self._credentials.credential(actor)
 
     def waits(self, app: str) -> bool:
-        """Whether a queued job of ``app`` could not be dispatched now, for a reason that passes: no
-        runner is listed for it, or every runner an attempt would pay advertises no room. The async
-        worker leaves such a job in the queue, as it leaves one whose app is at its limit (ISS-26)."""
-        candidates = self._discovery.candidates(app)
-        if not candidates:
-            return True
-        return bool(getattr(self._transport, "pays", True)) and not paid_candidates(candidates)
+        """Whether a queued job of ``app`` that pays could not be dispatched now (``JobRunners.waits``)."""
+        return self._runners.waits(app)
 
     async def _candidates(
         self,
@@ -138,44 +128,11 @@ class Dispatcher:
     ) -> tuple[Candidates, PaymentKey]:
         """Who could run this, and with which credential. Fails the job (before payment) when nobody
         can. An async job (``claim``) is not failed for what may pass: that is ``NotNow``."""
-        candidates = self._discovery.candidates(request.app)
-        if not candidates:
-            raise await self._nobody(
-                job, attempts, claim, "no_offering", f"no runner advertises app {request.app!r}"
-            )
         try:
-            credential = await self._credentials.credential(actor)
-        except NotProvisioned as exc:
-            raise await self.fail(job, attempts, "not_provisioned", str(exc), claim=claim) from exc
-        except Exception as blip:
-            if claim is None:
-                raise
-            raise NotNow(f"the actor's credential could not be read ({type(blip).__name__})") from blip
-        paid = credential.token is not None and getattr(self._transport, "pays", True)  # no signer, no pay
-        # A runner advertising zero capacity stays a candidate (#114, C17): the hint can lag, selection
-        # tries it last, and if every runner refuses the job fails ``refused`` through failover. A job
-        # that pays is not tried on runners that all advertise zero: a full runner's refusal can cost a
-        # ticket.
-        if paid and not (candidates := paid_candidates(candidates)):
-            raise await self._nobody(
-                job, attempts, claim, "no_capacity", f"every runner for {request.app!r} is busy"
-            )
-        ordered = tuple(self._selection.order(candidates, request))
-        if paid:  # a runner with no usable ceiling is refused at its 402 (D62)
-            ordered = capped_first(ordered)
-        if not ordered:  # an enterprise SelectionPolicy may filter every runner out
-            message = f"no runner for {request.app!r} selected"
-            raise await self.fail(job, attempts, "no_offering", message, claim=claim)
-        return Candidates(ordered, request.max_attempts, self._max_paid_attempts, job.id), credential
-
-    async def _nobody(
-        self, job: Job, attempts: list[Attempt], claim: int | None, kind: FailureKind, message: str
-    ) -> "NotNow | JobFailed":
-        """No runner can take the job now. An immediate job or a stream fails with ``kind``; an async
-        job waits for one, so it is handed back."""
-        if claim is not None:
-            return NotNow(message)
-        return await self.fail(job, attempts, kind, message)
+            return await self._runners.choose(job.id, actor, request, queued=claim is not None)
+        except Nobody as nobody:
+            failed = await self.fail(job, attempts, nobody.kind, str(nobody), claim=claim)
+            raise failed from nobody
 
     async def _start_attempt(
         self,
@@ -207,21 +164,47 @@ class Dispatcher:
         return attempt
 
     async def _in_time(
-        self, job: Job, request: JobRequest, attempts: list[Attempt], deadline: float, claim: int | None
+        self,
+        job: Job,
+        request: JobRequest,
+        attempts: list[Attempt],
+        deadline: float,
+        claim: int | None,
+        *,
+        written: bool = False,
     ) -> JobRequest:
         """The request the next attempt is called with: its ``timeout_s`` is the time left until
         ``deadline``, so a job's attempts share one ``timeout_s`` between them, the whole job's. With
         none left the job ends ``timeout`` here, and no runner is called or paid again. The attempts
-        before this one failed over, so none of them left the work in doubt: the job is ``failed``."""
+        that were called failed over, so none of them left the work in doubt: the job is ``failed``.
+
+        It is asked twice for each attempt: before the attempt's row is written, so that no row is
+        written for a call that will not be made, and with ``written`` once it is, because that write
+        takes time and the transport counts its timeout from the call. A row already written is then
+        ended as the call it stands for never having been made (``_never_called``)."""
         left = deadline - asyncio.get_running_loop().time()
         if left > 0:
             return request.model_copy(update={"timeout_s": left})
+        called = attempts
+        if written:
+            called = attempts[:-1]
+            await self._never_called(attempts)
         failure = Failure(
             kind="timeout",
-            message=f"timeout_s ran out before {'another' if attempts else 'a'} runner was called",
+            message=f"timeout_s ran out before {'another' if called else 'a'} runner was called",
             payment_sent=any(attempt.payment_sent for attempt in attempts),
         )
-        raise JobFailed(await self.finish(job, "failed", failure, None, attempts, claim=claim))
+        failed = JobFailed(await self.finish(job, "failed", failure, None, attempts, claim=claim))
+        raise failed
+
+    async def _never_called(self, attempts: list[Attempt]) -> None:
+        """End the attempt whose row was written and whose runner was then not called. It is recorded
+        ``refused``, unpaid, with no status code, no session and no timings: the engine refused the
+        call itself, before a request left it. Everything that outcome says to a reader is true here:
+        nothing ran, nothing was paid, and the same reference may run again. ``timeout`` would say a
+        runner was asked and did not answer in time, which may have run the work."""
+        attempts[-1] = attempts[-1].model_copy(update={"outcome": "refused", "ended_at": self._clock.now()})
+        await self._store.finish_attempt(attempts[-1])
 
     async def _attempt_failed(
         self,
@@ -289,8 +272,9 @@ class Dispatcher:
         candidates, credential = await self._candidates(job, actor, request, attempts, claim)
         last: RunnerCallError | None = None
         for number, runner in enumerate(candidates, start=1):
-            timed = await self._in_time(job, request, attempts, deadline, claim)
+            await self._in_time(job, request, attempts, deadline, claim)
             await self._start_attempt(job, number, runner, credential, attempts, claim)
+            timed = await self._in_time(job, request, attempts, deadline, claim, written=True)
             recorder = SignedSessionRecorder(self._store, attempts)
             try:
                 reply = await self._call(runner, timed, credential.token, recorder, keep_bytes)

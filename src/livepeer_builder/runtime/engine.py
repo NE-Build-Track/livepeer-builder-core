@@ -210,15 +210,18 @@ class BuilderEngine:
             raise RuntimeError(mismatch)
 
     async def _retention_loop(self) -> None:
-        """Purge every ``retention_interval_s`` while a retention setting is on. The first purge runs at
-        start where it did before ISS-26: with job or usage retention on. Results retention is on by
-        default (D69 (6)), and alone it waits one interval first, so an engine with the default settings
-        adds no write at start beside its caller's own first ones. An expired result is never served
-        meanwhile (``read_result`` reads its ``expires_at``): only its space waits."""
+        """Purge every ``retention_interval_s``, in every engine that runs jobs. The first purge runs at
+        start where it did before ISS-26: with job or usage retention on. Otherwise it waits one
+        interval first, so an engine with the default settings, where results retention alone is on
+        (D69 (6)), adds no write at start beside its caller's own first ones.
+
+        The loop does not ask whether a setting is on. A stored result says itself when it goes
+        (``expires_at``, stamped when its job ended), and one stored while results had a time keeps it
+        after every retention setting is turned off: the purge deletes it when that time comes. An
+        expired result is never served meanwhile (``read_result`` reads its ``expires_at``): only its
+        space waits. With no setting on and no such result, a purge deletes nothing."""
         settings = self.settings
         at_start = settings.retention_jobs_days is not None or settings.retention_usage_days is not None
-        if not at_start and settings.retention_results_days is None:
-            return
         if not at_start and await self._stopped_within(settings.retention_interval_s):
             return
         while not self._stop.is_set():

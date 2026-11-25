@@ -68,6 +68,7 @@ async def until_purged(caplog: pytest.LogCaptureFixture, count: int) -> None:
     ("retention", "at_start"),
     [
         ({}, False),  # results retention alone, the default: the first purge waits an interval
+        ({"retention_results_days": None}, False),  # no retention setting at all: it waits one too
         ({"retention_jobs_days": 30}, True),  # job retention purges at start, as before
         ({"retention_usage_days": 30}, True),
     ],
@@ -76,7 +77,7 @@ async def test_a_purge_runs_at_start_only_where_one_did_before(
     store: SqlStore,
     clock: FixedClock,
     caplog: pytest.LogCaptureFixture,
-    retention: dict[str, int],
+    retention: dict[str, int | None],
     at_start: bool,
 ) -> None:
     settings = EngineSettings.model_validate(
@@ -114,3 +115,34 @@ async def test_results_retention_alone_purges_every_interval(
         await engine.start()
         await until_purged(caplog, 3)
         await engine.stop()
+
+
+async def test_a_result_that_has_its_time_is_deleted_when_no_retention_setting_is_on(
+    make_engine: EngineFactory, alice: ActorContext, transport: ScriptedTransport, clock: FixedClock
+) -> None:
+    """The result was stored while results were kept for two days, so it says when it goes. Then every
+    retention setting was turned off. The retention loop ended at once with no setting on, so nothing
+    deleted the bytes once they were due, though no reader was served them any more. The loop runs in
+    every engine that runs jobs: what already has its time is deleted when that time comes."""
+    before = await make_engine(retention_results_days=2)
+    await allot(before, alice)
+    transport.steps = [image()]
+    job_id = await finished(before, alice)
+    assert await stored_results(before) == 1
+
+    settings = {"retention_results_days": None, "retention_interval_s": 0.02}
+    engine = await make_engine(**settings)  # on the same database, with no retention setting on
+    assert (engine.settings.retention_jobs_days, engine.settings.retention_usage_days) == (None, None)
+    clock.advance(2 * 86400)
+    with pytest.raises(ResultExpired):  # past its time: served to nobody, and still stored
+        await engine.jobs.result(alice, job_id)
+    assert await stored_results(engine) == 1
+
+    await engine.start()
+    for _ in range(500):  # a condition, with a bound of five seconds
+        if await stored_results(engine) == 0:
+            break
+        await asyncio.sleep(0.01)
+
+    assert await stored_results(engine) == 0
+    assert (await engine.jobs.get(alice, job_id)).state == "succeeded"  # the job keeps its record

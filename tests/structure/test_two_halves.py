@@ -64,6 +64,7 @@ WORK = {
     "services/admission.py",
     "services/async_held.py",  # a job the worker holds, and the end the worker owes it (ISS-26)
     "services/async_jobs.py",  # the worker that runs queued jobs (ISS-26)
+    "services/job_runners.py",  # who could run a job, and with which credential
     "services/cost_classes.py",  # the cost class of each attempt, a pure function
     "services/cost_window.py",
     "services/costs.py",

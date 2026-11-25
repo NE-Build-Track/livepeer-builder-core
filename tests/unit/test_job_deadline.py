@@ -12,11 +12,12 @@ No test here waits: ``LoopTime`` moves the event loop's clock, which the deadlin
 
 import asyncio
 from collections.abc import Callable
+from typing import Any
 
 import pytest
 
 from livepeer_builder import EngineSupply
-from livepeer_builder.contracts import ActorContext, JobRequest, PaymentKey, Runner, RunnerReply
+from livepeer_builder.contracts import ActorContext, Attempt, JobRequest, PaymentKey, Runner, RunnerReply
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.protocols import OnSigned
 from livepeer_builder.testing import ScriptedTransport, runner
@@ -171,3 +172,81 @@ async def test_a_paid_attempt_that_timed_out_still_ends_the_job_uncertain_and_is
 
     assert failed.value.job.state == "uncertain"
     assert len(transport.calls) == 1
+
+
+def the_attempt_write_takes(
+    engine: Any, monkeypatch: pytest.MonkeyPatch, loop_time: LoopTime, seconds: float, *, on: int = 1
+) -> None:
+    """The store writes attempt number ``on`` and only answers when ``seconds`` of the job's time have
+    gone: a slow database, once, between the engine's look at the clock and its call to the runner."""
+    start_attempt, slow_writes = engine.store.start_attempt, [seconds]
+
+    async def slow(attempt: Attempt, **fence: Any) -> Any:
+        written = await start_attempt(attempt, **fence)
+        if attempt.number == on and slow_writes:
+            loop_time.advance(slow_writes.pop())
+        return written
+
+    monkeypatch.setattr(engine.store, "start_attempt", slow)
+
+
+async def test_no_runner_is_called_when_the_time_ran_out_while_the_attempt_was_being_written(
+    make_engine: EngineFactory,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    loop_time: LoopTime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The time left was measured, and then the write of the attempt row took all of it. The runner
+    was still called, after the deadline, with what had been left before the write. Now the time is
+    measured again once the row is written: the runner is not called, the row says so, and the job
+    ends ``timeout``, unpaid. Nothing reached a runner, so the same reference may run again."""
+    engine = await make_engine()
+    await allot(engine, alice)
+    the_attempt_write_takes(engine, monkeypatch, loop_time, 31)
+    transport.steps = [ScriptedTransport.ok(), ScriptedTransport.ok()]
+    request = JobRequest(app=APP, timeout_s=30, operation_ref="order-1")
+
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, request)
+
+    job = failed.value.job
+    assert job.failure is not None
+    assert (job.state, job.failure.kind, job.failure.payment_sent) == ("failed", "timeout", False)
+    assert job.failure.message == "timeout_s ran out before a runner was called"
+    assert transport.calls == []  # no runner was called after the deadline
+    (attempt,) = job.attempts  # the row that was written before the call that was never made
+    assert (attempt.outcome, attempt.payment_sent, attempt.status_code) == ("refused", False, None)
+    assert (attempt.sessions, attempt.timings, attempt.ended_at) == ((), None, engine.clock.now())
+    assert await engine.jobs.get(alice, job.id) == job
+    assert (await engine.costs.for_job(alice, job.id)).status == "none"
+    assert engine.admission.running == 0
+
+    again = await engine.jobs.run(alice, request)  # it never reached a runner: the reference runs again
+    assert (again.job.state, again.job.id != job.id, len(transport.calls)) == ("succeeded", True, 1)
+
+
+async def test_a_failover_whose_attempt_write_used_up_the_time_calls_no_second_runner(
+    make_engine: EngineFactory,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    loop_time: LoopTime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = await make_engine(TWO_ORCHESTRATORS)
+    await allot(engine, alice)
+    the_attempt_write_takes(engine, monkeypatch, loop_time, 31, on=2)
+    transport.steps = [refusal(paid=True), ScriptedTransport.ok()]
+
+    with pytest.raises(JobFailed) as failed:
+        await engine.jobs.run(alice, JobRequest(app=APP, timeout_s=30, max_attempts=2))
+
+    job = failed.value.job
+    assert job.failure is not None
+    assert (job.state, job.failure.kind, job.failure.payment_sent) == ("failed", "timeout", True)
+    assert job.failure.message == "timeout_s ran out before another runner was called"
+    assert len(transport.calls) == 1  # the runner that refused, and no other
+    assert [(a.outcome, a.payment_sent, a.status_code) for a in job.attempts] == [
+        ("refused", True, 503),
+        ("refused", False, None),  # written, and never called
+    ]

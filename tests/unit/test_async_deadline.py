@@ -25,6 +25,7 @@ from tests.unit.test_job_deadline import (  # noqa: F401 - loop_time: a fixture
     LoopTime,
     loop_time,
     refuses_after,
+    the_attempt_write_takes,
     timeouts_given,
 )
 
@@ -128,3 +129,28 @@ async def test_a_transport_that_ignores_its_timeout_does_not_hold_a_worker_for_e
     assert ended.failure.message == "engine error: TimeoutError"
     assert [(a.outcome, a.payment_sent) for a in ended.attempts] == [("in_flight", True)]
     assert (len(never_answers.calls), engine.admission.running) == (1, 0)
+
+
+async def test_an_async_job_calls_no_runner_when_its_attempt_write_used_up_its_time(
+    make_engine: EngineFactory,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    loop_time: LoopTime,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """For an async job the worker's backstop would otherwise cancel a call that began after the
+    deadline, when its payment may already have gone out. No call begins: the job ends ``timeout``,
+    ``failed``, with nothing paid, and its attempt row says the runner was never called."""
+    engine = await make_engine()
+    await allot(engine, alice)
+    the_attempt_write_takes(engine, monkeypatch, loop_time, 31)
+    transport.steps = [ScriptedTransport.ok()]
+    job = await engine.jobs.submit(alice, queued(timeout_s=30))
+
+    assert await engine.jobs.worker.run_once() == 1
+
+    ended = await engine.jobs.get(alice, job.id)
+    assert ended.failure is not None
+    assert (ended.state, ended.failure.kind, ended.failure.payment_sent) == ("failed", "timeout", False)
+    assert [(a.outcome, a.payment_sent, a.status_code) for a in ended.attempts] == [("refused", False, None)]
+    assert (transport.calls, engine.admission.running) == ([], 0)

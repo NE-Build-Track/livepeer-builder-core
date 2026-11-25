@@ -2,13 +2,20 @@
 runs what is queued, since the fake has no worker and no loop.
 
 It follows the engine's rules for the API's shape: a queued job reads back ``queued`` and costs
-``pending``; ``advance()`` ends it as its script says, with a ``stored`` result when it succeeds;
-``result`` answers the stored bytes, ``JobNotFinished`` before the end, ``JobFailed`` for a failure and
-``ResultExpired`` for an immediate job, whose result was never kept; ``cancel`` ends a queued job
-``failed`` with reason ``cancelled`` and refuses any other; and a repeated ``operation_ref`` returns
-the job it names. It does not model the queue's limits: script a full queue with
-``Raises(NoCapacity(...))``, which is raised at ``submit``, and an actor with no allocation with
-``Fails(kind="not_provisioned")``, which fails the job at ``submit`` as the engine does.
+``pending``; ``advance()`` ends it as its script says, with a ``stored`` result when it succeeds, which
+expires 7 days after the job ended, as with the engine's default ``LPB_RETENTION_RESULTS_DAYS``;
+``result`` answers the stored bytes to the job's own actor, with the content type a header can hold
+and ``data`` worked out from the bytes, ``JobNotFinished`` before the end, ``JobFailed`` for a failure
+and ``ResultExpired`` for an immediate job, whose result was never kept; ``cancel`` ends a queued job
+``failed`` with reason ``cancelled`` and refuses any other; a repeated ``operation_ref`` returns the
+job it names; and ``health()`` counts the jobs that wait. A paid answer the engine did not keep is
+scripted ``Fails(kind="result_not_stored")``: the attempt succeeded, the job failed, and its reference
+keeps the answer's size and hash.
+
+It does not model the queue's limit, admission, a restart, retention, the number of a claim or a
+deadline: script a full queue with ``Raises(NoCapacity(...))``, which is raised at ``submit``, an actor
+with no allocation with ``Fails(kind="not_provisioned")``, which fails the job at ``submit`` as the
+engine does, and an expired result with ``expire_results()``.
 
 A queued job whose app no runner serves waits, as in the engine, which does not fail a queued job for
 what may pass: ``advance()`` leaves a job scripted ``Fails(kind="no_offering")`` queued, however often
@@ -30,12 +37,22 @@ from livepeer_builder.contracts import (
     JobState,
     Operation,
 )
+from livepeer_builder.contracts.http import response_content_type
 from livepeer_builder.errors import InvalidRequest, JobFailed, JobNotFinished, JobNotQueued, ResultExpired
 from livepeer_builder.protocols import AccessPolicy
 from livepeer_builder.services.failover import attempt_verdict
 from livepeer_builder.services.operations import async_repeat
+from livepeer_builder.services.ownership import check_result_owner
 from livepeer_builder.services.request_identity import request_fingerprint
-from livepeer_builder.testing.scripts import UNCERTAIN_OUTCOMES, Fails, Raises, Reply, attempt_outcome
+from livepeer_builder.testing.scripts import (
+    NOT_STORED,
+    UNCERTAIN_OUTCOMES,
+    Fails,
+    Raises,
+    Reply,
+    attempt_outcome,
+)
+from livepeer_builder.utils import json_body
 
 RESULT_LOCATION = "/v1/jobs/{job_id}/result"  # as the engine's (services/async_jobs.py)
 CANCELLED = "cancelled"
@@ -43,6 +60,8 @@ CANCELLED = "cancelled"
 
 def scripted_failure(scripted: Fails) -> tuple[JobState, Failure]:
     """The state and the failure a scripted ``Fails`` leaves on its job, by the engine's rules."""
+    if scripted.kind == NOT_STORED:  # the runner answered 200 and was paid: the failure is the engine's
+        return "failed", Failure(kind=NOT_STORED, message=scripted.message, payment_sent=True)
     failure = Failure(
         kind=scripted.kind,
         message=scripted.message,
@@ -164,7 +183,9 @@ class FakeQueue:
                 self.record(actor, request, "succeeded", None, reply=scripted, queued=job)
                 self._results[job_id] = scripted
             elif isinstance(scripted, Fails):
-                self.record(actor, request, *scripted_failure(scripted), queued=job)
+                self.record(
+                    actor, request, *scripted_failure(scripted), reply=_not_kept(scripted), queued=job
+                )
             else:  # the engine's worker raises nothing: an error it meets ends the job
                 failure = Failure(kind="runner_error", message="engine error")
                 self.record(actor, request, "failed", failure, queued=job)
@@ -173,8 +194,10 @@ class FakeQueue:
     async def result(  # NOSONAR - async by protocol (JobsApi); the fake awaits nothing
         self, actor: ActorContext, job_id: UUID
     ) -> JobResult:
-        """The engine's rules (ISS-26): the stored bytes of a succeeded async job, and nothing else."""
+        """The engine's rules (ISS-26): the stored bytes of a succeeded async job, and nothing else, for
+        the job's own actor only."""
         job = self.owned(actor, Operation.JOBS_READ, job_id)
+        check_result_owner(actor, job)
         if job.state in ("queued", "running"):
             raise JobNotFinished(job)
         if job.state != "succeeded":
@@ -182,8 +205,13 @@ class FakeQueue:
         if job.result is None or job_id not in self._results:
             raise ResultExpired(job, "the result of an immediate job is returned once and not kept")
         kept = self._results[job_id]
-        return JobResult(
-            job=job, status_code=200, content=kept.content, content_type=kept.content_type, data=kept.data
+        content_type = response_content_type(kept.content_type)  # as the job's record has it (#158)
+        return JobResult(  # ``data`` is what the stored bytes say, as in the engine: never ``Reply.data``
+            job=job,
+            status_code=200,
+            content=kept.content,
+            content_type=content_type,
+            data=json_body(kept.content, content_type),
         )
 
     async def cancel(  # NOSONAR - async by protocol (JobsApi); the fake awaits nothing
@@ -203,7 +231,19 @@ class FakeQueue:
         self._jobs[job_id] = ended
         return ended
 
+    def queued_stats(self) -> tuple[int, float | None]:
+        """How many jobs wait, and for how long the oldest has: what the engine's health reports."""
+        waiting = [self._jobs[job_id].created_at for job_id in self._waiting]
+        if not waiting:
+            return 0, None
+        return len(waiting), max((datetime.now(UTC) - min(waiting)).total_seconds(), 0.0)
+
     def expire_results(self) -> None:
         """Drop every stored result, as the engine's retention does once ``LPB_RETENTION_RESULTS_DAYS``
         have passed. The jobs keep their record, and ``result`` then raises ``ResultExpired``."""
         self._results.clear()
+
+
+def _not_kept(scripted: Fails) -> Reply | None:
+    """The answer of a job scripted ``result_not_stored``, whose shape its reference keeps: ``body``."""
+    return Reply(content=(scripted.body or "").encode()) if scripted.kind == NOT_STORED else None

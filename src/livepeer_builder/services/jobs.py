@@ -60,7 +60,12 @@ from livepeer_builder.services.operations import (
     claim_async_operation,
     claim_operation,
 )
-from livepeer_builder.services.ownership import check_owner, job_resource, sees_every_actor
+from livepeer_builder.services.ownership import (
+    check_owner,
+    check_result_owner,
+    job_resource,
+    sees_every_actor,
+)
 from livepeer_builder.services.request_identity import request_fingerprint
 from livepeer_builder.services.streams import JobStream, Streaming, StreamLimits
 from livepeer_builder.services.usage_reports import report_once
@@ -244,11 +249,14 @@ class JobService:
         return None
 
     async def result(self, actor: ActorContext, job_id: UUID) -> JobResult:
-        """The stored result of an async job (ISS-26), after the permission and ownership checks (D44).
+        """The stored result of an async job (ISS-26), after the permission and ownership checks (D44),
+        and for the job's own actor only: whoever else may read the job as a record, an admin or an
+        auditor too, gets the ``NotFound`` of a job that is not theirs (``check_result_owner``).
         A job that has not ended is ``JobNotFinished``; one that failed or is uncertain is ``JobFailed``,
         as ``run`` would have raised it; a succeeded job whose bytes the engine does not hold is
         ``ResultExpired``: an immediate job's were never kept, and a stored result has its time."""
         job = await self._owned(actor, Operation.JOBS_READ, job_id)
+        check_result_owner(actor, job)
         if job.state in ("queued", "running"):
             raise JobNotFinished(job)
         if job.state != "succeeded":

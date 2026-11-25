@@ -73,6 +73,8 @@ async def fake(
     paid: bool = False,
     error: RunnerError | None = None,
     payment: PaymentReason | None = None,
+    content_type: str | None = None,
+    not_stored: bytes | None = None,
 ) -> AsyncIterator[ActorApi]:
     cut = Fails(message="cut", status_code=None)  # a runner error after the first byte, no status of its own
     script: tuple[bytes | Fails, ...] = (*(chunks or ()), *((cut,) if fails_mid_stream else ()))
@@ -83,6 +85,12 @@ async def fake(
         kind: FailureKind = "payment_unknown" if payment == "signer_unknown" else "payment"
         failed = Fails(kind=kind, reason=payment, status_code=None)
     reply: Reply | Fails = failed if fails or error or payment else Reply(chunks=script, data=data)
+    if isinstance(reply, Reply) and data is not None:  # as the real side: the content is the data's JSON
+        reply = Reply(content=json.dumps(data).encode(), chunks=script, data=data)
+    if content_type is not None:  # the type the runner sent, which a header may not be able to hold
+        reply = Reply(content_type=content_type)
+    if not_stored is not None:  # an async job's answer, paid for, that the engine did not keep (ISS-26)
+        reply = Fails(kind="result_not_stored", body=not_stored.decode())
     replies = {(APP, ""): reply, (NONE, ""): Fails(kind="no_offering", status_code=None)}
     yield FakeEngine(replies=replies, runners=RUNNERS, streaming=chunks is not None)
 
@@ -97,9 +105,18 @@ async def real(
     paid: bool = False,
     error: RunnerError | None = None,
     payment: PaymentReason | None = None,
+    content_type: str | None = None,
+    not_stored: bytes | None = None,
 ) -> AsyncIterator[ActorApi]:
     transport: ScriptedTransport
-    if payment is not None:  # what the Live Runner transport raises for each reason (D58)
+    settings: dict[str, Any] = {}
+    if not_stored is not None:  # one byte more than the engine stores
+        settings["async_result_max_bytes"] = len(not_stored) - 1
+        transport = ScriptedTransport([ScriptedTransport.ok(not_stored)])
+    elif content_type is not None:
+        typed = ScriptedTransport.ok().model_copy(update={"content_type": content_type})
+        transport = ScriptedTransport([typed, typed])
+    elif payment is not None:  # what the Live Runner transport raises for each reason (D58)
         unknown = payment == "signer_unknown"
         reason = None if unknown else payment
         refusal = RunnerCallError("payment", "m", payment_sent=False, payment_unknown=unknown, reason=reason)
@@ -121,7 +138,7 @@ async def real(
         transport = ScriptedTransport([ScriptedTransport.ok(body).model_copy(update={"data": data})])
     else:
         transport = ScriptedTransport([ScriptedTransport.ok(), ScriptedTransport.ok()])
-    async with make_engine(runners=RUNNERS, supply=EngineSupply(transport=transport)) as engine:
+    async with make_engine(runners=RUNNERS, supply=EngineSupply(transport=transport), **settings) as engine:
         amount = Money(amount=Decimal("5"), currency="USD")
         request = AllotRequest(
             operation_ref="allot:default:alice",

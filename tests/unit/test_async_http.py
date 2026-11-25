@@ -120,6 +120,27 @@ async def test_the_result_route_answers_the_stored_bytes_with_their_type(service
     assert other.status_code == 404
 
 
+@pytest.mark.parametrize("kind", ["auditor", "tenant_admin", "clearinghouse_admin"])
+async def test_only_the_owner_is_served_a_results_bytes_and_a_reader_of_the_record_gets_404(
+    kind: str, service: Service, admin: ActorContext
+) -> None:
+    """``GET /v1/jobs/{id}`` answers an auditor and an admin with another actor's job. Its result
+    route answers them as it answers anybody who is not the owner: 404, with none of the bytes."""
+    assert service.engine.keys is not None
+    key = await service.engine.keys.issue(admin, kind=kind, actor_id="desk", operation_ref=f"key-{kind}")  # type: ignore[arg-type]
+    reader = {"Authorization": f"Bearer {key.token}"}
+    service.transport.steps = [echo]
+    job_id = (await service.submit()).json()["id"]
+    await service.engine.jobs.worker.run_once()
+
+    record = await service.client.get(f"/v1/jobs/{job_id}", headers=reader)
+    assert (record.status_code, record.json()["state"]) == (200, "succeeded")
+    refused = await service.client.get(f"/v1/jobs/{job_id}/result", headers=reader)
+    assert (refused.status_code, refused.json()) == (404, {"error": f"job {job_id} not found"})
+    assert b'"n"' not in refused.content
+    assert (await service.result(job_id)).content == b'{"n": 1}'  # the owner's, as before
+
+
 async def test_the_result_of_an_immediate_job_and_of_an_expired_one_is_410(service: Service) -> None:
     service.transport.steps = [ScriptedTransport.ok(), echo]
     ran = await service.client.post("/v1/jobs", json={"app": APP}, headers=service.alice)

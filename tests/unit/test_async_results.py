@@ -16,11 +16,12 @@ from uuid import UUID
 import pytest
 
 from livepeer_builder import BuilderEngine, EngineSupply
-from livepeer_builder.contracts import ActorContext, Failure, JobRequest, ResultRef
+from livepeer_builder.contracts import ActorContext, Failure, JobRequest, Operation, ResourceRef, ResultRef
 from livepeer_builder.errors import (
     InvalidRequest,
     JobFailed,
     JobNotFinished,
+    NotFound,
     ResultExpired,
     RunnerCallError,
 )
@@ -77,6 +78,53 @@ async def test_a_stored_result_keeps_only_a_content_type_a_header_can_hold(
     assert result.job.result is not None
     assert (result.content_type, result.job.result.content_type) == ("application/octet-stream",) * 2
     assert result.content == PNG
+
+
+@pytest.mark.parametrize("kind", ["auditor", "tenant_admin", "clearinghouse_admin"])
+async def test_a_results_bytes_go_to_the_jobs_owner_and_to_nobody_who_may_read_its_record(
+    kind: str, make_engine: EngineFactory, alice: ActorContext, transport: ScriptedTransport
+) -> None:
+    """An auditor, an admin of the job's tenant and a clearinghouse admin each read another actor's
+    job as a record. None of them is its owner: its result is the 404 of a job that is not theirs,
+    whatever state it is in, and never its bytes (decided 25 November 2026)."""
+    engine = await make_engine()
+    await allot(engine, alice)
+    reader = ActorContext.model_validate({"actor_id": "desk", "credential_kind": kind})  # alice's tenant
+    transport.steps = [image(), RunnerCallError("http", "boom", payment_sent=True, status_code=500)]
+    stored, failed = await finished(engine, alice), await finished(engine, alice)
+    waiting = (await engine.jobs.submit(alice, queued())).id
+
+    for job_id in (stored, failed, waiting):
+        assert (await engine.jobs.get(reader, job_id)).id == job_id  # the record, as before
+        with pytest.raises(NotFound, match=f"job {job_id} not found"):
+            await engine.jobs.result(reader, job_id)
+    assert (await engine.jobs.result(alice, stored)).content == PNG
+
+
+class AllowsEverything:
+    """A supplied ``AccessPolicy`` that refuses nothing."""
+
+    def check(self, actor: ActorContext, operation: Operation, resource: ResourceRef | None = None) -> None:
+        return None
+
+
+async def test_no_supplied_policy_hands_a_results_bytes_to_another_actor(
+    make_engine: EngineFactory, alice: ActorContext, bob: ActorContext, transport: ScriptedTransport
+) -> None:
+    """The contract promises the bytes to the job's owner without condition, so the rule is the
+    engine's own and a policy can only narrow it. The owner is the actor of the job's tenant: the same
+    actor id in another tenant is somebody else."""
+    engine = await make_engine(supply=EngineSupply(policy=AllowsEverything()))
+    await allot(engine, alice)
+    transport.steps = [image()]
+    job_id = await finished(engine, alice)
+    namesake = alice.model_copy(update={"tenant_id": "another"})
+
+    assert (await engine.jobs.get(bob, job_id)).id == job_id  # this policy lets anybody read the record
+    for other in (bob, namesake):
+        with pytest.raises(NotFound):
+            await engine.jobs.result(other, job_id)
+    assert (await engine.jobs.result(alice, job_id)).content == PNG
 
 
 async def test_a_job_that_has_not_ended_has_no_result_yet(

@@ -6,10 +6,13 @@ engine from ``make_engine``, scripted to the same outcome. The engine's worker i
 """
 
 import hashlib
+import json
+from datetime import timedelta
 
 import pytest
 
 from livepeer_builder import ActorApi, ActorContext, BuilderEngine, JobFailed, JobRequest
+from livepeer_builder.contracts import EngineHealth
 from livepeer_builder.errors import (
     AccessDenied,
     InvalidRequest,
@@ -19,7 +22,7 @@ from livepeer_builder.errors import (
     ResultExpired,
 )
 from livepeer_builder.testing import FakeEngine
-from tests.unit.test_fake_engine_contract import ALICE, APP, BOB, NONE, Side, fake, real
+from tests.unit.test_fake_engine_contract import ALICE, APP, BOB, NONE, RUNNERS, Side, fake, real
 
 
 @pytest.fixture(params=[fake, real], ids=["fake", "real"])
@@ -168,3 +171,118 @@ async def test_a_queued_job_costs_pending_and_never_none(side: Side) -> None:
         assert (cost.status, cost.attempts) == ("pending", ())
         await advance(engine)
         assert (await engine.costs.for_job(ALICE, job.id)).status == "pending"  # paid, usage not here yet
+
+
+@pytest.mark.parametrize("kind", ["auditor", "tenant_admin", "clearinghouse_admin"])
+async def test_a_reader_of_another_actors_job_is_not_given_its_result(kind: str, side: Side) -> None:
+    """An auditor and an admin read the job's record, on the fake as on the engine. Its result is
+    its owner's alone: to them it is the ``NotFound`` of a job that is not theirs."""
+    reader = ActorContext.model_validate({"actor_id": "desk", "credential_kind": kind})
+    async with side() as engine:
+        job = await engine.jobs.submit(ALICE, queued())
+        await advance(engine)
+        assert (await engine.jobs.get(reader, job.id)).state == "succeeded"
+        with pytest.raises(NotFound):
+            await engine.jobs.result(reader, job.id)
+        assert (await engine.jobs.result(ALICE, job.id)).status_code == 200
+
+
+async def test_a_paid_answer_that_was_not_stored_fails_the_job_and_keeps_its_shape(side: Side) -> None:
+    """``result_not_stored``: the runner answered and was paid, and the engine kept nothing of the
+    answer. The attempt stays ``succeeded``, and the job's reference keeps the answer's size and hash
+    with no location."""
+    answer = b"x" * 64
+    async with side(not_stored=answer) as engine:
+        job = await engine.jobs.submit(ALICE, queued())
+        assert await advance(engine) == 1
+        failed = await engine.jobs.get(ALICE, job.id)
+        assert failed.failure is not None and failed.result is not None
+        assert (failed.state, failed.failure.kind, failed.failure.payment_sent) == (
+            "failed",
+            "result_not_stored",
+            True,
+        )
+        assert (failed.failure.status_code, failed.failure.body, failed.failure.reason) == (None, None, None)
+        assert [(a.outcome, a.payment_sent, a.status_code, len(a.sessions)) for a in failed.attempts] == [
+            ("succeeded", True, 200, 1)
+        ]
+        ref = failed.result
+        assert (ref.storage, ref.location, ref.expires_at) == ("stored", None, None)
+        assert (ref.size_bytes, ref.sha256) == (len(answer), hashlib.sha256(answer).hexdigest())
+        assert ref.content_type == "application/json"
+        with pytest.raises(JobFailed) as raised:
+            await engine.jobs.result(ALICE, job.id)
+        assert raised.value.job == failed
+        assert (await engine.costs.for_job(ALICE, job.id)).status == "pending"  # paid, usage not here yet
+
+
+async def test_a_stored_results_data_is_what_its_bytes_say(side: Side) -> None:
+    """``result().data`` is worked out from the stored bytes, whatever the reply carried as ``data``
+    when it arrived: here the reply was scripted with none."""
+    async with side() as engine:
+        job = await engine.jobs.submit(ALICE, queued())
+        await advance(engine)
+        result = await engine.jobs.result(ALICE, job.id)
+        assert result.content_type == "application/json"
+        assert result.data == json.loads(result.content) == {"ok": True}
+
+
+async def test_a_stored_result_says_when_its_bytes_go(side: Side) -> None:
+    """``expires_at`` is the job's end plus the days results are kept: 7 unless
+    ``LPB_RETENTION_RESULTS_DAYS`` says otherwise, which the fake has no setting for."""
+    async with side() as engine:
+        job = await engine.jobs.submit(ALICE, queued())
+        await advance(engine)
+        ran = await engine.jobs.get(ALICE, job.id)
+        assert ran.result is not None and ran.result.expires_at is not None and ran.completed_at is not None
+        assert ran.result.expires_at - ran.completed_at == timedelta(days=7)
+        immediate = (await engine.jobs.run(ALICE, JobRequest(app=APP))).job
+        assert immediate.result is not None and immediate.result.expires_at is None  # never kept
+
+
+async def test_health_counts_the_jobs_that_wait(side: Side) -> None:
+    async with side() as engine:
+        assert (engine.health().queued_jobs, engine.health().oldest_queued_s) == (0, None)
+        first = await engine.jobs.submit(ALICE, queued())
+        await engine.jobs.submit(ALICE, queued())
+        waiting = engine.health()
+        assert waiting.queued_jobs == 2
+        assert waiting.oldest_queued_s is not None and waiting.oldest_queued_s >= 0
+        await engine.jobs.cancel(ALICE, first.id)
+        assert engine.health().queued_jobs == 1
+        await advance(engine)
+        assert (engine.health().queued_jobs, engine.health().oldest_queued_s) == (0, None)
+
+
+async def test_a_scripted_health_is_answered_as_it_was_scripted() -> None:
+    """A test that scripts the fake's health gets it back unchanged, as a scripted cost wins: the
+    fake's own count of the queue is for a health nobody scripted."""
+    scripted = EngineHealth(
+        ready=False,
+        discovery_fresh=False,
+        discovery_observed_at=None,
+        discovery_error=None,
+        cost_sync_at=None,
+        cost_sync_error=None,
+        running_jobs=2,
+        queued_jobs=9,
+        oldest_queued_s=30.0,
+        version="scripted",
+    )
+    engine = FakeEngine(health=scripted, runners=RUNNERS)
+    await engine.jobs.submit(ALICE, queued())
+    assert engine.health() == scripted
+
+
+async def test_a_stored_result_keeps_only_a_content_type_a_header_can_hold(side: Side) -> None:
+    """The one rule for a runner's content type (#158): a type no response header can hold is
+    ``application/octet-stream`` on the job's record and when the result is read back."""
+    async with side(content_type="text/plain\r\nx: y") as engine:
+        job = await engine.jobs.submit(ALICE, queued())
+        await advance(engine)
+        result = await engine.jobs.result(ALICE, job.id)
+        assert result.job.result is not None
+        assert (result.content_type, result.job.result.content_type) == ("application/octet-stream",) * 2
+        ran = await engine.jobs.run(ALICE, JobRequest(app=APP))  # an immediate job's, by the same rule
+        assert ran.job.result is not None
+        assert (ran.content_type, ran.job.result.content_type) == ("application/octet-stream",) * 2

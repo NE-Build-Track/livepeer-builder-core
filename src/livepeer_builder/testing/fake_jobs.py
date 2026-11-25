@@ -4,7 +4,7 @@ fake models and what it does not."""
 
 import hashlib
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from livepeer_builder.contracts import (
@@ -21,6 +21,7 @@ from livepeer_builder.contracts import (
     ResultRef,
     SignedSession,
 )
+from livepeer_builder.contracts.http import response_content_type
 from livepeer_builder.errors import InvalidRequest, JobFailed, NotFound
 from livepeer_builder.services.failover import attempt_verdict
 from livepeer_builder.services.operations import retry_of
@@ -33,11 +34,14 @@ from livepeer_builder.testing.fake_parts import FakeDiscovery
 from livepeer_builder.testing.fake_stream import FakeJobStream
 from livepeer_builder.testing.scripts import (
     NOT_DISPATCHED,
+    NOT_STORED,
     Fails,
     Raises,
     Reply,
     attempt_outcome,
 )
+
+RESULTS_KEPT = timedelta(days=7)  # the engine's default LPB_RETENTION_RESULTS_DAYS; the fake has no settings
 
 
 class FakeStreaming:
@@ -115,7 +119,8 @@ class FakeJobs(FakeQueue):
 
         A failure before dispatch (no offering, no capacity, no allocation) has no attempt. A succeeded
         ``reply`` sets the attempt's status and the job's ``ResultRef``. ``queued`` is an async job that
-        now runs (ISS-26): it keeps its id and its creation time, and its result is ``stored``.
+        now runs (ISS-26): it keeps its id and its creation time, and its result is ``stored``. A
+        ``reply`` beside a ``result_not_stored`` failure is the answer the engine did not keep.
         """
         now = datetime.now(UTC)
         job_id = queued.id if queued is not None else uuid4()
@@ -131,7 +136,7 @@ class FakeJobs(FakeQueue):
             state=state,
             attempts=self._attempts(job_id, request.app, state, failure, reply, now),
             failure=failure,
-            result=_result(job_id, state, reply, stored=queued is not None),
+            result=_result(job_id, state, failure, reply, None if queued is None else now),
             usage=None,
             created_at=now if queued is None else queued.created_at,
             completed_at=None if state == "running" else now,
@@ -155,8 +160,9 @@ class FakeJobs(FakeQueue):
         """One attempt on the first runner for the app, or none for a failure before dispatch."""
         dispatched = failure is None or failure.kind not in NOT_DISPATCHED
         used = self._discovery.candidates(app)[:1] if dispatched else []
-        sessions = (SignedSession(manifest_id="manifest-1"),) if failure is None else ()
         outcome, status = _outcome(state, failure), _status(reply, failure)
+        answered = failure is None or outcome == "succeeded"  # also an answer the engine did not keep
+        sessions = (SignedSession(manifest_id="manifest-1"),) if answered else ()
         return tuple(
             Attempt(
                 job_id=job_id,
@@ -165,7 +171,7 @@ class FakeJobs(FakeQueue):
                 orchestrator_url=runner.orchestrator_url,
                 allocation_id=None,
                 sessions=sessions,
-                payment_sent=failure is None or failure.payment_sent,
+                payment_sent=answered or (failure is not None and failure.payment_sent),
                 outcome=outcome,
                 status_code=status,
                 started_at=now,
@@ -236,7 +242,7 @@ class FakeJobs(FakeQueue):
             job=job,
             status_code=reply.status_code,
             content=reply.content,
-            content_type=reply.content_type,
+            content_type=response_content_type(reply.content_type),  # one rule, as the engine (#158)
             data=reply.data,
         )
 
@@ -303,14 +309,22 @@ def _status(reply: Reply | None, failure: Failure | None) -> int | None:
     return None if failure is None else failure.status_code
 
 
-def _result(job_id: UUID, state: JobState, reply: Reply | None, *, stored: bool) -> ResultRef | None:
-    """What a succeeded job says of its result: returned inline, or ``stored`` for an async job."""
-    if reply is None or state != "succeeded":
+def _result(
+    job_id: UUID, state: JobState, failure: Failure | None, reply: Reply | None, stored_at: datetime | None
+) -> ResultRef | None:
+    """What a job says of its result. A succeeded immediate job's was returned inline and not kept. An
+    async job's (``stored_at``: when it ended) is ``stored``, served at its location until it expires;
+    one the engine did not keep (``result_not_stored``) leaves its size and hash, with no location."""
+    not_kept = failure is not None and failure.kind == NOT_STORED
+    if reply is None or not (state == "succeeded" or not_kept):
         return None
-    return ResultRef(
-        storage="stored" if stored else "inline",
-        content_type=reply.content_type,
+    shape = ResultRef(
+        storage="inline" if stored_at is None else "stored",
+        content_type=response_content_type(reply.content_type),  # one rule, as the engine (#158)
         size_bytes=len(reply.content),
         sha256=hashlib.sha256(reply.content).hexdigest(),
-        location=RESULT_LOCATION.format(job_id=job_id) if stored else None,
     )
+    if stored_at is None or not_kept:
+        return shape
+    kept = {"location": RESULT_LOCATION.format(job_id=job_id), "expires_at": stored_at + RESULTS_KEPT}
+    return shape.model_copy(update=kept)

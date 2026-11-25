@@ -116,7 +116,17 @@ class FakeEngine:
         self.jobs = FakeJobs(replies or {}, streaming, self.discovery)
         self.costs = FakeCosts(costs or {}, summary, self.jobs)
         self.payments = FakeAllowance(allowance, self.jobs.policy)
-        self._health = health or EngineHealth(
+        self._health = health
+        self.started = False
+        self.stopped = False
+
+    def health(self) -> EngineHealth:
+        """A scripted health wins. Otherwise a ready engine that, like the engine, counts the async jobs
+        that wait (``queued_jobs``) and how long the oldest has (``oldest_queued_s``)."""
+        if self._health is not None:
+            return self._health
+        queued_jobs, oldest_queued_s = self.jobs.queued_stats()
+        return EngineHealth(
             ready=True,
             discovery_fresh=True,
             discovery_observed_at=None,
@@ -124,13 +134,10 @@ class FakeEngine:
             cost_sync_at=None,
             cost_sync_error=None,
             running_jobs=0,
+            queued_jobs=queued_jobs,
+            oldest_queued_s=oldest_queued_s,
             version="fake",
         )
-        self.started = False
-        self.stopped = False
-
-    def health(self) -> EngineHealth:
-        return self._health
 
     async def start(self) -> None:
         if self.stopped:

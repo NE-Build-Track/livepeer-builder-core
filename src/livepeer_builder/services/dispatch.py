@@ -170,7 +170,7 @@ class Dispatcher:
 
     async def _nobody(
         self, job: Job, attempts: list[Attempt], claim: int | None, kind: FailureKind, message: str
-    ) -> Exception:
+    ) -> "NotNow | JobFailed":
         """No runner can take the job now. An immediate job or a stream fails with ``kind``; an async
         job waits for one, so it is handed back."""
         if claim is not None:

@@ -378,7 +378,8 @@ From the decisions of 25 November
 [x] two steps at once never pass LPB_ASYNC_WORKERS, and a claim being written is its step's alone
     (test_admission_lane.py; test_async_one_owner::test_two_steps_at_once_never_run_more_jobs_than_there_are_workers,
     ::test_a_claim_that_is_being_written_is_not_another_steps_to_resolve)
-[x] stop() closes the gate first: nothing is claimed while streams close, or after a stop mid-page
+[x] stop() closes the gate first: nothing is claimed while streams close, or after a stop mid-page, and a
+    job claimed and not yet started then goes back to the queue
     (test_async_one_owner::test_nothing_is_claimed_while_the_engine_waits_for_its_streams_to_close,
     ::test_a_stop_that_arrives_between_two_claims_of_one_page_ends_the_claiming)
 [x] one deadline for all attempts, async from the claim and immediate from the start; the worker's backstop

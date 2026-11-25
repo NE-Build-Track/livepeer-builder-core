@@ -210,7 +210,12 @@ async def test_a_stop_that_arrives_between_two_claims_of_one_page_ends_the_claim
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The step had read a page of two jobs when the engine began to stop. "May I still claim" was
-    asked once a page, so the second job was claimed all the same."""
+    asked once a page, so the second job was claimed all the same.
+
+    The first job's claim was being written when the stop came. It was started when the claim answered,
+    and paid for while the engine waited for its streams to close (review of ``19986ef``): a job that
+    is claimed and not yet started when the gate closes goes back to the queue, as a job the stop
+    cancels before its first attempt does. Nothing new is paid for once the engine stops."""
     engine = await make_engine(supply=on_a_file, async_workers=2, async_drain_timeout_s=5)
     await allot(engine, alice)
     first = await engine.jobs.submit(alice, queued(payload={"n": 1}))
@@ -231,12 +236,10 @@ async def test_a_stop_that_arrives_between_two_claims_of_one_page_ends_the_claim
     await asyncio.wait([step], timeout=10)
     await asyncio.wait(stops, timeout=10)
 
-    assert step.done() and step.result() == 1  # the job claimed before the stop ran to its end
-    assert len(transport.calls) == 1
-    assert [(await engine.store.get_job(job.id)).state for job in (first, second)] == [  # type: ignore[union-attr]
-        "succeeded",
-        "queued",
-    ]
+    assert step.done() and step.result() == 0  # nothing was started once the gate had closed
+    assert transport.calls == []
+    assert [(await engine.store.get_job(job.id)).state for job in (first, second)] == ["queued"] * 2  # type: ignore[union-attr]
+    assert await claims(engine, first.id) == 1 and engine.admission.running == 0  # put back, and counted
 
 
 async def test_a_job_another_writer_ended_is_not_ended_again_by_the_worker_that_held_it(

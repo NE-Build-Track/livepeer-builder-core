@@ -83,13 +83,17 @@ class Ends:
         """How many ends the store refused and a later step still has to write."""
         return len(self._owed)
 
-    async def shielded(self, held: Held, end: End | None) -> None:
-        """``settle`` in a task of its own, which the caller's cancellation does not stop and
-        ``written`` waits for: a job's task may be cancelled while its end is being written."""
+    def begin(self, held: Held, end: End | None) -> asyncio.Task[None]:
+        """``settle`` in a task of its own, which nobody's cancellation stops and ``written`` waits
+        for. It never awaits: a step that is ending, or being cancelled, starts it all the same."""
         task = spawn_shielded(self.settle(held, end))
         self._writes.add(task)
         task.add_done_callback(self._writes.discard)
-        await asyncio.shield(task)
+        return task
+
+    async def shielded(self, held: Held, end: End | None) -> None:
+        """``begin``, and wait for it: a job's task may be cancelled while its end is being written."""
+        await asyncio.shield(self.begin(held, end))
 
     async def written(self) -> None:
         """Return once no write of an end is under way."""
@@ -98,7 +102,7 @@ class Ends:
 
     async def settle_owed(self) -> None:
         """Write again the ends the store refused. One it still refuses stays owed."""
-        for held, end in list(self._owed.values()):
+        for held, end in tuple(self._owed.values()):  # a copy: an end that is written leaves the dict
             await self.settle(held, end)
 
     async def settle(self, held: Held, end: End | None) -> None:

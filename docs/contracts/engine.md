@@ -842,7 +842,10 @@ other is answered with it.
 
 `engine.stop()` first closes the worker's gate, before it waits for anything: from that call on no job
 is claimed, also not by a step that is half way through a page of the queue, and not while open
-streams are given their time to end. A submit is still accepted, and its job waits for the next start.
+streams are given their time to end. Nor is a job started that was claimed and not yet started when the
+gate closed, or whose claim was still being written: it goes back to the queue, as a job stopped
+before its first attempt does, so no paid call begins once the engine stops. A submit is still
+accepted, and its job waits for the next start.
 Then it lets running async jobs end for up to `LPB_ASYNC_DRAIN_TIMEOUT_S` and cancels the rest: one
 stopped before its first attempt goes back to the queue, or, on the third claim that counts, ends `failed`,
 `interrupted`, as the next start would end it; any other ends as a cancelled immediate job does,

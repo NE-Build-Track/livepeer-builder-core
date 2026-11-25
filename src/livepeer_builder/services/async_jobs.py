@@ -220,12 +220,24 @@ class AsyncJobWorker:
             await self._claim_ready(claimed, errors)
             await self.count_queue()  # before any job starts: nothing else is writing yet
         finally:  # a claimed job runs, whatever stopped the step after its claim
-            started = [self._start(held) for held in claimed]
+            started = self._started(claimed)
             self._steps.discard(done)
             done.set_result(None)
-        if errors:
-            raise next(iter(errors.values()))
+        if (failed := _first(errors)) is not None:
+            raise failed
         return started
+
+    def _started(self, claimed: list[Held]) -> list[asyncio.Task[None]]:
+        """Start what the step claimed. Once the gate is closed nothing is started: a job whose claim
+        was made, or was still being written, when the engine began to stop goes back to the queue, as
+        a job the stop cancels before its first attempt does. So no paid call begins while the engine
+        waits for its streams and its running jobs (review of ``19986ef``). It never awaits: a step
+        that is being cancelled still starts each job or hands it to ``Ends``."""
+        if not self._lane.closed:
+            return [self._start(held) for held in claimed]
+        for held in claimed:
+            self._ends.begin(held, STOPPED)
+        return []
 
     async def _claim_ready(self, claimed: list[Held], errors: dict[UUID, Exception]) -> None:
         """Page through the queue, oldest first, while there is room and the last page changed
@@ -382,3 +394,8 @@ class AsyncJobWorker:
             update={"location": RESULT_LOCATION.format(job_id=job.id), "expires_at": expires}
         )
         return await finish(job, "succeeded", None, kept, attempts, content=reply.content)
+
+
+def _first(errors: dict[UUID, Exception]) -> Exception | None:
+    """What the first claim that raised in a step raised, which is what the step raises."""
+    return next(iter(errors.values()), None)

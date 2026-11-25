@@ -239,10 +239,17 @@ class FailsOneFinish(SqlStore):
 
 
 async def test_a_finish_that_fails_stores_no_bytes_and_the_paid_job_ends_uncertain(
-    make_engine: EngineFactory, alice: ActorContext, transport: ScriptedTransport, store: SqlStore
+    make_engine: EngineFactory,
+    alice: ActorContext,
+    transport: ScriptedTransport,
+    store: SqlStore,
+    usage: FakeUsageSource,
+    admin: ActorContext,
 ) -> None:
     """The runner answered and was paid, and the write of the job's end failed. No bytes are stored
-    and the job is not ``succeeded``; it is ``uncertain``, as an immediate job that lost its end is."""
+    and the job is not ``succeeded``; it is ``uncertain``, as an immediate job that lost its end is.
+    Its owner cannot read the answer, so the payment is never billed as delivered: the cost follows
+    the job, as for an answer too large to store (D69 (4))."""
     engine = await make_engine(supply=EngineSupply(store=FailsOneFinish(store.engine)))
     await allot(engine, alice)
     transport.steps = [image(), image()]
@@ -264,6 +271,16 @@ async def test_a_finish_that_fails_stores_no_bytes_and_the_paid_job_ends_uncerta
     assert engine.admission.running == 0
     assert len(transport.calls) == 1  # and it is never run again
 
+    allocation = job.attempts[0].allocation_id or ""
+    usage.rows = [row("u1", "sess-1", "0.25", allocation=allocation, manifest="manifest-1")]
+    await engine.costs.sync_now(admin)
+    cost = await engine.costs.for_job(alice, job_id)
+    assert [(a.cost_class, a.fees.fee_eth) for a in cost.attempts] == [
+        ("failed_after_payment", Decimal("0.25"))
+    ]
+    assert (cost.billable.fee_eth, cost.billable.row_count) == (Decimal(0), 0)  # nothing to bill
+
+    usage.rows = []
     assert (await engine.jobs.result(alice, await finished(engine, alice))).content == PNG  # the next one
 
 

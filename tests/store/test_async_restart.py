@@ -28,9 +28,16 @@ from livepeer_builder.contracts import (
 )
 from livepeer_builder.protocols import OnSigned
 from livepeer_builder.store import schema as t
-from livepeer_builder.testing import FixedClock, ScriptedStreamTransport, ScriptedTransport, make_engine
+from livepeer_builder.testing import (
+    FakeUsageSource,
+    FixedClock,
+    ScriptedStreamTransport,
+    ScriptedTransport,
+    make_engine,
+)
 from livepeer_builder.testing.fakes import report_signed
 from tests.store.conftest import make_attempt
+from tests.unit.test_costs import row
 
 ADMIN = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 ALICE = ActorContext(actor_id="alice", permissions=frozenset({"jobs.run", "jobs.read", "costs.read"}))
@@ -147,6 +154,40 @@ async def test_a_job_with_a_paid_attempt_in_flight_is_uncertain_after_a_restart_
         assert second.health().queued_jobs == 0
         async with second.store.engine.connect() as conn:  # type: ignore[attr-defined]
             assert (await conn.execute(select(t.job_requests))).first() is None  # its request went with it
+
+
+async def test_a_paid_answer_that_a_restart_cut_from_its_job_is_never_billed_as_delivered(
+    database_url: str, clock: FixedClock
+) -> None:
+    """The runner answered and was paid, the attempt was recorded ``succeeded``, and the engine died
+    before the transaction that stores the answer and ends the job. The restart ends the job
+    ``uncertain``; nobody can read the answer, so its cost is ``failed_after_payment``, not
+    ``delivered`` (D69 (4))."""
+    usage = FakeUsageSource()
+    supply = EngineSupply(usage_source=usage)
+    async with engine_on(database_url, clock, ScriptedStreamTransport(), supply=supply) as first:
+        await allot(first)
+        allotted = await first.store.get_actor("default", "alice")
+        assert allotted is not None
+        job = await first.jobs.submit(ALICE, queued())
+        assert await first.store.claim_job(job.id, clock.now()) is not None
+        answered = make_attempt(job.id, clock, manifest_ids=("m-1",), allocation_id=allotted.allocation_id)
+        await first.store.start_attempt(answered.model_copy(update={"outcome": "in_flight"}))
+        await first.store.finish_attempt(answered)  # paid, 200: then the process dies
+    async with engine_on(database_url, clock, ScriptedStreamTransport(), supply=supply) as second:
+        await second.start()
+        left = await second.jobs.get(ALICE, job.id)
+        assert left.failure is not None
+        assert (left.state, left.failure.kind, left.result) == ("uncertain", "interrupted", None)
+        assert [(a.outcome, a.payment_sent) for a in left.attempts] == [("succeeded", True)]
+
+        usage.rows = [row("u1", "sess-1", "0.25", allocation=allotted.allocation_id, manifest="m-1")]
+        await second.costs.sync_now(ADMIN)
+        cost = await second.costs.for_job(ALICE, job.id)
+        assert [(a.cost_class, a.fees.fee_eth) for a in cost.attempts] == [
+            ("failed_after_payment", Decimal("0.25"))
+        ]
+        assert (cost.billable.fee_eth, cost.billable.row_count) == (Decimal(0), 0)
 
 
 async def test_a_job_claimed_three_times_without_an_attempt_fails_interrupted(

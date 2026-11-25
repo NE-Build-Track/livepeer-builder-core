@@ -80,17 +80,31 @@ def _ended_class(
     # matched fee stays on the attempt.
     if any(session.match == "ambiguous" for session in sessions):
         return "uncertain"
-    # A runner's answer the engine could not keep is paid for and not delivered: the attempt succeeded,
-    # the job did not, and the cost follows the job (D69 (4)).
-    reply_lost = job.failure is not None and job.failure.kind == "result_not_stored"
-    if attempt.outcome == "succeeded" and not reply_lost:
-        return "delivered"
+    if attempt.outcome == "succeeded":
+        if _delivered(job):
+            return "delivered"
+        if job.mode == "async":  # the runner answered and was paid: nothing about the charge is in doubt
+            return "failed_after_payment"
     last = max((each.number for each in job.attempts), default=0)
     last_word = attempt.outcome in ("in_flight", "payment_unknown") or (
         job.state == "uncertain" and attempt.number == last
     )
     # only the last attempt can leave a job uncertain (D52)
     return "uncertain" if last_word else "failed_after_payment"
+
+
+def _delivered(job: Job) -> bool:
+    """Whether the answer of the job's succeeded attempt reached its owner.
+
+    An async job's owner reads the answer from where the engine stored it, in the transaction that
+    ended the job ``succeeded``. So a succeeded attempt on an async job that ended any other way is paid
+    for and not delivered, and the cost follows the job (D69 (4)): the answer was too large to store
+    (``result_not_stored``), the write of the job's end failed, or the engine stopped between the
+    answer and that write. An immediate job's answer went to the caller that waited for it: its
+    succeeded attempt is delivered, whatever became of the job's own record."""
+    if job.mode == "async":
+        return job.state == "succeeded"
+    return job.failure is None or job.failure.kind != "result_not_stored"
 
 
 def _status(running: bool, attempts: Sequence[AttemptCost]) -> CostStatus:

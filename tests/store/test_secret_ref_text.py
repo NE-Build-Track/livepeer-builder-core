@@ -154,12 +154,19 @@ async def tables(engine: AsyncEngine) -> list[str]:
         return await conn.run_sync(lambda sync: inspect(sync).get_table_names())
 
 
+async def leave_a_copy(engine: AsyncEngine) -> None:
+    """What a run that died left before a run was one transaction (#158): the empty copy, committed."""
+    async with engine.begin() as conn:
+        await conn.execute(text(f"CREATE TABLE {COPY} (actor_id VARCHAR(200))"))
+
+
 async def test_an_interrupted_run_on_sqlite_does_not_block_the_next_migrate(
     tmp_path: Path, clock: FixedClock
 ) -> None:
-    """SQLite creates the batch copy's table outside the migration's transaction, so a run that dies
-    before its commit rolls back to the old revision and leaves ``_alembic_tmp_lpb_actors`` behind. Every
-    later migrate then failed: "table _alembic_tmp_lpb_actors already exists". Up and down."""
+    """SQLite's driver created the batch copy's table outside the migration's transaction, so a run that
+    died before its commit rolled back to the old revision and left ``_alembic_tmp_lpb_actors`` behind.
+    Every later migrate then failed: "table _alembic_tmp_lpb_actors already exists". Up and down. A run
+    is one transaction now (#158) and leaves no copy; 0013 still drops one an earlier run left."""
     engine = create_engine(f"sqlite+aiosqlite:///{tmp_path / 'engine.db'}")
     try:
         await upgrade(engine, "0012")
@@ -167,14 +174,16 @@ async def test_an_interrupted_run_on_sqlite_does_not_block_the_next_migrate(
         await save_at_0012(engine, saved)
 
         await interrupted(engine, "up", "head")
-        assert await current_revision(engine) == "0012" and COPY in await tables(engine)
+        assert await current_revision(engine) == "0012" and COPY not in await tables(engine)
+        await leave_a_copy(engine)
         await upgrade(engine)
         assert await current_revision(engine) == head_revision() and COPY not in await tables(engine)
         assert await secret_ref_length(engine) is None and await store.get_actor("default", "alice") == saved
 
         await downgrade(engine, "0013")  # the revision whose downgrade makes the copy
         await interrupted(engine, "down", "0012")
-        assert await current_revision(engine) == "0013" and COPY in await tables(engine)
+        assert await current_revision(engine) == "0013" and COPY not in await tables(engine)
+        await leave_a_copy(engine)
         await downgrade(engine, "0012")
         assert await current_revision(engine) == "0012" and COPY not in await tables(engine)
         assert await secret_ref_length(engine) == 200 and await alice_at_0012(engine) == saved

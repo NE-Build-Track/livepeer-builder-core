@@ -6,15 +6,17 @@ finished is resumed rather than reported in progress.
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import select, update
 
-from livepeer_builder import BuilderEngine, EngineSettings
+from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.contracts import (
     OPERATION_REPLAYED,
     OPERATION_RESUMED,
@@ -673,7 +675,19 @@ async def test_an_onboarding_resumed_after_the_provider_created_the_grant_adopts
     assert len(await tenant_admin_keys(engine, adopted.tenant_id)) == 1
 
 
+@pytest.fixture
+async def on_a_file(tmp_path: Path) -> AsyncIterator[EngineSupply]:
+    """A store on a database file, for a test whose runs are cancelled by their budget. The budget ends
+    whatever the run is doing, and that can be a store write. A write cancelled part-way costs the store
+    that connection, and the in-memory store is one connection: the next one it opens is a new, empty
+    database, and the test then failed with ``no such table`` (#158). A file keeps what was committed."""
+    store = await SqlStore.connect(f"sqlite+aiosqlite:///{tmp_path / 'engine.db'}")
+    yield EngineSupply(store=store)
+    await store.close()
+
+
 async def test_an_onboarding_resumed_over_a_slow_catalog_continues_where_the_last_resume_stopped(
+    on_a_file: EngineSupply,  # first, so it is closed after the engine has stopped
     make_engine: EngineFactory,
     admin: ActorContext,
     manager: FakeAllocationManager,
@@ -684,7 +698,8 @@ async def test_an_onboarding_resumed_over_a_slow_catalog_continues_where_the_las
     half the stale window. When the pages take longer than that, every resume died in the listing and the
     reference never finished. The list cursor is recorded after each page, so each resume goes on from where
     the last stopped (pages before it lacked the tag, and a newer grant is always on a later page)."""
-    engine = await make_engine(operation_stale_s=0.4, batteries_timeout_s=0.1)  # a run gets 0.2 s
+    # a run gets 0.2 s
+    engine = await make_engine(supply=on_a_file, operation_stale_s=0.4, batteries_timeout_s=0.1)
     desk = engine.payments.tenants
     assert desk is not None
     for n in range(6):  # grants made by hand, before the engine's

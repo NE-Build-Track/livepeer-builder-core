@@ -433,6 +433,14 @@ checks stop that:
     asked when its actor already holds the key and secret the record notes: the provider call is still
     sent and replays that key, nothing is left to store, and the old key is revoked. A record that has
     the note is never judged by what the actor holds.
+  - Such a record cannot show that its resume runs under another `LPB_ENGINE_ID` than the run that
+    wrote it, so the rotation is not asked then either. The provider mints a new key where it would
+    have replayed one, and a store that cannot write fails the command only after that: the new key is
+    live at the provider with its secret kept nowhere, and the actor keeps the key it holds and still
+    pays. Repeat the command once the store can write: the repeat revokes that key and the key the
+    rotation began from, and ends the rotation with the refusal of one that another rotation
+    overtook. Only a record from v0.2.x can be in this state, so finish every interrupted rotation
+    before `LPB_ENGINE_ID` is changed.
   - A resume that still has a key to store is refused, and the message says that an earlier attempt
     may have reached the provider. It does not say that nothing was sent, and the refusal does not
     free the reference ([refused or unknown](#repeat-safe-commands)): the same request resumes once

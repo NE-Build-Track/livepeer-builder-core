@@ -7,8 +7,10 @@ engine, a tenant's routes in the form they have since #185, a grant topped up by
 the same commit as the other two. What the run of 23 November showed and this one did not is under
 [What the run found](#what-the-run-found).
 
-The run followed the proof runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook), steps
-0 to 7, on one host, from new volumes, from 21:26 to 21:33 UTC on 26 November 2026.
+The run covered every step of the proof runbook in
+[deploy/README.md](../../../deploy/README.md#proof-runbook), on one host, from new volumes, from 21:26 to
+21:33 UTC on 26 November 2026. Tenant two's job ran between tenant one's second job and its third, so
+the counts below are those at the end of the jobs.
 
 | Component | Identity |
 | --- | --- |

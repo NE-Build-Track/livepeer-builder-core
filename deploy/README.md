@@ -378,9 +378,8 @@ stored ent2          # secrets stored: 1, and [('dave', 'secret_store')]
 ```
 
 Costs nothing. Check: each enterprise's store holds its own actor's key and no other, and the
-clearinghouse's holds none. A job of dave's is run as alice's is in step 4, with `$ES2/dave-key` and
-`$WORK2`: it **costs** the price of that job, it is in tenant two's usage and not in tenant one's, and
-alice's key is a 401 on this engine.
+clearinghouse's holds none. Dave's paid job is step 7, after the checks of steps 4 and 5 that count
+tenant two's usage as 0.
 
 **A runner is paid before it reads the request.** A job the runner refuses (a path it does not serve,
 an input it does not take) is still charged, and the engine records it as failed after payment. Run a
@@ -467,7 +466,38 @@ tenant one $PUBLIC$OWN/usage | jq '.items | length'                             
 `failed` with `kind` `payment`, `reason` `allowance_exhausted`, `status_code` 402 and `payment_sent`
 `false`; tenant one's usage has no new row.
 
-### 7. Proof (c): an engine in its `both` role still pays by itself
+### 7. Tenant two's engine pays for its own job
+
+Only if the second enterprise was started in step 3. Steps 4 and 5 are about alice's jobs, and their
+checks count tenant two's usage as 0, which is true until this step. The `actor` helper reads tenant
+one's keys, so these commands name dave's key and the second engine's address themselves.
+
+```sh
+ONE_ROWS=$(tenant one $PUBLIC$OWN/usage | jq '.items | length')
+dave() { curl -sS -H "Authorization: Bearer $(cat $ES2/dave-key)" "$@"; }
+dave -D $ES2/fixed-headers -o $ES2/fixed-result -H 'Content-Type: application/json' -d "$FIXED_JOB" $WORK2/v1/jobs
+JOB=$(grep -i '^livepeer-job-id:' $ES2/fixed-headers | tr -d '\r' | cut -d' ' -f2)
+dave $WORK2/v1/jobs/$JOB | jq '{state, failure, attempts: [.attempts[] | {outcome, payment_sent}]}'
+```
+
+**Costs** the price of one fixed job. Check: the attempt's `payment_sent` is `true`. Then, once Batteries
+has accounted the payment (a few seconds):
+
+```sh
+curl -sS -X POST -H "Authorization: Bearer $(cat $ES2/admin-key)" $WORK2/v1/costs/sync | jq
+dave $WORK2/v1/jobs/$JOB/cost | jq '{status, fees, billable}'                 # observed, with the fee
+dave $WORK2/v1/allowance | jq                                                 # spent is the fee
+tenant two $PUBLIC$OWN/usage | jq '.items | length'                           # 1: dave's payment
+tenant one $PUBLIC$OWN/usage | jq '.items | length'                           # $ONE_ROWS, as before it
+admin http://127.0.0.1:8081$TENANTS | jq 'map({name, spent})'                 # two: the fee; one: as before
+actor alice -o /dev/null -w '%{http_code}\n' $WORK2/v1/allowance              # 401: alice's key is engine one's
+dave -o /dev/null -w '%{http_code}\n' $WORK/v1/allowance                      # 401: dave's is engine two's
+```
+
+Costs nothing more. Check: the payment is in tenant two's usage and tenant one's count has not moved;
+tenant two's `spent` is the fee and bob's allocation still shows 0; each engine refuses the other's key.
+
+### 8. Proof (c): an engine in its `both` role still pays by itself
 
 This proof never used the withdrawn path. It was run on 19 November 2026 and again on 26 November, with
 the other two.
@@ -512,14 +542,15 @@ Then its README's "Use" section, with one tenant, one actor, an allocation of `A
 ### What to write down
 
 For the evidence document, with no address, credential or tenant id: the commit the engine image was
-built from; each check of steps 1 to 6 and what it showed; for each job its kind, how long it ran, its
+built from; each check of steps 1 to 8 and what it showed; for each job its kind, how long it ran, its
 state, whether a payment was sent and its cost after sync; the two `stored` outputs of step 3; tenant
-one's and tenant two's usage counts; the 402 of step 6; and the total charged to allocations.
+one's and tenant two's usage counts, before step 7 and after it; the 402 of step 6; and the total
+charged to allocations.
 
 ### Stop everything
 
 ```sh
-(cd "$D/dev-stack" && docker compose down)       # only if step 7 was run; keeps its volumes
+(cd "$D/dev-stack" && docker compose down)       # only if step 8 was run; keeps its volumes
 ent2 down                                        # only if the second enterprise was started
 ent down
 ch down

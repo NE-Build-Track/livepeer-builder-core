@@ -227,9 +227,11 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      advertises zero to it (#158): a capacity figure is a hint that can lag behind the runner, so a
      runner that advertises zero is tried last and is not ruled out while others have room. Its
      attempt goes out with the job's payment key and is signed for like any other, so a job whose
-     other runners failed can reach it and pay for its refusal. "Last" is last of the runners the job
-     pays: when the only runners with room are ones the job signs nothing for, the priced
-     zero-capacity runner is ahead of them, as above, and is the first runner tried. An immediate
+     other runners failed can reach it and pay for its refusal. "Last" is last of the free runners and
+     the runners the job pays: a free runner with room is tried before it, with nothing signed. A
+     runner with room whose price the signer does not take (no rate, or a currency or unit it
+     refuses) is behind it, as above, so when every runner with room is of that kind the priced
+     zero-capacity runner is the first runner tried. An immediate
      job, a stream and a queued job follow this one rule (`JobRunners.choose` in
      `services/job_runners.py`; `tests/unit/test_zero_capacity.py`, and
      `tests/unit/test_async_waiting.py` for a queued job). If

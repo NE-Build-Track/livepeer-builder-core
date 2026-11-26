@@ -147,7 +147,7 @@ async def test_a_queued_job_that_pays_tries_a_priced_runner_advertising_no_room_
     """As an immediate job does (``test_zero_capacity.py``; #158, Mike, 26 November 2026). One runner
     the job pays has room, so the job does not wait and every runner stays a candidate: the priced
     runner that advertises none is tried after the priced runner with room, with the job's payment key,
-    and ahead of a runner with more room that the job signs nothing for."""
+    and ahead of a runner with more room whose price the signer does not take."""
     transport = ScriptedStreamTransport(steps=[refusal(), ScriptedTransport.ok()])
     async with engine_reading(answer(*ROOM_AND_NONE), transport=transport) as engine:
         job = await engine.jobs.submit(ALICE, queued())

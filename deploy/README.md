@@ -124,16 +124,16 @@ published signer itself:
 - **(b)** the same for a live job;
 - **(c)** an engine in its `both` role still runs a paid job by itself.
 
-Proofs (a) and (b) were run from this runbook on 23 November 2026:
-[the evidence](../docs/references/evidence/2026-11-23-payment-clearinghouse-proofs.md). That run was
-made before a tenant's routes took the tenant from the credential (#165): a tenant's admin then called
-the paths that name its tenant on the public listener, and the evidence records those paths. The
-commands below are rewritten for the routes as they are now, a tenant's own routes on the public
-listener and the paths that name a tenant on the private one, and have not been run in this form. An
-earlier run, on 19 November, used a design that was withdrawn the same day, in which the clearinghouse's
-engine signed for the enterprise's. Proof (c) did not use that path and stands as it was run then. What
-of that run stands is at the top of
-[its record](../docs/references/evidence/2026-11-19-payment-clearinghouse-proofs.md).
+All three were run from this runbook on 26 November 2026, on `releases/m4` with every change of ISS-31
+merged: [the evidence](../docs/references/evidence/2026-11-26-payment-clearinghouse-proofs.md). That run
+started a second enterprise project as tenant two and topped up a grant, which steps 2 and 3 show. Its
+jobs were short: a job of several payment cycles and a fixed-price job that succeeds are in the record
+of [23 November](../docs/references/evidence/2026-11-23-payment-clearinghouse-proofs.md), which ran
+proofs (a) and (b) before a tenant's routes took the tenant from the credential (#165) and records the
+paths of that day. An earlier run, on 19 November, used a design that was withdrawn the same day, in
+which the clearinghouse's engine signed for the enterprise's.
+[Its record](../docs/references/evidence/2026-11-19-payment-clearinghouse-proofs.md) says what of it
+stands.
 
 **Money.** Only a job moves money: each paid job sends the orchestrator payment tickets from the
 wallet's deposit, for the price the runner asked. A grant and an allocation are entries in Batteries'
@@ -276,6 +276,21 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat $CS/ad
 Costs nothing. Check: two tenants, each with `total` and `unallocated` of `GRANT` and `spent` of 0. In a
 new shell, set `ONE` and `TWO` again with the line above.
 
+A grant is topped up by hand, by the clearinghouse admin, on the private listener. The answer is a 204
+with no body, and a repeat under the same reference adds nothing:
+
+```sh
+admin -o /dev/null -w '%{http_code}\n' -H 'Content-Type: application/json' \
+  -d '{"amount":{"amount":"0.10","currency":"USD"},"operation_ref":"proof-topup-two"}' \
+  http://127.0.0.1:8081$TENANTS/$TWO/grant/top-up            # 204
+admin http://127.0.0.1:8081$TENANTS | jq 'map({name, total})'   # two: GRANT + 0.10; one: GRANT
+tenant two -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' \
+  -d '{"amount":{"amount":"0.10","currency":"USD"},"operation_ref":"proof-topup-self"}' \
+  $PUBLIC$OWN/grant/top-up                                   # 404: a tenant tops up no grant
+```
+
+Costs nothing: a top-up is an entry in Batteries' ledger.
+
 Tenant two allots its actor itself, on the public listener, with its own admin key. Its routes there
 name no tenant: the clearinghouse takes the tenant from the key. The answer hands the allocation's key
 to the caller, once. This proof does not use that key, so the command reads the answer and drops the
@@ -334,6 +349,33 @@ Costs nothing. Check:
 - **The key is stored at the enterprise and nowhere at the clearinghouse:** the enterprise's store holds
   one secret and its record says `secret_store`; the clearinghouse's store holds none and its record
   says `work_engine`. The read of the allocation carries no key.
+
+**A second enterprise, as tenant two.** The same project runs once more under another name, with
+tenant two's key and id, a secret key of its own and another port. Compose reads a variable set in the
+shell before the one in `.env`, so nothing of tenant one's project changes:
+
+```sh
+ES2=$D/enterprise/secrets/two WORK2=http://127.0.0.1:8281   # git-ignored, as secrets/ is
+mkdir -p $ES2 && python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())' > $ES2/secret-key
+ent2() {  # the enterprise project again, as tenant two, with its own volume
+  LPB_CLEARINGHOUSE_TOKEN=$(cat $CS/tenant-two-key) LPB_CLEARINGHOUSE_TENANT_ID=$TWO \
+  LPB_SECRET_KEY=$(cat $ES2/secret-key) ENTERPRISE_PORT=8281 \
+    docker compose -p lpb-enterprise-two -f "$D/enterprise/compose.yaml" "$@"
+}
+ent2 up -d
+ent2 exec -T engine lpb payments check                      # role work; exit 0; its tenant is tenant two's grant
+ent2 exec -T engine lpb bootstrap-admin | jq -r '.token // empty' | keep $ES2/admin-key
+curl -sS -H "Authorization: Bearer $(cat $ES2/admin-key)" -H 'Content-Type: application/json' \
+  -d "{\"kind\":\"actor\",\"actor_id\":\"dave\",\"tenant_id\":\"$TWO\",\"operation_ref\":\"proof-key-dave\"}" \
+  $WORK2/v1/keys | jq -r '.token // empty' | keep $ES2/dave-key
+ent2 exec -T engine python /opt/enterprise/allot.py dave $ALLOT proof-allot-dave
+stored ent2          # secrets stored: 1, and [('dave', 'secret_store')]
+```
+
+Costs nothing. Check: each enterprise's store holds its own actor's key and no other, and the
+clearinghouse's holds none. A job of dave's is run as alice's is in step 4, with `$ES2/dave-key` and
+`$WORK2`: it **costs** the price of that job, it is in tenant two's usage and not in tenant one's, and
+alice's key is a 401 on this engine.
 
 **A runner is paid before it reads the request.** A job the runner refuses (a path it does not serve,
 an input it does not take) is still charged, and the engine records it as failed after payment. Run a
@@ -422,8 +464,8 @@ tenant one $PUBLIC$OWN/usage | jq '.items | length'                             
 
 ### 7. Proof (c): an engine in its `both` role still pays by itself
 
-This proof was run on 19 November 2026 and stands: it never used the withdrawn path. Run it again only
-to have all three on one commit.
+This proof never used the withdrawn path. It was run on 19 November 2026 and again on 26 November, with
+the other two.
 
 The dev stack is that engine: [dev-stack/README.md](dev-stack/README.md). It signs with the same
 wallet, so the clearinghouse's signer is stopped first.
@@ -473,6 +515,7 @@ one's and tenant two's usage counts; the 402 of step 6; and the total charged to
 
 ```sh
 (cd "$D/dev-stack" && docker compose down)       # only if step 7 was run; keeps its volumes
+ent2 down                                        # only if the second enterprise was started
 ent down
 ch down
 ```

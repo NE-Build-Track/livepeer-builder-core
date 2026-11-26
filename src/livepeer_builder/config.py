@@ -324,9 +324,10 @@ class EngineSettings(Contract):
         # command must fit in that half. Through the remote adapters that is three calls, each under one
         # deadline of the timeout: a rotation that another rotation overtook in the engine reads the
         # allocation, sends the rotation, and reads which key the allocation takes (OneKeyPerAllocation).
-        # Every other command makes one or two, and none writes after its second call: a read that is cut
-        # short leaves nothing in flight, and the resume asks again. 3 calls in the half, so 6 timeouts
-        # in the whole window, where Batteries' two calls make four.
+        # Every other command on the ledger makes one or two, and none writes after its second call: a read
+        # that is cut short leaves nothing in flight, and the resume asks again. 3 calls in the half, so 6
+        # timeouts in the whole window, where Batteries' two calls make four. A status command is not on
+        # the ledger: the read-back after its second call (#158) is cut short by nothing.
         if self.operation_stale_s < 6 * self.clearinghouse_timeout_s:
             raise ValueError(
                 "LPB_OPERATION_STALE_S must be at least six times LPB_CLEARINGHOUSE_TIMEOUT_S: a command "

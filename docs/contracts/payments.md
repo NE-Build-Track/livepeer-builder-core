@@ -446,7 +446,7 @@ checks stop that:
 | `tenants.onboard(name, amount, operation_ref=…)` (the tenant desk, `payments.tenants`) | `POST /v1/grants` with `LPB_BATTERIES_GRANTS_TOKEN`, tagged `metadata.lpb_operation`; then the tenant admin key, an engine record | the ledger; Batteries has no key on grants, so a resume finds the tagged grant (Q5) |
 | `tenants.list_tenants()`, `tenants.grant(tenant)` | `GET /v1/grants`, `GET /v1/grants/{tenant}` and `GET /v1/allocations` with `LPB_BATTERIES_GRANTS_TOKEN` | read |
 | `tenants.set_status(tenant, active / paused, operation_ref=…)` | `PATCH /v1/grants/{tenant}/status` with `LPB_BATTERIES_GRANTS_TOKEN` | the ledger; the call itself sets a state |
-| `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
+| `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status`, then `GET /v1/allocations/{id}`, which reads the status back ([two status commands](#allotment)) | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
 | `rotate_payment_key(operation_ref)`, which stores the new key, or `rotate_for_delivery(operation_ref)`, which hands it to the caller | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
 
@@ -536,15 +536,34 @@ checks stop that:
   stayed live with its secret stored and nothing pointing at it, and a resumed rotation put back a key
   the newer one had revoked, with the reference of a deleted secret, so the actor could not pay.
 
-  **What the guarantee covers, and the known gap.** It covers commands that write different columns,
-  and the cases named above: a revoke, two rotations, an allotment that another command overtook.
-  Two status commands at the same moment (a pause and an activate) write the same column, and the last
-  write wins at the provider and in the store separately. Each sets the status at the provider and
-  then stores it, so when a pause is at the provider while an activate runs to its end, the provider
-  ends `paused` then `active` and the store `active` then `paused`: the stored status is the opposite
-  of the provider's. Closing this needs a version on the row or a read-back of the provider's status,
-  and #115 adds neither. Until then, send the status you want again: a repeated `set_status` sets it
-  at the provider and in the store.
+  **What the guarantee covers.** Commands that write different columns, the cases named above (a
+  revoke, two rotations, an allotment that another command overtook), and two status commands.
+
+  **Two status commands at the same moment (#158).** A pause and an activate write the same column,
+  so no condition orders them: they could reach the provider in one order and the store in the other,
+  and the stored status ended the opposite of the provider's. A status command therefore sets the
+  status at the provider, stores it, and then reads the allocation back at the provider
+  (`read_allocation`: `GET /v1/allocations/{id}` at Batteries, the actor's allocation route through a
+  clearinghouse). When the provider reports the other of the two statuses, another status command
+  reached it later: the command stores the provider's status and reads again. Its write always comes
+  before its read, so the command that writes the record last has read the provider after that write
+  and found what it wrote. Whichever command the provider took last, the stored status ends as the
+  provider's: in the engine's record and, through a clearinghouse, in the clearinghouse's own. The
+  command answers with the actor as it stored it last, so a pause that an activate overtook at the
+  provider answers `active`.
+
+  | The read-back | Stored, and answered |
+  | --- | --- |
+  | reports the status the command set | That status. This is the ordinary command: one read |
+  | reports the other of `active` and `paused` | The provider's status, and the provider is read again: three reads at most, and after the third the command answers with what it stored last |
+  | reports `exhausted`, `revoked` or anything else | The status the command set. `revoked` is a revoke's to store, with the key it deletes, and the engine's record does not follow an allocation that the provider calls `exhausted` because it has nothing left |
+  | fails: the provider is down or answers an error, or a clearinghouse could not read its own provider | The status the command set. The provider took it, so the command is done and is not failed for the read. The failure is logged (`payments.status_read_back_failed`) and the read is not tried again, so after that one command the two statuses can still end opposite: send the status again |
+  | is not made, because the actor was revoked meanwhile | Nothing: 404, as above |
+
+  A status command takes no reference and is not on the ledger: a repeat sets the status at the
+  provider, stores it and reads it back again. Only status commands sent through the engine are
+  settled this way. A status the provider changes by itself, or one set at the provider or at the
+  clearinghouse directly, is not followed.
 
   The conditional writes are optional for a store (`ActorCommandRepo` in `protocols`:
   `set_actor_status`, `set_actor_key`, `allot_actor`). The packaged SQL store has them; a supplied
@@ -1252,10 +1271,13 @@ selects the remote adapters (#169), and three settings, set together, say which 
   six times it. The ledger cancels a run at half the stale window
   ([a resume is a lease](#repeat-safe-commands)), and the longest command must fit in that half. Through
   the remote adapters the longest makes three calls: a rotation that another one overtook reads the
-  allocation, sends the rotation, and reads which key the allocation takes. Every other command makes
-  one or two, and none writes after its second call, so a read that is cut short leaves nothing in
-  flight and the resume asks again. Three calls in the half is six timeouts in the window, where
-  Batteries' two calls make four. The defaults, 20 and 120, meet it exactly. The read of the key's
+  allocation, sends the rotation, and reads which key the allocation takes. Every other command on
+  the ledger makes one or two, and none writes after its second call, so a read that is cut short
+  leaves nothing in flight and the resume asks again. Three calls in the half is six timeouts in the
+  window, where Batteries' two calls make four. The defaults, 20 and 120, meet it exactly. A status
+  command is not on the ledger and nothing cuts it short: its third call reads the status back, and
+  it reads up to twice more when another status command was at the clearinghouse at the same moment
+  ([two status commands](#allotment)). The read of the key's
   grant, which the engine makes once in a process
   ([who the engine is at the clearinghouse](#who-the-engine-is-at-the-clearinghouse)), is none of the
   three: a command makes it before its record is begun, so it spends none of that half.

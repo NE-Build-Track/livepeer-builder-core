@@ -14,6 +14,7 @@ real signer and runner on loopback sockets (``tests/unit/paying_ports.py``). Eit
 signer itself, with the allocation's own key; the clearinghouse's engine is in no payment's path.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -151,6 +152,45 @@ async def test_pausing_and_resuming_an_allocation_reaches_the_provider(ports: Po
 
     resumed = await ports.engine.payments.set_status(ports.admin, ports.tenant_id, "alice", "active")
     assert resumed.status == "active" and ports.provider.allocations[allocation_id].status == "active"
+
+
+@pytest.mark.parametrize(("slow", "overtaking"), [("paused", "active"), ("active", "paused")])
+async def test_two_status_commands_at_the_same_moment_leave_the_records_agreeing_with_the_provider(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch, slow: str, overtaking: str
+) -> None:
+    """#158: the provider takes the ``slow`` command's status and its answer is held up, the
+    ``overtaking`` command runs to its end, and the slow one then finishes. The provider ended on the
+    overtaking status. Each command stored the status it had asked for, so the slow one's write came
+    last and the record said the opposite of the provider. Each now reads the provider's status back
+    after its write, and stores that: the record, and the clearinghouse's own on the remote side, end
+    on the provider's status, and that is what the slow command is answered."""
+    allocation_id = await allotted(ports)
+    payments = ports.engine.payments
+    if slow == "active":  # so that each command changes the status
+        await payments.set_status(ports.admin, ports.tenant_id, "alice", "paused")
+    taken, answered = asyncio.Event(), asyncio.Event()
+    at_the_provider = ports.provider.set_allocation_status
+
+    async def held_up(allocation: str, status: str) -> None:
+        await at_the_provider(allocation, status)
+        if not taken.is_set():  # the first command's answer waits
+            taken.set()
+            await answered.wait()
+
+    monkeypatch.setattr(ports.provider, "set_allocation_status", held_up)
+    first = asyncio.ensure_future(payments.set_status(ports.admin, ports.tenant_id, "alice", slow))
+    await taken.wait()
+    second = await payments.set_status(ports.admin, ports.tenant_id, "alice", overtaking)
+    answered.set()
+    late = await first
+
+    assert ports.provider.allocations[allocation_id].status == overtaking
+    stored = await ports.engine.store.get_actor(ports.tenant_id, "alice")
+    assert stored is not None and stored.status == overtaking
+    if ports.clearinghouse is not None:
+        held = await ports.clearinghouse.store.get_actor(ports.tenant_id, "alice")
+        assert held is not None and held.status == overtaking
+    assert (second.status, late.status) == (overtaking, overtaking)
 
 
 async def test_revoking_returns_what_was_not_spent_and_ends_the_payment_key(ports: Ports) -> None:

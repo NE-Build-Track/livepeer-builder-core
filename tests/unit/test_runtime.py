@@ -30,6 +30,7 @@ from livepeer_builder.runtime.assembly import assemble, default_parts
 from livepeer_builder.runtime.logging import JsonFormatter, configure_logging
 from livepeer_builder.store import SqlStore, head_revision, upgrade
 from livepeer_builder.testing import FakeUsageSource, FixedClock
+from tests.unit.test_async_retention import until_purged
 
 MEMORY = "sqlite+aiosqlite:///:memory:"
 LOOPS = {"lpb-discovery", "lpb-cost-sync", "lpb-retention"}
@@ -178,7 +179,11 @@ async def test_cost_sync_errors_surface_in_health(store: SqlStore, clock: FixedC
         supply=EngineSupply(store=store, clock=clock, usage_source=Broken()),
     )
     await engine.start()
-    await asyncio.sleep(0.05)
+    # Wait for the failed sync to be noted, not a fixed time: the loop reads the store on the store's
+    # thread before and after it asks the source, and stop() cancels a sync that has not got there.
+    async with asyncio.timeout(5):
+        while engine.health().cost_sync_error is None:  # noqa: ASYNC110  # health exposes no event
+            await asyncio.sleep(0.01)
     await engine.stop()
     assert engine.health().cost_sync_error == "unavailable"  # the usage source's code; its text is logged
 
@@ -326,10 +331,8 @@ async def test_retention_runs_every_retention_interval(
     engine = await BuilderEngine.create(settings, supply=EngineSupply(store=store, clock=clock))
     with caplog.at_level(logging.INFO, logger="livepeer_builder.runtime.engine"):
         await engine.start()
-        await asyncio.sleep(0.15)  # about seven intervals
+        await until_purged(caplog, 3)  # the one at start and two an interval apart, however long each takes
         await engine.stop()
-    purges = [r for r in caplog.records if getattr(r, "event", None) == "store.purged"]
-    assert len(purges) >= 3
 
 
 def record_closes(monkeypatch: pytest.MonkeyPatch) -> list[SqlStore]:

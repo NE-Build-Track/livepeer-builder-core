@@ -1094,7 +1094,8 @@ can run at once (the loop and `POST /v1/costs/sync`). Each job has an evidence v
 usage row on a matched session, a changed match or a late session report increments it in the same
 transaction. A projection records the version it was computed from, read before the job's evidence,
 and stands for the job only while that version is current; a save never replaces a projection computed
-from newer evidence. Reads compute an out-of-date job live, and the next sync stores it again, even
+from newer evidence. Two syncs that store a job's first projection at the same moment both end: one row
+is kept, from the newer evidence of the two (#158). Reads compute an out-of-date job live, and the next sync stores it again, even
 when a sync stopped (a crash, an error) before it reached that job, or a concurrent sync saved an older
 classification. A state between two of sync's commits therefore still counts every row once.
 

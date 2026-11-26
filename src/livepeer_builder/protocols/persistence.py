@@ -306,7 +306,8 @@ class CostRepo(Protocol):
         ...
 
     async def save_projection(self, cost: JobCost, *, evidence_version: int) -> None:
-        """Store a cost computed from the job at ``evidence_version``; never over one from newer evidence."""
+        """Store a cost computed from the job at ``evidence_version``; never over one from newer evidence.
+        Two syncs may save a job's first projection at once: neither save fails, and one is kept."""
         ...
 
 

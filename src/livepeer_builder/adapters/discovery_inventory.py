@@ -15,13 +15,14 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlsplit
 
-import yarl
-
 from livepeer_builder.contracts.discovery import (
-    NOT_TEXT,
+    HTTP_SCHEMES,
     PriceInfo,
     Runner,
     RunnerGPU,
+    UnreadableInventory,
+    is_app,
+    is_callable_url,
     is_optional_text,
     is_text,
 )
@@ -34,11 +35,6 @@ _RFC3339 = re.compile(
     r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)", re.ASCII
 )
 _INT64 = 1 << 63
-_HTTP = frozenset({"http", "https"})
-# A URL holds none of what is not text (``contracts.discovery``, #114, C12), and no space, which the HTTP
-# client cannot send.
-_UNSENDABLE = re.compile(f"[ {NOT_TEXT}]")
-_MAX_APP = 200  # a job stores its app as ``store.schema.ID``, and ``JobRequest.app`` takes no longer one
 
 
 class JsonNumber:
@@ -48,23 +44,15 @@ class JsonNumber:
         self.token = token
 
 
-class UnreadableInventory(ValueError):
-    """A document with records and no readable runner (#114, C28): an answer the engine could not read,
-    not an empty inventory. The refresh fails, so the last good snapshot stays."""
-
-    def __init__(self, entries: int, runners: int) -> None:
-        super().__init__(
-            f"discovery response has no readable runner: {entries} entries and {runners} runners skipped"
-        )
-
-
 def read_inventory(raw: str | bytes | bytearray) -> tuple[Runner, ...]:
     """Runners the document can be read as. A body that is not a JSON array raises ``ValueError``.
 
-    An entry needs an ``address`` the engine can call (``_http_url``), and a ``runners`` list. A metadata
-    entry (``nodes``, no ``address`` and no ``runners``) yields nothing. A runner needs an ``app`` that is
-    valid text (``_text``) of 1 to 200 characters, a ``url`` the engine can call, and an ``observed_at`` the
-    clock can convert to UTC. Any other text field that is not valid text is absent; such a field may hold
+    An entry needs an ``address`` the engine can call (``is_callable_url``), and a ``runners`` list. A
+    metadata entry (``nodes``, no ``address`` and no ``runners``) yields nothing. A runner needs an ``app``
+    that is valid text of 1 to 200 characters (``is_app``), a ``url`` the engine can call, and an
+    ``observed_at`` the clock can convert to UTC. The URL rule and the ``app`` rule are the contract's
+    (``contracts/discovery.py``): ``DiscoveryService`` asks them again of every source's runners (#158).
+    Any other text field that is not valid text is absent; such a field may hold
     a tab or a line break. One bad record does not drop the rest. ``[]`` is an empty inventory, and so is a
     document with no record to skip. A document with skipped records and no runner raises
     ``UnreadableInventory``.
@@ -144,9 +132,8 @@ def _entry(entry: object) -> tuple[str, list[Any]] | None:
 def _runner(raw: object, address: str) -> Runner | None:
     if not isinstance(raw, dict):
         return None
-    url = _http_url(raw.get("url"))
-    app = _text(raw.get("app"))
-    if url is None or not app or len(app) > _MAX_APP:
+    url, app = _http_url(raw.get("url")), raw.get("app")
+    if url is None or not isinstance(app, str) or not is_app(app):
         return None
     observed_at = _stamp(raw.get("observed_at"))
     if observed_at is None:
@@ -173,30 +160,8 @@ def _runner(raw: object, address: str) -> Runner | None:
 
 
 def _http_url(value: object) -> str | None:
-    """An ``http`` or ``https`` URL the engine can call, kept as written; otherwise None.
-
-    aiohttp, which makes every runner call, reads the URL with yarl. yarl must connect to the host
-    ``urlsplit`` names, the one the payment-origin check compares, on a port from 1 to 65535. yarl folds
-    a non-ASCII host, so ``①27.0.0.1`` would reach ``127.0.0.1``, and it refuses a backslash in the host.
-    The URL holds no ASCII space, control character or lone surrogate (``_UNSENDABLE``): it is valid
-    text, and a space would split the request line. Another space character, such as U+00A0 or U+2028,
-    is kept and percent-encoded when sent (``runner_address``). It has no userinfo, query or fragment:
-    the engine appends each request's path to a runner URL, an ``address`` whose origin matches that URL
-    becomes ``orchestrator_url`` for the payment-origin check, and error text quotes both.
-    """
-    if not isinstance(value, str) or not value or _UNSENDABLE.search(value):
-        return None
-    try:
-        parts = urlsplit(value)
-        host, _ = parts.hostname, parts.port  # .port raises for a port that is not a number
-        dialed = yarl.URL(value)
-    except ValueError:
-        return None
-    if parts.scheme not in _HTTP or not host or "@" in parts.netloc or "?" in value or "#" in value:
-        return None
-    if dialed.raw_host != host or not 1 <= (dialed.port or 0) <= 65535:
-        return None
-    return value
+    """An ``http`` or ``https`` URL the engine can call (``is_callable_url``), kept as written; else None."""
+    return value if isinstance(value, str) and is_callable_url(value) else None
 
 
 def _origin(url: str) -> str | None:
@@ -208,7 +173,7 @@ def _origin(url: str) -> str | None:
         return None
     if port is None:
         port = 443 if scheme == "https" else 80
-    if scheme not in _HTTP or not host or not 1 <= port <= 65535:
+    if scheme not in HTTP_SCHEMES or not host or not 1 <= port <= 65535:
         return None
     return f"{scheme}://{host.lower()}:{port}"
 

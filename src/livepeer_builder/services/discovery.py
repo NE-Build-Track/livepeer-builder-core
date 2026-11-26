@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta
 
 from livepeer_builder.contracts import (
@@ -69,6 +69,33 @@ def _paid_ready(runner: Runner) -> bool:
     return rate is not None and (rate.amount == 0 or signable(rate.amount, rate.currency, rate.unit))
 
 
+class NotRunners(TypeError):
+    """What a source returned is not runners (#158): no collection of ``Runner`` objects. A supplied
+    source builds its answer itself, so the engine checks it where it takes it. The refresh fails as
+    it does when the source raises, and the last good snapshot stays. The text names the type that
+    came and quotes nothing of it."""
+
+
+def _runners(answer: object) -> tuple[Runner, ...]:
+    """A source's answer as the runners it holds, or ``NotRunners``. A tuple or a list is what a source
+    returns; any other sized collection of runners reads the same. Text, bytes and a mapping are none,
+    empty ones included: they would read as an empty inventory and replace the snapshot."""
+    if isinstance(answer, str | bytes | bytearray | Mapping) or not isinstance(answer, Collection):
+        raise NotRunners(f"discovery source returned {_kind(answer)}, not a list of runners")
+    items = tuple(answer)
+    strangers = [item for item in items if not isinstance(item, Runner)]
+    if strangers:
+        raise NotRunners(
+            f"discovery source returned {len(strangers)} of {len(items)} items that are not runners; "
+            f"the first is {_kind(strangers[0])}"
+        )
+    return items
+
+
+def _kind(value: object) -> str:
+    return "None" if value is None else f"a {type(value).__name__}"
+
+
 class DiscoveryService:
     def __init__(
         self,
@@ -100,8 +127,8 @@ class DiscoveryService:
     async def refresh(self) -> DiscoverySnapshot:
         attempted = self._clock.now()
         try:
-            runners = await self._source.fetch()
-        except Exception as exc:  # any source failure keeps the last good snapshot
+            runners = _runners(await self._source.fetch())
+        except Exception as exc:  # any source failure keeps the last good snapshot: NotRunners too
             code = source_failure(exc)  # /readyz shows the code; the text is logged (#113, C7)
             _LOG.warning(
                 "discovery failed", extra={"event": "discovery.failed", "code": code, "error": str(exc)}

@@ -184,6 +184,9 @@ The codes are a closed set in the contract (`SourceFailureCode` for `discovery_e
 `cost_sync_error`), so the OpenAPI schema lists them and nothing else can be written there. The shipped
 adapters decide the code where they read the answer; a supplied source's failure is read by its
 exception type (a `ValueError`, `KeyError`, `TypeError` or `ArithmeticError` is `invalid_answer`).
+What a supplied discovery source returns that is no collection of `Runner` objects is `invalid_answer`
+too: the refresh fails as if the source had raised
+([contract](contracts/discovery.md#what-the-engine-reads)).
 
 `cost_sync_error` is the outcome of the last cost sync, whoever started it: the background loop, or an
 admin with `POST /v1/costs/sync`. A sync that fails sets the code and writes `costs.sync_failed`, and

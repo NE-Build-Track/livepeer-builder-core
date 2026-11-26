@@ -3,16 +3,22 @@
 from collections.abc import Iterable
 
 from livepeer_builder.contracts import ActorContext, Allowance, Offering, Operation, ResourceRef, Runner
+from livepeer_builder.contracts.discovery import is_kept
 from livepeer_builder.errors import NotProvisioned
 from livepeer_builder.protocols import AccessPolicy
 from livepeer_builder.services.policy import DefaultPolicy
 
 
 class FakeDiscovery:
+    """The offerings as given, and of the runners given the ones an engine keeps (``is_kept``, #158):
+    an engine lists no runner whose text, URL or ``app`` breaks the discovery contract's rules,
+    whichever source handed it over, so the fake lists none either."""
+
     def __init__(
         self, offerings: Iterable[Offering], runners: Iterable[Runner], policy: AccessPolicy | None = None
     ) -> None:
-        self._offerings, self._runners = list(offerings), list(runners)
+        self._offerings = list(offerings)
+        self._runners = [runner for runner in runners if is_kept(runner)]
         self._policy = policy or DefaultPolicy()
 
     def offerings(self, *, app: str | None = None) -> list[Offering]:

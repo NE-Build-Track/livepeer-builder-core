@@ -145,8 +145,12 @@ The runner URL's own path is encoded by the same rule, so a runner URL may hold 
 character in its path: escapes it already holds are kept, and a `%` that begins none is sent as `%25`.
 Its scheme, host and port go out as written, except a host that is not ASCII, which is sent by its IDNA
 name. The payment-origin check names every host that way too, so a 402 whose `payment_url` writes the
-same host in Unicode still matches the runner. A runner URL that cannot be read (a supplied discovery source can return one; the default source
-refuses it earlier) fails that attempt, unpaid, as `invalid runner URL`, like any other runner failure.
+same host in Unicode still matches the runner. Discovery keeps no runner whose URL the engine cannot
+call, whichever source handed it over, and none whose host is not ASCII: a source writes such a host by
+its IDNA name ([discovery.md](discovery.md#the-rules-hold-for-any-source)). The transport checks again
+what it is handed: a runner URL it cannot read, which can reach it from a caller of the transport itself
+or from a `SelectionPolicy` that returns a runner discovery did not list, fails that attempt, unpaid, as
+`invalid runner URL`, like any other runner failure.
 
 | State | Meaning |
 | --- | --- |

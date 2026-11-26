@@ -299,7 +299,8 @@ async def test_the_prefix_check_reads_the_encoded_runner_path(net: Net, path: st
     ],
 )
 async def test_a_runner_url_that_cannot_be_read_is_an_unpaid_runner_call_error(net: Net, url: str) -> None:
-    """A supplied discovery source can return one: only the default source checks its runner URLs."""
+    """The transport by itself. Discovery keeps no such runner, from any source (#158), so this is the
+    check for a runner that reaches the transport some other way."""
     runner = net.runner().model_copy(update={"url": url})
     with pytest.raises(RunnerCallError, match="invalid runner URL") as refused:
         await SdkRunnerTransport(None).call(runner, JobRequest(app=APP, path="/run"), None)

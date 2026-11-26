@@ -9,8 +9,10 @@ as built (``as_built``), and it must still begin with the runner's: the same sch
 path at or under the runner's own.
 
 Sent as built, the address gets no encoding from aiohttp, so the runner URL's own path is encoded here
-by the same rule as the job's, and a host that is not ASCII by its IDNA name. Only the default discovery
-source checks its runner URLs: one that cannot be read is an unpaid ``RunnerCallError``, like any other.
+by the same rule as the job's, and a host that is not ASCII by its IDNA name. Discovery keeps no runner
+whose URL the engine cannot call, from any source (``contracts.discovery.is_kept``, #158), so this is the
+second check, for a runner handed to the transport some other way: a URL that cannot be read is an unpaid
+``RunnerCallError``, like any other.
 """
 
 import re

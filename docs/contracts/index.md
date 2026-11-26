@@ -49,6 +49,17 @@ address to start, as it did before ([discovery.md](discovery.md#what-the-engine-
   `operation_ref: ""` is a 422 that names the field (a `ValidationError` in process), before anything
   is written; it used to count as a reference. A client that sends an empty string for "no retry key"
   leaves the field out instead ([engine.md](engine.md#idempotency)).
+- **A supplied `DiscoverySource` is held to the reader's rules** (#158). An application that installs a
+  discovery source of its own through `decorate` returns a tuple or a list of `Runner` objects, each
+  with a `url` the engine can call (`http` or `https`, an ASCII host, no userinfo, query or fragment),
+  an `orchestrator_url` that is absent or such a URL, and an `app` of 1 to 200 characters. A runner
+  that breaks a rule is skipped and logged (`discovery.inventory_skipped`), where it used to be listed.
+  When none of the runners returned is kept, or the source returns anything that is no collection of
+  runners, the refresh fails with `invalid_answer` and the engine keeps its last good snapshot; the
+  first used to empty the catalog and the second to stop the engine, or its refresh loop. A source that
+  names a host outside ASCII writes its IDNA name (`xn--`). `observed_at` stays optional. `FakeEngine`
+  lists, of the runners a test gives it, the ones an engine keeps
+  ([discovery.md](discovery.md#the-rules-hold-for-any-source)).
 
 ## Upgrading to the domain-language names
 

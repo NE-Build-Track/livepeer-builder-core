@@ -21,6 +21,7 @@ from livepeer_builder.contracts import (
     MeasuredUsage,
     ResultRef,
 )
+from livepeer_builder.errors import NoCapacity, OperationConflict, OperationExists
 from livepeer_builder.store import job_queue as queue
 from livepeer_builder.store import operation_refs as refs
 from livepeer_builder.store import schema as t
@@ -79,6 +80,8 @@ class SqlJobs:
                 await conn.execute(insert(t.jobs).values(values))
                 if waiting is not None:
                     await conn.execute(insert(t.job_requests).values(waiting))
+        except NoCapacity as full:
+            raise await self._full_or_held(job, fingerprint, retry_of, full) from None
         except (IntegrityError, refs.Superseded):
             if job.operation_ref is None:
                 raise
@@ -88,6 +91,20 @@ class SqlJobs:
                     return await self._insert_job(job, fingerprint, None, waiting, max_queued)
                 raise
             raise refs.taken(*found, fingerprint) from None
+
+    async def _full_or_held(
+        self, job: Job, fingerprint: str | None, retry_of: UUID | None, full: NoCapacity
+    ) -> NoCapacity | OperationConflict | OperationExists:
+        """What a job the full queue refused is answered with. The limit is asked before the reference,
+        so a repeat that lost the last place to the first submit of its reference lands here: it is
+        answered as any repeat is, with the job that holds the reference. A reference nobody holds, and
+        the failed job a retry was to take the reference from, leave the refusal as it is."""
+        if job.operation_ref is None:
+            return full
+        found = await self.job_by_operation_ref(job.tenant_id, job.actor_id, job.operation_ref)
+        if found is None or found[0].id == retry_of:
+            return full
+        return refs.taken(*found, fingerprint)
 
     async def job_by_operation_ref(
         self, tenant_id: str, actor_id: str, operation_ref: str

@@ -54,10 +54,21 @@ def request_values(job_id: UUID, request: JobRequest, actor: ActorContext) -> di
 QUEUE_LOCK = 0x4C50424A  # PostgreSQL's advisory lock for the queue's limit: one key, the engine's own
 
 
+def unstarted() -> Any:
+    """A ``running`` job that may still go back to the queue: its request is stored and it has no
+    attempt. The worker has claimed it and has not called a runner for it yet."""
+    attempted = exists().where(t.attempts.c.job_id == t.jobs.c.id)
+    kept = exists().where(t.job_requests.c.job_id == t.jobs.c.id)
+    return and_(t.jobs.c.state == RUNNING, kept, ~attempted)
+
+
 async def room(conn: AsyncConnection, max_queued: int) -> None:
     """Refuse (``NoCapacity``) when the queue already holds ``max_queued`` jobs. Asked in the transaction
     that stores a job, behind a lock every such transaction takes first, so no two of them see the same
     free place: the limit holds for submits at the same moment (T45, closed).
+
+    A job that is claimed and may still go back (``unstarted``) keeps its place: one nobody can run yet
+    is claimed and given back at every look, and its place is not free in between.
 
     On PostgreSQL the lock is a transaction-level advisory lock, which the commit or the rollback
     releases. SQLite has one writer at a time: a write that changes no row makes this transaction that
@@ -66,7 +77,8 @@ async def room(conn: AsyncConnection, max_queued: int) -> None:
         await conn.execute(select(func.pg_advisory_xact_lock(QUEUE_LOCK)))
     else:
         await conn.execute(update(t.jobs).where(false()).values(claims=t.jobs.c.claims))
-    queued = (await conn.execute(select(func.count()).where(t.jobs.c.state == QUEUED))).scalar_one()
+    places = or_(t.jobs.c.state == QUEUED, unstarted())
+    queued = (await conn.execute(select(func.count()).select_from(t.jobs).where(places))).scalar_one()
     if queued >= max_queued:
         raise NoCapacity("the queue is full; submit again later")
 
@@ -166,17 +178,15 @@ class SqlJobQueue:
     async def requeue_unstarted(
         self, job_id: UUID, max_claims: int, *, claim: int | None = None, counted: bool = True
     ) -> bool:
-        attempted = exists().where(t.attempts.c.job_id == t.jobs.c.id)
-        kept = exists().where(t.job_requests.c.job_id == t.jobs.c.id)
-        unstarted = and_(held(job_id, claim), ~attempted, kept)
+        mine = and_(held(job_id, claim), unstarted())
         back: dict[str, Any] = {"state": QUEUED, "started_at": None}
         given_back = t.jobs.c.claims_given_back
         if counted:
-            unstarted = and_(unstarted, t.jobs.c.claims - given_back < max_claims)
+            mine = and_(mine, t.jobs.c.claims - given_back < max_claims)
         else:  # the claim is given back: it never counts against ``max_claims``, and its number is spent
             back["claims_given_back"] = given_back + 1
         async with self.engine.begin() as conn:
-            moved = await conn.execute(update(t.jobs).where(unstarted).values(back))
+            moved = await conn.execute(update(t.jobs).where(mine).values(back))
         return moved.rowcount == 1
 
     async def cancel_queued(self, job_id: UUID, failure: Failure, completed_at: datetime) -> bool:

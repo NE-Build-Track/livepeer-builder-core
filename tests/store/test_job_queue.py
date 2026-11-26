@@ -179,6 +179,67 @@ async def test_the_queues_limit_holds_for_submits_at_the_same_moment(
         assert await count(sql, t.job_requests, job.id) == int(kept)
 
 
+async def test_a_claimed_job_that_can_still_go_back_keeps_its_place_in_the_queue(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    """A job the worker has claimed and not yet started an attempt for may be given back: one nobody
+    can run yet is, at every look. Its place is not free meanwhile. Counted as gone, a submit took the
+    place and the give-back put the queue one past its limit, at each look, for as long as clients kept
+    submitting (review of ``3812d59``). A job with an attempt never goes back, and its place is free."""
+    first, second = await enqueued(sql, clock), await enqueued(sql, clock)  # the queue is full at two
+    claimed = await sql.claim_job(first.id, clock.now())
+    assert claimed is not None
+
+    with pytest.raises(NoCapacity):  # the claimed job may come back: there is no room
+        await sql.enqueue_job(waiting(clock), None, REQUEST, ALICE, max_queued=2)
+    assert await sql.requeue_unstarted(first.id, 3, claim=claimed[3], counted=False)
+    assert (await sql.queued_stats())[0] == 2  # and with it back the queue is at its limit, not past it
+
+    running = await sql.claim_job(second.id, clock.now())
+    assert running is not None
+    assert await sql.start_attempt(make_attempt(second.id, clock), claim=running[3])
+    await sql.enqueue_job(waiting(clock), None, REQUEST, ALICE, max_queued=2)  # that one will not come back
+    assert (await sql.queued_stats())[0] == 2
+
+
+async def test_a_repeat_that_loses_the_last_place_is_answered_with_the_job_that_took_it(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    """Two submits of one reference at the same moment, with one place in the queue. The one that
+    stores its job fills the queue; the other holds the same reference, and is answered as a repeat is,
+    with that job. It was told the queue was full (review of ``3812d59``): the limit was asked before
+    the reference. A different request under the reference is still a conflict, and a reference nobody
+    holds is still refused."""
+    winner = waiting(clock, ref="order-1")
+    await sql.enqueue_job(winner, "fp", REQUEST, ALICE, max_queued=1)
+
+    with pytest.raises(OperationExists) as repeat:
+        await sql.enqueue_job(waiting(clock, ref="order-1"), "fp", REQUEST, ALICE, max_queued=1)
+    assert repeat.value.job.id == winner.id
+    with pytest.raises(OperationConflict):
+        await sql.enqueue_job(waiting(clock, ref="order-1"), "other", REQUEST, ALICE, max_queued=1)
+    with pytest.raises(NoCapacity):
+        await sql.enqueue_job(waiting(clock, ref="order-2"), "fp", REQUEST, ALICE, max_queued=1)
+
+
+async def test_a_retry_the_full_queue_refuses_is_not_answered_with_the_job_it_was_to_replace(
+    sql: SqlStore, clock: FixedClock
+) -> None:
+    """A repeat after a job that never reached a runner queues a new job, which takes the reference from
+    the failed one. With the queue full that new job is refused, and the failed job is not handed back
+    as if it were the repeat's answer: it still holds the reference, for the next try."""
+    failed = make_job(clock, ref="order-9", state="failed").model_copy(update={"tenant_id": "acme"})
+    await sql.create_job(failed, "fp")
+    await enqueued(sql, clock)  # the one place is taken
+
+    again = waiting(clock, ref="order-9")
+    with pytest.raises(NoCapacity):
+        await sql.enqueue_job(again, "fp", REQUEST, ALICE, retry_of=failed.id, max_queued=1)
+
+    holder = await sql.job_by_operation_ref("acme", "alice", "order-9")
+    assert holder is not None and holder[0].id == failed.id and await sql.get_job(again.id) is None
+
+
 async def test_a_job_is_stored_whatever_the_queue_holds_when_no_limit_is_named(
     sql: SqlStore, clock: FixedClock
 ) -> None:

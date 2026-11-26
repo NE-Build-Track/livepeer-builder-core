@@ -124,16 +124,16 @@ published signer itself:
 - **(b)** the same for a live job;
 - **(c)** an engine in its `both` role still runs a paid job by itself.
 
-Proofs (a) and (b) were run from this runbook on 23 November 2026:
-[the evidence](../docs/references/evidence/2026-11-23-payment-clearinghouse-proofs.md). That run was
-made before a tenant's routes took the tenant from the credential (#165): a tenant's admin then called
-the paths that name its tenant on the public listener, and the evidence records those paths. The
-commands below are rewritten for the routes as they are now, a tenant's own routes on the public
-listener and the paths that name a tenant on the private one, and have not been run in this form. An
-earlier run, on 19 November, used a design that was withdrawn the same day, in which the clearinghouse's
-engine signed for the enterprise's. Proof (c) did not use that path and stands as it was run then. What
-of that run stands is at the top of
-[its record](../docs/references/evidence/2026-11-19-payment-clearinghouse-proofs.md).
+All three were run from this runbook on 26 November 2026, on `releases/m4` with every change of ISS-31
+merged: [the evidence](../docs/references/evidence/2026-11-26-payment-clearinghouse-proofs.md). That run
+started a second enterprise project as tenant two and topped up a grant, which steps 2 and 3 show. Its
+jobs were short: a job of several payment cycles and a fixed-price job that succeeds are in the record
+of [23 November](../docs/references/evidence/2026-11-23-payment-clearinghouse-proofs.md), which ran
+proofs (a) and (b) before a tenant's routes took the tenant from the credential (#165) and records the
+paths of that day. An earlier run, on 19 November, used a design that was withdrawn the same day, in
+which the clearinghouse's engine signed for the enterprise's.
+[Its record](../docs/references/evidence/2026-11-19-payment-clearinghouse-proofs.md) says what of it
+stands.
 
 **Money.** Only a job moves money: each paid job sends the orchestrator payment tickets from the
 wallet's deposit, for the price the runner asked. A grant and an allocation are entries in Batteries'
@@ -176,7 +176,14 @@ LIVE_JOB='{"app":"<live app from offerings>","path":"<path>","payload":{},"timeo
 ch()  { docker compose -f "$D/clearinghouse/compose.yaml" "$@"; }   # the clearinghouse project
 ent() { docker compose -f "$D/enterprise/compose.yaml" "$@"; }      # the enterprise project
 CS=$D/clearinghouse/secrets ES=$D/enterprise/secrets
-PUBLIC=http://127.0.0.1:8180 SIGNER=http://127.0.0.1:8137 WORK=http://127.0.0.1:8280
+ES2=$ES/two                           # the second enterprise's keys: git-ignored, as secrets/ is
+ent2() {  # the enterprise project again, as tenant two (step 3): another name, so its own volume
+  LPB_CLEARINGHOUSE_TOKEN=$(cat $CS/tenant-two-key 2>/dev/null) \
+  LPB_CLEARINGHOUSE_TENANT_ID=$(cat $CS/tenant-two-id 2>/dev/null) \
+  LPB_SECRET_KEY=$(cat $ES2/secret-key 2>/dev/null) ENTERPRISE_PORT=8281 \
+    docker compose -p lpb-enterprise-two -f "$D/enterprise/compose.yaml" "$@"
+}
+PUBLIC=http://127.0.0.1:8180 SIGNER=http://127.0.0.1:8137 WORK=http://127.0.0.1:8280 WORK2=http://127.0.0.1:8281
 OWN=/v1/clearinghouse                 # a tenant's own routes, on the public listener: they name no tenant
 TENANTS=/v1/clearinghouse/tenants     # the clearinghouse admin's, on the private listener: they name one
 
@@ -208,14 +215,15 @@ ledger from that run would also list its old grants as tenants. Remove them, whi
 touches nothing on-chain:
 
 ```sh
-ent down -v 2>/dev/null; ch down -v 2>/dev/null     # stops both projects and removes their volumes
-docker volume rm lpb-enterprise_engine-data lpb-clearinghouse_engine-data lpb-clearinghouse_paid-state 2>/dev/null
-docker volume ls --format '{{.Name}}' | grep -E '^lpb-(clearinghouse|enterprise)_' || echo "no volumes left"
+ent2 down -v 2>/dev/null; ent down -v 2>/dev/null; ch down -v 2>/dev/null   # stops the projects and removes their volumes
+docker volume rm lpb-enterprise-two_engine-data lpb-enterprise_engine-data \
+  lpb-clearinghouse_engine-data lpb-clearinghouse_paid-state 2>/dev/null
+docker volume ls --format '{{.Name}}' | grep -E '^lpb-(clearinghouse|enterprise(-two)?)_' || echo "no volumes left"
 ```
 
 Check: the last line prints `no volumes left`. The second line is for a project whose `.env` is gone,
-which `down` cannot read; it removes the same three volumes by name, and says nothing when they are
-already gone. If a volume is still listed, a container of an earlier run still holds it:
+which `down` cannot read, and for the second enterprise, whose settings are files of an earlier run;
+it removes the same four volumes by name, and says nothing when they are already gone. If a volume is still listed, a container of an earlier run still holds it:
 `docker ps -a --filter name=lpb-` shows it, and `docker rm -f` removes it.
 
 Then the files `clearinghouse/` needs. If `clearinghouse/.env`, `clearinghouse/secrets/` and
@@ -276,6 +284,21 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat $CS/ad
 Costs nothing. Check: two tenants, each with `total` and `unallocated` of `GRANT` and `spent` of 0. In a
 new shell, set `ONE` and `TWO` again with the line above.
 
+A grant is topped up by hand, by the clearinghouse admin, on the private listener. The answer is a 204
+with no body, and a repeat under the same reference adds nothing:
+
+```sh
+admin -o /dev/null -w '%{http_code}\n' -H 'Content-Type: application/json' \
+  -d '{"amount":{"amount":"0.10","currency":"USD"},"operation_ref":"proof-topup-two"}' \
+  http://127.0.0.1:8081$TENANTS/$TWO/grant/top-up            # 204
+admin http://127.0.0.1:8081$TENANTS | jq 'map({name, total})'   # two: GRANT + 0.10; one: GRANT
+tenant two -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' \
+  -d '{"amount":{"amount":"0.10","currency":"USD"},"operation_ref":"proof-topup-self"}' \
+  $PUBLIC$OWN/grant/top-up                                   # 404: a tenant tops up no grant
+```
+
+Costs nothing: a top-up is an entry in Batteries' ledger.
+
 Tenant two allots its actor itself, on the public listener, with its own admin key. Its routes there
 name no tenant: the clearinghouse takes the tenant from the key. The answer hands the allocation's key
 to the caller, once. This proof does not use that key, so the command reads the answer and drops the
@@ -334,6 +357,29 @@ Costs nothing. Check:
 - **The key is stored at the enterprise and nowhere at the clearinghouse:** the enterprise's store holds
   one secret and its record says `secret_store`; the clearinghouse's store holds none and its record
   says `work_engine`. The read of the allocation carries no key.
+
+**A second enterprise, as tenant two.** The same project runs once more under another name, with
+tenant two's key and id, a secret key of its own and another port: `ent2`, defined in step 0, which
+reads the three from files. Compose reads a variable set in the shell before the one in `.env`, so
+nothing of tenant one's project changes:
+
+```sh
+mkdir -p $ES2
+[ -s $ES2/secret-key ] ||   # a key from an earlier start stays: the engine's stored keys are under it
+  python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())' > $ES2/secret-key
+ent2 up -d
+ent2 exec -T engine lpb payments check                      # role work; exit 0; its tenant is tenant two's grant
+ent2 exec -T engine lpb bootstrap-admin | jq -r '.token // empty' | keep $ES2/admin-key
+curl -sS -H "Authorization: Bearer $(cat $ES2/admin-key)" -H 'Content-Type: application/json' \
+  -d "{\"kind\":\"actor\",\"actor_id\":\"dave\",\"tenant_id\":\"$TWO\",\"operation_ref\":\"proof-key-dave\"}" \
+  $WORK2/v1/keys | jq -r '.token // empty' | keep $ES2/dave-key
+ent2 exec -T engine python /opt/enterprise/allot.py dave $ALLOT proof-allot-dave
+stored ent2          # secrets stored: 1, and [('dave', 'secret_store')]
+```
+
+Costs nothing. Check: each enterprise's store holds its own actor's key and no other, and the
+clearinghouse's holds none. Dave's paid job is step 7, after the checks of steps 4 and 5 that count
+tenant two's usage as 0.
 
 **A runner is paid before it reads the request.** A job the runner refuses (a path it does not serve,
 an input it does not take) is still charged, and the engine records it as failed after payment. Run a
@@ -420,10 +466,41 @@ tenant one $PUBLIC$OWN/usage | jq '.items | length'                             
 `failed` with `kind` `payment`, `reason` `allowance_exhausted`, `status_code` 402 and `payment_sent`
 `false`; tenant one's usage has no new row.
 
-### 7. Proof (c): an engine in its `both` role still pays by itself
+### 7. Tenant two's engine pays for its own job
 
-This proof was run on 19 November 2026 and stands: it never used the withdrawn path. Run it again only
-to have all three on one commit.
+Only if the second enterprise was started in step 3. Steps 4 and 5 are about alice's jobs, and their
+checks count tenant two's usage as 0, which is true until this step. The `actor` helper reads tenant
+one's keys, so these commands name dave's key and the second engine's address themselves.
+
+```sh
+ONE_ROWS=$(tenant one $PUBLIC$OWN/usage | jq '.items | length')
+dave() { curl -sS -H "Authorization: Bearer $(cat $ES2/dave-key)" "$@"; }
+dave -D $ES2/fixed-headers -o $ES2/fixed-result -H 'Content-Type: application/json' -d "$FIXED_JOB" $WORK2/v1/jobs
+JOB=$(grep -i '^livepeer-job-id:' $ES2/fixed-headers | tr -d '\r' | cut -d' ' -f2)
+dave $WORK2/v1/jobs/$JOB | jq '{state, failure, attempts: [.attempts[] | {outcome, payment_sent}]}'
+```
+
+**Costs** the price of one fixed job. Check: the attempt's `payment_sent` is `true`. Then, once Batteries
+has accounted the payment (a few seconds):
+
+```sh
+curl -sS -X POST -H "Authorization: Bearer $(cat $ES2/admin-key)" $WORK2/v1/costs/sync | jq
+dave $WORK2/v1/jobs/$JOB/cost | jq '{status, fees, billable}'                 # observed, with the fee
+dave $WORK2/v1/allowance | jq                                                 # spent is the fee
+tenant two $PUBLIC$OWN/usage | jq '.items | length'                           # 1: dave's payment
+tenant one $PUBLIC$OWN/usage | jq '.items | length'                           # $ONE_ROWS, as before it
+admin http://127.0.0.1:8081$TENANTS | jq 'map({name, spent})'                 # two: the fee; one: as before
+actor alice -o /dev/null -w '%{http_code}\n' $WORK2/v1/allowance              # 401: alice's key is engine one's
+dave -o /dev/null -w '%{http_code}\n' $WORK/v1/allowance                      # 401: dave's is engine two's
+```
+
+Costs nothing more. Check: the payment is in tenant two's usage and tenant one's count has not moved;
+tenant two's `spent` is the fee and bob's allocation still shows 0; each engine refuses the other's key.
+
+### 8. Proof (c): an engine in its `both` role still pays by itself
+
+This proof never used the withdrawn path. It was run on 19 November 2026 and again on 26 November, with
+the other two.
 
 The dev stack is that engine: [dev-stack/README.md](dev-stack/README.md). It signs with the same
 wallet, so the clearinghouse's signer is stopped first.
@@ -465,19 +542,21 @@ Then its README's "Use" section, with one tenant, one actor, an allocation of `A
 ### What to write down
 
 For the evidence document, with no address, credential or tenant id: the commit the engine image was
-built from; each check of steps 1 to 6 and what it showed; for each job its kind, how long it ran, its
+built from; each check of steps 1 to 8 and what it showed; for each job its kind, how long it ran, its
 state, whether a payment was sent and its cost after sync; the two `stored` outputs of step 3; tenant
-one's and tenant two's usage counts; the 402 of step 6; and the total charged to allocations.
+one's and tenant two's usage counts, before step 7 and after it; the 402 of step 6; and the total
+charged to allocations.
 
 ### Stop everything
 
 ```sh
-(cd "$D/dev-stack" && docker compose down)       # only if step 7 was run; keeps its volumes
+(cd "$D/dev-stack" && docker compose down)       # only if step 8 was run; keeps its volumes
+ent2 down                                        # only if the second enterprise was started
 ent down
 ch down
 ```
 
 `down` keeps the named volumes: the clearinghouse's ledger and both engines' records, which are the
-evidence. To remove them as well, once the evidence is written down: `ent down -v` and `ch down -v`,
-then delete each project's `.env` and `secrets/`. Start the stacks that were stopped in step 0 again
+evidence. To remove them as well, once the evidence is written down: `ent2 down -v`, `ent down -v` and
+`ch down -v`, then delete each project's `.env` and `secrets/`. Start the stacks that were stopped in step 0 again
 only after the clearinghouse's signer is down.

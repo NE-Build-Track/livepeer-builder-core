@@ -11,16 +11,17 @@
 - **Decisions:** D82 to D87 in [m4-decisions.md](../../design-docs/m4-decisions.md).
 - **Branches:** a stack. P1 targets `releases/m4`, and each later ticket targets the branch before it.
   Merges are merge commits, so the stack needs no rebase.
-- **Progress:** P1 to P5 are merged into `releases/m4`. P6, P7 and P8 are built and in review. The paid
-  proofs of P8 were run on 19 November 2026 on the signer proxy, which was withdrawn that day:
-  [the evidence](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md) says which still
-  stand. The proofs through a clearinghouse were run again on 23 November 2026, on the direct-signer
-  path, from the runbook in [deploy/README.md](../../../deploy/README.md#proof-runbook):
-  [the evidence](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md). The amendment
-  of D87 point 3 of 19 November (a tenant's routes from the credential) is built and in review
-  ([#185](https://github.com/NE-Build-Track/livepeer-builder-core/pull/185)), on top of P8. Those proofs
-  ran before it, on the paths that name a tenant: the runbook's commands are rewritten for the two
-  forms of a tenant's routes and have not been run in that form.
+- **Progress:** every pull request of ISS-31 is merged into `releases/m4`: P1 to P8, and the amendment
+  of D87 point 3 of 19 November (a tenant's routes from the credential,
+  [#185](https://github.com/NE-Build-Track/livepeer-builder-core/pull/185)). The paid proofs were run on
+  that code on 26 November 2026, from the runbook in
+  [deploy/README.md](../../../deploy/README.md#proof-runbook), with a second enterprise engine and a
+  grant's top-up: [the evidence](../../references/evidence/2026-11-26-payment-clearinghouse-proofs.md).
+  Two earlier runs stand beside it. The one of
+  [23 November](../../references/evidence/2026-11-23-payment-clearinghouse-proofs.md) shows a fixed-price
+  job that succeeded and a job of nine payment cycles. The one of
+  [19 November](../../references/evidence/2026-11-19-payment-clearinghouse-proofs.md) ran on the signer
+  proxy that was withdrawn that day, and its record says which of its proofs still stand.
 
 ## Goal
 
@@ -36,13 +37,19 @@ signer.
 From ISS-31 as amended on 18 November 2026. The first item follows Mike's amendment of 19 November: the
 enterprise's engine signs at the signer itself.
 
-- [ ] A payment clearinghouse serves at least two tenants, one for each enterprise app. Each enterprise
+- [x] A payment clearinghouse serves at least two tenants, one for each enterprise app. Each enterprise
   app runs its jobs in its own engine, as an embedded engine or an engine server. That engine reaches
-  the clearinghouse for allotment, allowance and usage, and signs at the clearinghouse's signer.
-- [ ] One tenant's admin cannot read or change another tenant. The attempt is refused.
-- [ ] Self-hosted payments still work, as one deployment with one tenant.
-- [ ] The clearinghouse admin onboards a tenant and tops up its grant by hand, on a private listener.
-- [ ] The arrangement and its limits are documented, and nothing implies an ongoing public service.
+  the clearinghouse for allotment, allowance and usage, and signs at the clearinghouse's signer. Shown
+  on 26 November 2026 with two engine servers, one for each tenant:
+  [the evidence](../../references/evidence/2026-11-26-payment-clearinghouse-proofs.md#two-engines-two-tenants).
+- [x] One tenant's admin cannot read or change another tenant. The attempt is refused.
+  [The evidence](../../references/evidence/2026-11-26-payment-clearinghouse-proofs.md#one-tenant-cannot-reach-another).
+- [x] Self-hosted payments still work, as one deployment with one tenant.
+  [The evidence](../../references/evidence/2026-11-26-payment-clearinghouse-proofs.md#proof-c-an-engine-in-its-both-role-pays-by-itself).
+- [x] The clearinghouse admin onboards a tenant and tops up its grant by hand, on a private listener.
+  [The evidence](../../references/evidence/2026-11-26-payment-clearinghouse-proofs.md#before-any-job).
+- [x] The arrangement and its limits are documented, and nothing implies an ongoing public service:
+  [deploy/README.md](../../../deploy/README.md#limits).
 
 Funded evidence for both configurations is ISS-36, not this plan.
 
@@ -64,15 +71,19 @@ Funded evidence for both configurations is ISS-36, not this plan.
   handed over once, the tenant's usage and the runner list. Merged into `releases/m4` on 23 November
   2026: [#180](https://github.com/NE-Build-Track/livepeer-builder-core/pull/180), with
   [#186](https://github.com/NE-Build-Track/livepeer-builder-core/pull/186).
-- [ ] **P6 (#167).** A public and a private listener. Built and in review:
+- [x] **P6 (#167).** A public and a private listener. Merged into `releases/m4` on 24 November 2026:
   [#181](https://github.com/NE-Build-Track/livepeer-builder-core/pull/181).
-- [ ] **P7 (#168).** Remote adapters for the payment ports that reach the clearinghouse, the payment keys
-  an enterprise's engine is handed, and `lpb payments check`. Built and in review:
-  [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
-- [ ] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it. Built and in
-  review: [#183](https://github.com/NE-Build-Track/livepeer-builder-core/pull/183).
-- [ ] **A tenant's routes from the credential (#165, #166; D87 point 3 as amended on 19 November 2026).**
-  Built and in review: [#185](https://github.com/NE-Build-Track/livepeer-builder-core/pull/185).
+- [x] **P7 (#168).** Remote adapters for the payment ports that reach the clearinghouse, the payment keys
+  an enterprise's engine is handed, and `lpb payments check`. Merged into `releases/m4` on 24 November
+  2026: [#182](https://github.com/NE-Build-Track/livepeer-builder-core/pull/182).
+- [x] **P8 (#169).** The engine's role setting, and the two Compose projects that prove it. Merged into
+  `releases/m4` on 24 November 2026:
+  [#183](https://github.com/NE-Build-Track/livepeer-builder-core/pull/183).
+- [x] **A tenant's routes from the credential (#165, #166; D87 point 3 as amended on 19 November 2026).**
+  Merged into `releases/m4` on 24 November 2026:
+  [#185](https://github.com/NE-Build-Track/livepeer-builder-core/pull/185).
+- [x] **26 November 2026.** The paid proofs run on `releases/m4` with all of the above merged:
+  [the evidence](../../references/evidence/2026-11-26-payment-clearinghouse-proofs.md).
 
 Each pull request ticks its own line here in the same change.
 
@@ -300,3 +311,14 @@ Each pull request ticks its own line here in the same change.
   tenant on the private one, with `--no-deps` on the private listener's curl as before. The rewritten
   commands follow the routes the unit tests pin and have not been run against a stack. Whether the
   proofs are run once more on these paths is for Mike.
+- **26 November 2026, the paid proofs on `releases/m4`.** Mike asked for the runbook to be run once more
+  with everything merged, without the image job. It ran at `4a5ceba`, from new volumes, for $0.001110:
+  a clearinghouse with two tenants and an enterprise engine for each, where each engine allotted its
+  own actor, signed its own job at the published signer and was accounted to its own tenant alone; a
+  tenant's routes in both forms, where no read and no write of one tenant's admin reached the other;
+  a grant topped up by hand on the private listener; an empty allocation refused by the signer; and an
+  engine in its `both` role that paid for a job by itself and reconciled as balanced. Not shown on this
+  commit: a job of more than one payment cycle and a fixed-price job that succeeds, because no chat
+  runner was listed and the image was left out. The run of 23 November is the record of both. The
+  runbook gains the grant's top-up and the second enterprise engine.
+  [The evidence](../../references/evidence/2026-11-26-payment-clearinghouse-proofs.md).

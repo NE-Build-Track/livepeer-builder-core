@@ -217,9 +217,18 @@ before this, or from a transport that doesn't measure. Each call also logs them 
      on a full priced runner can cost a ticket: livepeer/node before v1.0.7 asks for payment before it
      checks capacity, and from v1.0.7 a slot can still be taken between the challenge and the paid
      request. That
-     cost is accepted when any runner for the app has room: a full priced runner then stays a
-     candidate, since its advertisement may be out of date, and a job whose other runners failed can
-     reach it and pay for its refusal. If
+     cost is accepted when any runner for the app advertises room or an unknown capacity: every
+     runner then stays a candidate, a priced runner that advertises zero among them. Mike decided on
+     26 November 2026 to keep this rule, and not to extend the rule for an app whose every runner
+     advertises zero to it (#158): a capacity figure is a hint that can lag behind the runner, so a
+     runner that advertises zero is tried last and is not ruled out while others have room. Its
+     attempt goes out with the job's payment key and is signed for like any other, so a job whose
+     other runners failed can reach it and pay for its refusal. "Last" is last of the runners the job
+     pays: when the only runners with room are ones the job signs nothing for, the priced
+     zero-capacity runner is ahead of them, as above, and is the first runner tried. An immediate
+     job, a stream and a queued job follow this one rule (`JobRunners.choose` in
+     `services/job_runners.py`; `tests/unit/test_zero_capacity.py`, and
+     `tests/unit/test_async_waiting.py` for a queued job). If
      the runners tried all refuse, the job fails `refused` like any other job whose runners all refused.
      A job that would pay every one of them fails `no_capacity` before any attempt, with nothing signed
      ([discovery.md](discovery.md#advertised-capacity)).
@@ -713,7 +722,10 @@ allocation revoked while the job waited fails it `not_provisioned`, and one that
   job `not_provisioned`, unpaid, whatever the runners say, so an allocation revoked after the submit
   ends the job also while its app has no runner. A credential that cannot be read makes the job wait.
   Then its runners: none listed makes it wait. Then, only for a job that pays (its credential has a
-  key, and the transport pays), every priced runner advertising no room makes it wait. A job that does
+  key, and the transport pays), every priced runner advertising no room makes it wait. One runner
+  with room is enough for it not to wait: every runner is then a candidate, and a priced runner that
+  advertises none is tried last of the runners the job pays, and paid, as for an immediate job
+  ([behavior](#behavior-the-contract-fixes), 1; #158). A job that does
   not pay goes on to its runners, full or not, as an immediate job does: its refusal costs nothing,
   and advertised capacity is a hint ([behavior](#behavior-the-contract-fixes), 1). A payment the
   signer refused (`payment`) and a `SelectionPolicy` that selects no runner (`no_offering`) fail the

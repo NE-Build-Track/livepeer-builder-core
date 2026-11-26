@@ -33,7 +33,17 @@ from livepeer_builder.testing import FixedClock, ScriptedStreamTransport, Script
 from tests.store.test_async_restart import claims, given_back
 from tests.unit.discovery_wire import ALICE, wire_engine
 from tests.unit.test_job_deadline import LoopTime, loop_time  # noqa: F401 - loop_time: a fixture
-from tests.unit.test_zero_capacity import APP, OPERATOR, PRICED, answer, full_and_priced, runner_record
+from tests.unit.test_zero_capacity import (
+    APP,
+    OPERATOR,
+    PRICED,
+    ROOM_AND_NONE,
+    answer,
+    called,
+    full_and_priced,
+    refusal,
+    runner_record,
+)
 
 OTHER = "other/app"
 POLL_S = 3600.0  # so long that no test passes one by waiting: a test moves the loop's clock
@@ -131,6 +141,30 @@ async def test_a_runner_that_would_sign_nothing_is_still_tried_at_zero_capacity(
         job = await engine.jobs.submit(ALICE, queued())
         assert await engine.jobs.worker.run_once() == 1
         assert (await engine.jobs.get(ALICE, job.id)).state == "succeeded"
+
+
+async def test_a_queued_job_that_pays_tries_a_priced_runner_advertising_no_room_last_and_pays_it() -> None:
+    """As an immediate job does (``test_zero_capacity.py``; #158, Mike, 26 November 2026). One runner
+    the job pays has room, so the job does not wait and every runner stays a candidate: the priced
+    runner that advertises none is tried after the priced runner with room, with the job's payment key,
+    and ahead of a runner with more room that the job signs nothing for."""
+    transport = ScriptedStreamTransport(steps=[refusal(), ScriptedTransport.ok()])
+    async with engine_reading(answer(*ROOM_AND_NONE), transport=transport) as engine:
+        job = await engine.jobs.submit(ALICE, queued())
+        assert await engine.jobs.worker.run_once() == 1
+        ended = await engine.jobs.get(ALICE, job.id)
+    assert (ended.state, called(transport)) == ("succeeded", ["roomy", "zero"])
+    assert [attempt.payment_sent for attempt in ended.attempts] == [False, True]
+    assert all(key is not None for _, key in transport.calls)  # each call carried the payment key
+
+    every_refusal = ScriptedStreamTransport(steps=[refusal(), refusal(), refusal()])
+    async with engine_reading(answer(*ROOM_AND_NONE), transport=every_refusal) as engine:
+        job = await engine.jobs.submit(ALICE, queued())
+        assert await engine.jobs.worker.run_once() == 1
+        ended = await engine.jobs.get(ALICE, job.id)
+    assert ended.failure is not None
+    assert (ended.state, ended.failure.kind) == ("failed", "refused")
+    assert called(every_refusal) == ["roomy", "zero", "unpayable"]
 
 
 async def test_an_app_nobody_can_run_now_does_not_hold_up_another_apps_job() -> None:

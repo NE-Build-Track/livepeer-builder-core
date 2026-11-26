@@ -178,7 +178,11 @@ async def test_cost_sync_errors_surface_in_health(store: SqlStore, clock: FixedC
         supply=EngineSupply(store=store, clock=clock, usage_source=Broken()),
     )
     await engine.start()
-    await asyncio.sleep(0.05)
+    # Wait for the failed sync to be noted, not a fixed time: the loop reads the store on the store's
+    # thread before and after it asks the source, and stop() cancels a sync that has not got there.
+    async with asyncio.timeout(5):
+        while engine.health().cost_sync_error is None:  # noqa: ASYNC110  # health exposes no event
+            await asyncio.sleep(0.01)
     await engine.stop()
     assert engine.health().cost_sync_error == "unavailable"  # the usage source's code; its text is logged
 

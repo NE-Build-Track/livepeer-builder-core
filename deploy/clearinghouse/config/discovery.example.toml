@@ -1,0 +1,9 @@
+# The orchestrators whose runners the clearinghouse lists. Copy to config/discovery.toml (git-ignored)
+# and name real orchestrators there: their addresses stay out of git. Discovery GETs <base>/discovery
+# from each one at startup and every RefreshInterval, and verifies TLS with the system trust store.
+Listen = "unsafe@0.0.0.0:8939"
+MetricsListen = "127.0.0.1:8940"
+Nodes = [
+  "https://orchestrator.example:8935",
+]
+RefreshInterval = "30s"

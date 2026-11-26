@@ -57,7 +57,8 @@ M3 closed on 9 November 2026: the tracker ([#20](https://github.com/Cloud-SPE/Ne
 | ISS-25 Funded seven-outcome journey ([#38](https://github.com/Cloud-SPE/Network-Engineering-SPE/issues/38)) | 9 Nov | The final run of 9 November and its evidence, console `docs/references/evidence/2026-11-09-iss-25-funded-journey.md` |
 
 The release is the merge of `releases/m3` into `releases/final`
-([#32](https://github.com/NE-Build-Track/livepeer-builder-core/pull/32)).
+([#32](https://github.com/NE-Build-Track/livepeer-builder-core/pull/32), 11 November 2026), tagged `v0.2.0` and
+`m3-complete-builder-journey`. M4 work lands on `releases/m4`, which starts at that tag.
 
 ## Carried forward to M4
 
@@ -75,7 +76,7 @@ The release is the merge of `releases/m3` into `releases/final`
 
 | Ticket | Milestone | Prepared here |
 | --- | --- | --- |
-| ISS-26 Async jobs and durable recovery handles | M4 | **Defined:** `mode="async"`, `ResultRef.storage="stored"` → 501 |
+| ISS-26 Async jobs and durable recovery handles | M4 | **Built** (in review): `jobs.submit`, a worker, stored results, the cancel of a queued job ([engine.md](../contracts/engine.md#async-jobs)) |
 | ISS-27 Persistent application endpoints | M4 | **Defined:** `SessionManager`, engine-proxied (D9) → 501 |
 | ISS-28 Failure classification and recovery across modes | M4 | Failure taxonomy and recovery for immediate jobs (implemented) |
 | ISS-29 REST across all execution modes | M4 | Reserved routes return 501 |
@@ -92,7 +93,7 @@ The release is the merge of `releases/m3` into `releases/final`
 | --- | --- | --- |
 | H1 | Python gateway SDK | Pinned (26 October) to livepeer/livepeer-python-gateway `main` `2017a80` (was `76a1a1c`): "Enforce TLS" ([#76](https://github.com/livepeer/livepeer-python-gateway/pull/76)), streamable runner bodies ([#80](https://github.com/livepeer/livepeer-python-gateway/pull/80)) and `on_payment_session` ([#81](https://github.com/livepeer/livepeer-python-gateway/pull/81), reporting `manifest_id` with no signer-state decoding). The runner-side session stop ([#83](https://github.com/livepeer/livepeer-python-gateway/pull/83)) is unused. The NE `dev/bytestreaming` pin is dropped. **Open:** a PyPI release, then re-pin (T1). #70 and multipart deferred |
 | H2 | Batteries management, authorization and accounting | Delivered upstream (#5, #6, #7) at `ca09e47`. Mode B scoping deferred to M4 |
-| H3 | Remote signer and orchestrator/Live Runner | livepeer/node `f45d83f` (main, 10 commits after v1.0.6; was `406b248` / v1.0.2) in the dev stack. It includes `f970be6`, which accepts a ticket recipient that differs from the node address (T10, resolved upstream). Orchestrators are to serve CA-signed certificates (D27, T12) |
+| H3 | Remote signer and orchestrator/Live Runner | livepeer/node `eee09c4` (v1.0.7; was `f45d83f`, and `406b248` / v1.0.2 before that) in the dev stack. It includes `f970be6`, which accepts a ticket recipient that differs from the node address (T10, resolved upstream). Orchestrators are to serve CA-signed certificates (D27, T12) |
 | H4 | Funded acceptance environment | The dev stack plus the `cloud-spe-gateway` payer is funded; paid jobs on public orchestrators reconciled on 14 October ([evidence](../references/evidence/2026-10-14-dev-stack-public-orchestrators.md)) |
 | H5 | Source access and permitted reuse | Done (ISS-01): simple-infra reviewed; nothing private reused |
 | H6 | Scope and final acceptance | Mike's review per ticket; procedure open for M5 |

@@ -17,12 +17,12 @@ from livepeer_builder.adapters.batteries import (
     BatteriesUsageSource,
     allowance_from_body,
     error_message,
-    usage_row_from_item,
 )
+from livepeer_builder.adapters.batteries_usage_rows import usage_row_from_item
 from livepeer_builder.adapters.discovery_inventory import read_inventory
 from livepeer_builder.adapters.runner_call import network_kind
 from livepeer_builder.adapters.sdk import HttpDiscoverySource
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
+from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
 from livepeer_builder.contracts import Money, SecretRef
 from livepeer_builder.contracts.payments import payable_rate
 from livepeer_builder.errors import (
@@ -57,8 +57,8 @@ async def test_management_writes_use_the_documented_routes() -> None:
         "https://b", "t", client=httpx.AsyncClient(base_url="https://b", transport=transport)
     )
     key = await client.create_key("a1", "rotated", "idem-r")
-    await client.fund_allocation("a1", Money(amount=Decimal("0.5"), currency="ETH"), "idem-f")
-    await client.fund_grant("g1", Money(amount=Decimal("2.5"), currency="USD"), "idem-g")
+    await client.top_up_allocation("a1", Money(amount=Decimal("0.5"), currency="ETH"), "idem-f")
+    await client.top_up_grant("g1", Money(amount=Decimal("2.5"), currency="USD"), "idem-g")
     await client.set_allocation_status("a1", "paused")
     await client.revoke_allocation("a1")
     await client.revoke_key("k1")
@@ -77,19 +77,23 @@ async def test_management_writes_use_the_documented_routes() -> None:
     assert "Idempotency-Key" not in seen[3].headers  # status changes are naturally repeatable
 
 
-async def test_owned_clients_close_and_empty_bodies_are_fine() -> None:
+async def test_owned_clients_close_and_an_empty_body_is_a_provider_error() -> None:
+    """Batteries answers every management route with a JSON object (v0.0.3, ``managementResult``), so a
+    2xx with no body is an answer the engine cannot read (#114, C21), where it used to pass as ``{}``."""
     client = BatteriesClient("https://b", "t")
     source = BatteriesUsageSource("https://b", "t")
     await client.aclose()
     await source.aclose()
-    _, transport = recording(204)
     quiet = BatteriesClient(
-        "https://b", "t", client=httpx.AsyncClient(base_url="https://b", transport=transport)
+        "https://b",
+        "t",
+        client=httpx.AsyncClient(
+            base_url="https://b", transport=httpx.MockTransport(lambda r: httpx.Response(204))
+        ),
     )
-    quiet._client = httpx.AsyncClient(
-        base_url="https://b", transport=httpx.MockTransport(lambda r: httpx.Response(204))
-    )
-    await quiet.revoke_key("k")
+    with pytest.raises(ProviderError, match="not a JSON object") as unread:
+        await quiet.revoke_key("k")
+    assert unread.value.status_code == 204
 
 
 async def test_usage_feed_errors() -> None:
@@ -201,17 +205,25 @@ async def test_http_discovery_gives_up_on_a_slow_body_at_its_deadline() -> None:
             await source.fetch()
 
 
-async def test_an_httpx_timeout_says_which_inventory_did_not_arrive(clock: FixedClock) -> None:
-    """httpx's ReadTimeout is not a TimeoutError and its text is empty: /readyz showed discovery_error ""."""
+def discovery_failures(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.error for r in caplog.records if getattr(r, "event", "") == "discovery.failed"]  # type: ignore[attr-defined]
+
+
+async def test_an_httpx_timeout_says_which_inventory_did_not_arrive(
+    clock: FixedClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """httpx's ReadTimeout is not a TimeoutError and its text is empty: the log said nothing. /readyz shows
+    the code, and the log the text (#113, C7)."""
 
     def silent(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("", request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(silent)) as client:
         source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
-        snapshot = await DiscoveryService(source, DefaultPolicy(), clock).refresh()
-    assert snapshot.last_error is not None
-    assert "no inventory from http://discovery:8939/discovery within 5s" in snapshot.last_error
+        with caplog.at_level(logging.WARNING, logger="livepeer_builder.services.discovery"):
+            snapshot = await DiscoveryService(source, DefaultPolicy(), clock).refresh()
+    assert snapshot.last_error == "unavailable"
+    assert discovery_failures(caplog) == ["no inventory from http://discovery:8939/discovery within 5s"]
 
 
 @pytest.mark.parametrize(
@@ -267,7 +279,9 @@ def test_a_clean_inventory_logs_no_skip(caplog: pytest.LogCaptureFixture) -> Non
     ]
 
 
-async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(clock: FixedClock) -> None:
+async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(
+    clock: FixedClock, caplog: pytest.LogCaptureFixture
+) -> None:
     """Never followed, as livepeer/node's collector does: the last good snapshot stays."""
     seen: list[str] = []
     answers = [httpx.Response(200, content=json.dumps([GOOD_ENTRY]).encode()),
@@ -281,9 +295,12 @@ async def test_a_redirect_from_the_discovery_url_is_a_failed_refresh(clock: Fixe
         source = HttpDiscoverySource("http://discovery:8939/discovery", client=client)
         discovery = DiscoveryService(source, DefaultPolicy(), clock)
         await discovery.refresh()
-        snapshot = await discovery.refresh()
+        with caplog.at_level(logging.WARNING, logger="livepeer_builder.services.discovery"):
+            snapshot = await discovery.refresh()
     assert [runner.url for runner in snapshot.runners] == ["https://orch.example/apps/r1/app"]
-    assert snapshot.last_error is not None and "301" in snapshot.last_error
+    assert snapshot.last_error == "unavailable"
+    [logged] = discovery_failures(caplog)
+    assert "301" in logged
     assert seen == ["http://discovery:8939/discovery"] * 2
 
 
@@ -404,25 +421,19 @@ def test_network_errors_are_classified_through_their_causes() -> None:
 
 
 async def test_secret_store_edges(store: SqlStore, clock: FixedClock) -> None:
-    configured = SettingsSecretStore({"k": "v"})
-    with pytest.raises(NotFound):
-        configured.ref("missing")
-    with pytest.raises(NotFound):
-        await configured.get(SecretRef(ref="db:other"))
-    await configured.delete(configured.ref("k"))  # configuration owns it: a no-op
-    assert await configured.get(configured.ref("k")) == "v"
-
     database = EncryptedDbSecretStore(store, generate_secret_key(), clock)
     with pytest.raises(NotFound):
         await database.get(SecretRef(ref="db:nope"))
 
-    no_key = RoutingSecretStore(configured, None)
+    no_key = RoutingSecretStore(None)
     with pytest.raises(InvalidRequest, match="LPB_SECRET_KEY"):
         await no_key.get(SecretRef(ref="db:x"))
     await no_key.delete(SecretRef(ref="db:x"))  # nothing to delete without a database store
 
-    routed = RoutingSecretStore(configured, database)
-    ref = await routed.put("n", "secret")
-    await routed.delete(ref)
+    built_in = RoutingSecretStore(database)
+    ref = await built_in.put("n", "secret")
+    await built_in.delete(SecretRef(ref="vault:elsewhere"))  # not one of its own: nothing is deleted
+    assert await built_in.get(ref) == "secret"
+    await built_in.delete(ref)
     with pytest.raises(NotFound):
-        await routed.get(ref)
+        await built_in.get(ref)

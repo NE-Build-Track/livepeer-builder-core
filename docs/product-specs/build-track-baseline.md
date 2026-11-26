@@ -138,7 +138,7 @@ it. **No SLA, automatic refund or recovery guarantee** follows from the design. 
 | Open item (baseline §Decision boundaries) | Status |
 | --- | --- |
 | Exact access/OAuth profile | **Decided:** D12–D16 ([access.md](../contracts/access.md)) |
-| Payment credential/allocation granularity | **Decided:** D17 (`per_actor` default) |
+| Payment credential/allocation granularity | **Decided:** D17 (`per_actor`; the only mode since D82) |
 | Provider provisioning/reporting contracts | **Decided:** D18–D22 ([payments.md](../contracts/payments.md)) |
 | Example feature selection; reference app placement | Open (M3, ISS-21/22) |
 | Execution-process packaging | **Decided for M2:** one distribution with extras; in-process SDK adapter |

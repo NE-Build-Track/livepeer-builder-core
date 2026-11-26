@@ -36,6 +36,7 @@ from livepeer_builder.contracts import (
     ResultRef,
     SignedSession,
 )
+from livepeer_builder.contracts.http import response_content_type
 from livepeer_builder.errors import JobFailed, RunnerCallError
 from livepeer_builder.protocols import Clock, JobRepo, RunnerStream
 from livepeer_builder.services.failover import attempt_verdict, failure_kind, failure_of
@@ -158,7 +159,7 @@ class JobStream:
 
     @property
     def content_type(self) -> str:
-        return self._stream.content_type
+        return response_content_type(self._stream.content_type)  # a supplied transport's too (#158)
 
     @property
     def finished(self) -> bool:
@@ -387,7 +388,7 @@ class JobStream:
         if ending.outcome == "succeeded":
             result = ResultRef(
                 storage="inline",
-                content_type=self._stream.content_type,
+                content_type=self.content_type,
                 size_bytes=self._size,
                 sha256=self._hash.hexdigest(),
             )

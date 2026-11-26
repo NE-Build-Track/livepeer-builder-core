@@ -20,6 +20,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
@@ -55,9 +56,9 @@ access_keys = Table(
     metadata,
     Column("key_id", String(64), primary_key=True),
     Column("token_hash", String(64), nullable=False, unique=True),
-    Column("kind", String(16), nullable=False),
+    Column("kind", String(32), nullable=False),  # a credential kind; 32 since 0014: clearinghouse_admin
     Column("actor_id", String(ID), nullable=False),
-    Column("application_id", String(ID), nullable=False),
+    Column("tenant_id", String(ID), nullable=False),
     Column("permissions", JSON, nullable=False),
     Column("label", String(ID), nullable=False, server_default=""),
     Column("created_at", UTCDateTime, nullable=False),
@@ -68,7 +69,7 @@ jobs = Table(
     "lpb_jobs",
     metadata,
     Column("id", String(36), primary_key=True),
-    Column("application_id", String(ID), nullable=False),
+    Column("tenant_id", String(ID), nullable=False),
     Column("actor_id", String(ID), nullable=False),
     Column("operation_ref", String(ID), nullable=True),
     Column("request_fingerprint", String(64), nullable=True),
@@ -86,23 +87,31 @@ jobs = Table(
     # 0009 (D57): a job re-dispatched under its reference after it never reached a runner
     Column("retry_of", String(36), nullable=True),  # the failed job this one retries
     Column("superseded_by", String(36), nullable=True),  # the job that retried this one
+    # 0016 (ISS-26): an async job's claim by a worker
+    Column("started_at", UTCDateTime, nullable=True),  # when it was claimed; None while it is queued
+    # Times a worker claimed it, which is also the number of its latest claim: it only ever grows.
+    Column("claims", Integer, nullable=False, server_default=text("0")),
+    # How many of those claims were given back by a job that only had to wait: not counted toward the three
+    Column("claims_given_back", Integer, nullable=False, server_default=text("0")),
 )
 Index(  # the job holding a reference is the one not superseded; superseded ones keep theirs for history
     "lpb_jobs_operation_ref",
-    jobs.c.application_id,
+    jobs.c.tenant_id,
     jobs.c.actor_id,
     jobs.c.operation_ref,
     unique=True,
     sqlite_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
     postgresql_where=text("operation_ref IS NOT NULL AND superseded_by IS NULL"),
 )
-Index("lpb_jobs_owner_created", jobs.c.application_id, jobs.c.actor_id, jobs.c.created_at)
+Index("lpb_jobs_owner_created", jobs.c.tenant_id, jobs.c.actor_id, jobs.c.created_at)
 Index("lpb_jobs_state", jobs.c.state)
+
+JOB_ID = "lpb_jobs.id"  # what every table of a job's own rows points at, and goes with
 
 attempts = Table(
     "lpb_attempts",
     metadata,
-    Column("job_id", String(36), ForeignKey("lpb_jobs.id", ondelete="CASCADE"), primary_key=True),
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
     Column("number", Integer, primary_key=True),
     Column("runner_url", Text, nullable=True),
     Column("orchestrator_url", Text, nullable=True),
@@ -139,24 +148,27 @@ Index("lpb_payment_sessions_session", payment_sessions.c.payment_session_id)
 actors = Table(
     "lpb_actors",
     metadata,
-    Column("application_id", String(ID), primary_key=True),
+    Column("tenant_id", String(ID), primary_key=True),
     Column("actor_id", String(ID), primary_key=True),
     Column("grant_id", String(ID), nullable=False),
     Column("allocation_id", String(ID), nullable=False, unique=True),
     Column("api_key_id", String(ID), nullable=False),
-    Column("secret_ref", String(ID), nullable=False),  # a SecretRef, never the key itself
+    # A SecretRef, never the key itself. Opaque text of any length since 0013 (#115): a vault's path.
+    Column("secret_ref", Text, nullable=False),
     Column("currency", String(3), nullable=False),
     Column("status", String(16), nullable=False),
     Column("created_at", UTCDateTime, nullable=False),
     Column("updated_at", UTCDateTime, nullable=False),
     Column("label", String(ID), nullable=False, server_default=""),  # readable beside an opaque actor_id
+    # Who holds the credential secret_ref names (0015): the configured store, or the work engine.
+    Column("credential_custody", String(16), nullable=False, server_default="secret_store"),
 )
 
 # People an identity provider signed in as actors, before or after an allocation (#52, D48).
 actor_sightings = Table(
     "lpb_actor_sightings",
     metadata,
-    Column("application_id", String(ID), primary_key=True),
+    Column("tenant_id", String(ID), primary_key=True),
     Column("actor_id", String(ID), primary_key=True),
     Column("name", String(ID), nullable=False, server_default=""),
     Column("first_seen_at", UTCDateTime, nullable=False),
@@ -202,7 +214,7 @@ cost_cursor = Table(
 cost_projections = Table(
     "lpb_cost_projections",
     metadata,
-    Column("job_id", String(36), ForeignKey("lpb_jobs.id", ondelete="CASCADE"), primary_key=True),
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
     Column("status", String(16), nullable=False),
     Column("fee_eth", String(AMOUNT), nullable=False),
     Column("fee_usd", String(AMOUNT), nullable=True),
@@ -220,7 +232,7 @@ cost_projections = Table(
 operations = Table(
     "lpb_operations",
     metadata,
-    Column("application_id", String(ID), primary_key=True),
+    Column("tenant_id", String(ID), primary_key=True),
     Column("actor_id", String(ID), primary_key=True),
     Column("operation_ref", String(ID), primary_key=True),
     Column("command", String(32), nullable=False),
@@ -232,5 +244,47 @@ operations = Table(
     Column("started_at", UTCDateTime, nullable=False),
     Column("completed_at", UTCDateTime, nullable=True),
 )
+
+# -- 0012: usage rows cost sync set aside (#114, C13) ----------------------------------------------------
+
+# A provider usage row the sync could not read or store, left out of every cost: its id, why, and the fee
+# it stated. The row's content is in the log (``costs.usage_set_aside``), never here. No purge.
+usage_set_aside = Table(
+    "lpb_usage_set_aside",
+    metadata,
+    # the provider's row id; "sha256:" and a digest of the content when it has none this column can keep
+    Column("id", String(ID), primary_key=True),
+    Column("reason", String(64), nullable=False),
+    Column("computed_fee_eth", String(AMOUNT), nullable=True),
+    Column("computed_fee_usd", String(AMOUNT), nullable=True),
+    Column("set_aside_at", UTCDateTime, nullable=False),
+)
+
+# -- 0016: async jobs (D69, ISS-26) -----------------------------------------------------------------------
+
+# What a queued job runs with: its request, and the actor it was authorized for at submit. Kept only
+# while the job waits or runs: the transaction that ends the job deletes the row. Not encrypted.
+job_requests = Table(
+    "lpb_job_requests",
+    metadata,
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
+    Column("request", JSON, nullable=False),  # the JobRequest without its raw body
+    Column("raw_body", LargeBinary, nullable=True),
+    Column("actor", JSON, nullable=False),  # who it runs as: never a credential, never a display name
+)
+
+# The bytes a succeeded async job returned, written in the transaction that ends the job. They expire
+# before the job does (LPB_RETENTION_RESULTS_DAYS); the job keeps its ResultRef. Not encrypted.
+job_results = Table(
+    "lpb_job_results",
+    metadata,
+    Column("job_id", String(36), ForeignKey(JOB_ID, ondelete="CASCADE"), primary_key=True),
+    Column("content", LargeBinary, nullable=False),
+    Column("content_type", Text, nullable=False),
+    Column("size_bytes", Integer, nullable=False),
+    Column("sha256", String(64), nullable=False),
+    Column("expires_at", UTCDateTime, nullable=True),  # None: kept until the job is purged
+)
+Index("lpb_job_results_expires", job_results.c.expires_at)
 
 VERSION_TABLE = "lpb_alembic_version"

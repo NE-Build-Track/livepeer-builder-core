@@ -14,14 +14,10 @@ from livepeer_builder.config import EngineSettings, generate_secret_key
 from livepeer_builder.contracts import Runner
 from livepeer_builder.runtime.assembly import UNSET, Decorate, EngineParts, EngineSupply
 from livepeer_builder.runtime.engine import BuilderEngine
+from livepeer_builder.testing.clock import FixedClock
 from livepeer_builder.testing.discovery import FAKE_DISCOVERY_URL, serve
-from livepeer_builder.testing.fakes import (
-    FakeAllocationManager,
-    FakeUsageSource,
-    FixedClock,
-    ScriptedStreamTransport,
-    runner,
-)
+from livepeer_builder.testing.fakes import FakeAllocationManager, ScriptedStreamTransport, runner
+from livepeer_builder.testing.usage import FakeUsageSource
 
 MEMORY_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -36,21 +32,32 @@ async def make_engine(
 ) -> AsyncIterator[BuilderEngine]:
     """A real engine, not started, with one discovery snapshot taken; stopped on exit.
 
-    Defaults: an in-memory store, ``per_actor`` payments with a fresh ``LPB_SECRET_KEY``, a
+    Defaults: an in-memory store, a fresh ``LPB_SECRET_KEY`` for the actors' payment keys, a
     ``FixedClock``, the given runners (one ``runner()`` if none), a ``ScriptedStreamTransport``, one
-    ``FakeAllocationManager`` for allocations and the grant desk, and a ``FakeUsageSource``. ``supply``
-    replaces any of them; ``**settings`` override ``EngineSettings`` fields. The background loops are not
-    started, so tests stay deterministic.
+    ``FakeAllocationManager`` for allocations and the tenant desk, and a ``FakeUsageSource``. The manager
+    holds a grant for the tenant ``default`` (a tenant's id is its grant's id), so that tenant's actors
+    can be allotted; supply a manager of your own to add others (``add_grant``). ``supply`` replaces any
+    of them; ``**settings`` override ``EngineSettings`` fields. The background loops are not started, so
+    tests stay deterministic.
+
+    An async job (``jobs.submit``) therefore stays ``queued`` until the test steps the worker:
+    ``await engine.jobs.worker.run_once()`` claims queued jobs, oldest first, and returns when they have
+    ended. Here it runs one job a step (``async_workers=1``, where the engine's default is 4), because
+    the in-memory store is one connection and two jobs writing at once would share a transaction. To
+    run several at once, pass ``async_workers`` and a ``database_url`` that names a file.
     """
     values: dict[str, Any] = {
         "database_url": MEMORY_URL,
-        "allocation_mode": "per_actor",
         "secret_key": generate_secret_key(),
         "log_json": False,
+        # A test may start this engine, and an engine does not start without an address (D63, #154).
+        # Nothing is read from it: the runners come from the fake service ``serve`` installs below.
         "discovery_url": FAKE_DISCOVERY_URL,
+        "async_workers": 1,
         **settings,
     }
     manager = FakeAllocationManager()
+    manager.add_grant("default")  # the default tenant is onboarded: its actors can be allotted
     listed = tuple(runners) or (runner(),)
     install, client = serve(listed)
 

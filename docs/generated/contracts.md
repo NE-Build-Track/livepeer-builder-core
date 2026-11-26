@@ -14,7 +14,7 @@ classDiagram
     }
     class ActorContext {
         +str actor_id
-        +str application_id
+        +str tenant_id
         +str[] permissions
         +enum credential_kind
         +map attributes
@@ -28,9 +28,10 @@ classDiagram
     }
     class ResourceRef {
         +enum kind
-        +str application_id
+        +str tenant_id
         +str? owner_actor_id
         +str? id
+        +enum? credential_kind
     }
     class JobRequest {
         +str app
@@ -53,7 +54,7 @@ classDiagram
     class Job {
         +UUID id
         +str actor_id
-        +str application_id
+        +str tenant_id
         +str? operation_ref
         +enum mode
         +str app
@@ -66,6 +67,7 @@ classDiagram
         +MeasuredUsage? usage
         +datetime created_at
         +datetime? completed_at
+        +datetime? started_at
     }
     class Attempt {
         +UUID job_id
@@ -95,6 +97,7 @@ classDiagram
         +int size_bytes
         +str sha256
         +str? location
+        +datetime? expires_at
     }
     class MeasuredUsage {
         +map quantities
@@ -179,8 +182,8 @@ classDiagram
         +Decimal? fee_usd
         +int row_count
     }
-    class ProvisionedActor {
-        +str application_id
+    class ActorAllocation {
+        +str tenant_id
         +str actor_id
         +str grant_id
         +str allocation_id
@@ -191,6 +194,7 @@ classDiagram
         +datetime created_at
         +datetime updated_at
         +str label
+        +enum credential_custody
     }
     class SecretRef {
         +str ref
@@ -206,6 +210,7 @@ classDiagram
         +Decimal amount
         +enum currency
     }
+    ActorAllocation *-- SecretRef : secret_ref
     ActorContext *-- AuthProvenance : auth
     Allowance *-- Money : available
     Allowance *-- Money : granted
@@ -221,7 +226,6 @@ classDiagram
     JobResult *-- Job : job
     Offering *-- ObservedRate : rate_high
     Offering *-- ObservedRate : rate_low
-    ProvisionedActor *-- SecretRef : secret_ref
     Runner *-- PriceInfo : price_info
     Runner *-- RunnerGPU : gpu
 ```

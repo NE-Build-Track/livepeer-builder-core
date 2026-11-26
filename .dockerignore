@@ -3,6 +3,9 @@
 deploy/dev-stack/secrets/
 deploy/dev-stack/.env
 deploy/dev-stack/config/pinned-certs/
+deploy/clearinghouse/secrets/
+deploy/clearinghouse/config/discovery.toml
+deploy/enterprise/secrets/
 **/.env
 .venv/
 dist/

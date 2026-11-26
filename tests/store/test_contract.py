@@ -10,6 +10,7 @@ from sqlalchemy import event, text
 
 from livepeer_builder.contracts import (
     AccessKey,
+    ActorAllocation,
     Attempt,
     AttemptCost,
     CallTimings,
@@ -17,7 +18,6 @@ from livepeer_builder.contracts import (
     Fees,
     JobCost,
     MeasuredUsage,
-    ProvisionedActor,
     ResultRef,
     SecretRef,
     SeenActor,
@@ -150,8 +150,8 @@ async def test_failure_and_listing(sql: SqlStore, clock: FixedClock) -> None:
 
 
 async def test_actors_keys_and_secrets(sql: SqlStore, clock: FixedClock) -> None:
-    actor = ProvisionedActor(
-        application_id="default", actor_id="alice", grant_id="g", allocation_id="a1", api_key_id="k1",
+    actor = ActorAllocation(
+        tenant_id="default", actor_id="alice", grant_id="g", allocation_id="a1", api_key_id="k1",
         secret_ref=SecretRef(ref="db:x"), currency="USD", status="active", created_at=clock.now(), updated_at=clock.now(),
     )  # fmt: skip
     await sql.save_actor(actor.model_copy(update={"label": "Alice Smith"}))
@@ -162,7 +162,7 @@ async def test_actors_keys_and_secrets(sql: SqlStore, clock: FixedClock) -> None
     assert [a.label for a in await sql.list_actors("default")] == ["Alice Smith"]
 
     key = AccessKey(
-        key_id="k", kind="actor", actor_id="alice", application_id="default", permissions=("jobs.run",),
+        key_id="k", kind="actor", actor_id="alice", tenant_id="default", permissions=("jobs.run",),
         label="", created_at=clock.now(), revoked_at=None,
     )  # fmt: skip
     await sql.insert_access_key(key, "hash")
@@ -184,7 +184,7 @@ async def test_rotating_a_key_revokes_it_and_inserts_its_replacement_together(
 ) -> None:
     def key(key_id: str) -> AccessKey:
         return AccessKey(
-            key_id=key_id, kind="actor", actor_id="alice", application_id="default", permissions=("jobs.run",),
+            key_id=key_id, kind="actor", actor_id="alice", tenant_id="default", permissions=("jobs.run",),
             label="", created_at=clock.now(), revoked_at=None,
         )  # fmt: skip
 
@@ -682,7 +682,7 @@ async def test_sightings_keep_the_first_time_and_follow_the_name(sql: SqlStore, 
     """A person the identity provider signed in, before any allocation (D48)."""
     first = clock.now()
     seen = SeenActor(
-        application_id="default", actor_id="4f6c2a1e", name="alice", first_seen_at=first, last_seen_at=first
+        tenant_id="default", actor_id="4f6c2a1e", name="alice", first_seen_at=first, last_seen_at=first
     )
     await sql.save_sighting(seen)
     later = first + timedelta(hours=2)
@@ -690,7 +690,7 @@ async def test_sightings_keep_the_first_time_and_follow_the_name(sql: SqlStore, 
         seen.model_copy(update={"name": "alice.smith", "first_seen_at": later, "last_seen_at": later})
     )
     await sql.save_sighting(
-        SeenActor(application_id="app-2", actor_id="b", name="bob", first_seen_at=first, last_seen_at=first)
+        SeenActor(tenant_id="app-2", actor_id="b", name="bob", first_seen_at=first, last_seen_at=first)
     )
     nameless = later + timedelta(hours=1)  # the name claim switched off: the name is kept, the time moves
     await sql.save_sighting(
@@ -701,7 +701,7 @@ async def test_sightings_keep_the_first_time_and_follow_the_name(sql: SqlStore, 
     assert (kept.name, kept.first_seen_at, kept.last_seen_at) == ("alice.smith", first, later)
     assert await sql.get_sighting("default", "4f6c2a1e") == kept
     assert await sql.get_sighting("default", "nobody") is None
-    assert [s.actor_id for s in await sql.list_sightings()] == ["b", "4f6c2a1e"]  # by application, then actor
+    assert [s.actor_id for s in await sql.list_sightings()] == ["b", "4f6c2a1e"]  # by tenant, then actor
 
 
 async def test_an_attempts_timings_round_trip(sql: SqlStore, clock: FixedClock) -> None:

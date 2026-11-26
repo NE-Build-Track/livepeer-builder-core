@@ -12,6 +12,7 @@ from livepeer_builder.contracts import (
     CallTimings,
     Failure,
     FailureKind,
+    JobState,
     Runner,
     reason_fits,
 )
@@ -30,6 +31,10 @@ _PAID_FAILOVER_OUTCOMES: frozenset[AttemptOutcome] = frozenset({"refused", "paym
 NOT_RUN_STATUSES = frozenset({404, 409})
 # 502 and 504: the proxy lost the runner, so the work may have run. A 500 ran and failed.
 MAY_HAVE_RUN_STATUSES = frozenset({502, 504})
+# An async job claimed this often with no attempt ever written is not claimed again (D69 (2)). The
+# claims counted are the ones that were not given back by a job that only had to wait (the store's
+# ``requeue_unstarted``): a claim given back keeps its number and uses up none of these.
+MAX_CLAIMS = 3
 
 
 def attempt_verdict(
@@ -66,20 +71,51 @@ def refused_everything(attempt: Attempt) -> bool:
 
 async def recover_interrupted(store: JobRepo, clock: Clock) -> int:
     """Resolve jobs a restart left ``running``. One that may hold a payment for work with an unknown
-    outcome becomes ``uncertain``; attempts it failed over from do not count (D52)."""
-    recovered = 0
+    outcome becomes ``uncertain``; attempts it failed over from do not count (D52).
+
+    An async job a worker claimed and wrote no attempt for is the exception (D69 (2), ISS-26): the
+    attempt row is written before any runner call, so nothing went out, and it goes back to the queue.
+    ``MAX_CLAIMS`` claims that count, so a job that brings the engine down before its first attempt is
+    not claimed for ever: after the last it is resolved like any other. A job with an attempt is never run
+    again by the engine. Returns the jobs resolved, not the ones put back."""
+    recovered = requeued = 0
     for job in await store.jobs_in_state("running"):
-        maybe_paid = payment_unresolved(job.attempts)
-        failure = Failure(
-            kind="interrupted",
-            message="the engine stopped while this job was running",
-            payment_sent=any(a.payment_sent for a in job.attempts),
-        )
-        await store.finish_job(job.id, "uncertain" if maybe_paid else "failed", failure, None, clock.now())
+        unstarted = job.mode == "async" and not job.attempts
+        if unstarted and await store.requeue_unstarted(job.id, MAX_CLAIMS):
+            requeued += 1
+            continue
+        state, failure = interrupted_end(job.attempts)
+        await store.finish_job(job.id, state, failure, None, clock.now())
         recovered += 1
-    if recovered:
-        _LOG.warning("recovered interrupted jobs", extra={"event": "jobs.recovered", "count": recovered})
+    if recovered or requeued:
+        _LOG.warning(
+            "recovered interrupted jobs",
+            extra={"event": "jobs.recovered", "count": recovered, "requeued": requeued},
+        )
     return recovered
+
+
+def interrupted_end(attempts: Sequence[Attempt]) -> tuple[JobState, Failure]:
+    """How a job ends that the engine stopped running and will not run again: ``uncertain`` if it may
+    hold a payment for work with an unknown outcome. A restart ends a ``running`` job so, and the async
+    worker ends so a job it stopped before its first attempt that cannot go back to the queue."""
+    failure = Failure(
+        kind="interrupted",
+        message="the engine stopped while this job was running",
+        payment_sent=any(attempt.payment_sent for attempt in attempts),
+    )
+    return ("uncertain" if payment_unresolved(attempts) else "failed"), failure
+
+
+def error_end(attempts: Sequence[Attempt], cause: str) -> tuple[JobState, Failure]:
+    """How a job ends that an error of the engine's own stopped, ``cause`` being the error's name: as
+    ``interrupted_end``, with kind ``runner_error``."""
+    failure = Failure(
+        kind="runner_error",
+        message=f"engine error: {cause}",
+        payment_sent=any(attempt.payment_sent for attempt in attempts),
+    )
+    return ("uncertain" if payment_unresolved(attempts) else "failed"), failure
 
 
 def failure_kind(outcome: AttemptOutcome, status_code: int | None) -> FailureKind:

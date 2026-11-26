@@ -11,8 +11,9 @@ wholesale **network** cost and classifies every charge, so you can reconcile wha
 
 > Status: **M3 closed on 9 November 2026**; M4 is next (Cloud SPE Build Track). The first builder journey works
 > end to end: access, discovery, paid jobs, history and network-cost reports.
-> Async jobs, persistent sessions and the events feed are defined but not yet implemented (M4): they
-> answer `501`. See [docs/PLANS.md](docs/PLANS.md).
+> Async jobs are queued and run by the engine's own worker, and their results are stored (M4).
+> Persistent sessions and the events feed are defined but not yet implemented (M4): they answer `501`.
+> See [docs/PLANS.md](docs/PLANS.md).
 
 ## Install
 
@@ -23,7 +24,7 @@ pip install "livepeer-builder[server,postgres]"   # optional PostgreSQL store
 ```
 
 The engine pins the SDK to [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway)
-`main` at `2017a80` (see [docs/references/upstream-baseline.md](docs/references/upstream-baseline.md)).
+`main` at `7dc2a07` (see [docs/references/upstream-baseline.md](docs/references/upstream-baseline.md)).
 
 ## Embed it
 
@@ -47,6 +48,7 @@ async def quick_start(
     settings: EngineSettings, supply: EngineSupply | None = None, decorate: Decorate | None = None
 ) -> JobCost:
     """Run one paid job for a customer and read what it cost. ``supply`` replaces parts and ``decorate`` wraps them."""
+    settings.require_discovery_url()  # an engine does not start without it: refuse before the database is opened
     async with await BuilderEngine.create(settings, supply=supply, decorate=decorate) as engine:
         actor = ActorContext(
             actor_id="customer-42",
@@ -58,7 +60,12 @@ async def quick_start(
 ```
 
 Run it with `asyncio.run(quick_start(EngineSettings.from_env()))`. `async with` starts the engine and
-stops it, closing what it opened. This block is tested (`tests/unit/test_readme_example.py`).
+stops it, closing what it opened. `create` opens the database and migrates it, so the address the
+engine needs to start is asked for first. This block is tested (`tests/unit/test_readme_example.py`).
+
+The customer needs an allocation before its first job: an admin allots one, once
+([embedded-mode.md](docs/guides/embedded-mode.md#3-allot-before-paid-work)). A job for an actor
+with no allocation fails `not_provisioned`, and nothing is paid.
 
 ## Run the service
 
@@ -67,7 +74,7 @@ export LPB_DATABASE_URL=sqlite+aiosqlite:///./livepeer-builder.db
 export LPB_DISCOVERY_URL=http://discovery:8939/discovery
 export LPB_SIGNER_URL=https://signer.example LPB_BATTERIES_URL=https://batteries.example
 export LPB_BATTERIES_TOKEN=... LPB_SECRET_KEY="$(uv run lpb gen-secret-key)"
-export LPB_BATTERIES_OPERATOR_TOKEN=...   # optional: turns on the grant desk (list and create grants)
+export LPB_BATTERIES_GRANTS_TOKEN=...     # optional: turns on the tenant desk (onboard and list tenants)
 uv run lpb migrate
 uv run lpb bootstrap-admin   # prints the first admin key once
 uv run lpb serve

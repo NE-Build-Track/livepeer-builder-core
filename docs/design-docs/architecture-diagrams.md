@@ -44,7 +44,7 @@ flowchart LR
     Core -->|"sign (SDK)"| Signer
     Core -->|"LPB_DISCOVERY_URL: GET /discovery"| DiscSvc
     DiscSvc -->|"GET /discovery (trusted TLS)"| Orch
-    Core -->|"provision, fund, /v1/usage"| Bat
+    Core -->|"allot, top up, /v1/usage"| Bat
     Core -->|"paid call (adapters/runner_call.py)"| Orch --> Runner
     Signer -->|"authorize webhook"| Bat
     Signer -->|"events (durable outbox)"| Kafka --> Bat
@@ -61,7 +61,8 @@ Every layer uses the frozen models in `contracts/`.
 ```mermaid
 flowchart TB
     subgraph UI["http/ — REST service ([server] extra)"]
-        Routes["create_app: /v1/jobs, /v1/offerings, /v1/costs, /v1/admin/*"]
+        Work["work routes: /v1/jobs, /v1/offerings, /v1/costs, /v1/keys"]
+        Clearinghouse["clearinghouse routes: /v1/clearinghouse/*"]
     end
     subgraph Wiring["runtime/ — app wiring"]
         BE["BuilderEngine.create · start · stop · health"]
@@ -87,7 +88,7 @@ flowchart TB
     subgraph Impl["adapters/ and store/ — implementations"]
         direction LR
         AAuth["ApiKeyAuthenticator<br/>AuthenticatorChain"]
-        ASec["RoutingSecretStore<br/>(settings + Fernet DB)"]
+        ASec["RoutingSecretStore<br/>(Fernet DB)"]
         ASdk["HttpDiscoverySource<br/>SdkRunnerTransport"]
         ABat["BatteriesClient<br/>BatteriesUsageSource"]
         SQL["SqlStore + Alembic<br/>backup · retention"]
@@ -123,7 +124,7 @@ flowchart LR
 sequenceDiagram
     autonumber
     actor C as Client
-    participant H as http/app.py
+    participant H as http/ (a route)
     participant Chain as AuthenticatorChain
     participant K as ApiKeyAuthenticator
     participant S as SqlStore (lpb_access_keys)
@@ -138,7 +139,7 @@ sequenceDiagram
     else not an lpk_ token
         K-->>Chain: None (try the next authenticator)
     else valid
-        K-->>Chain: ActorContext(actor, application, permissions, kind)
+        K-->>Chain: ActorContext(actor, tenant, permissions, kind)
     end
     H->>Svc: get(actor, job_id)
     Svc->>P: check(actor, JOBS_READ, ResourceRef(owner))
@@ -149,37 +150,39 @@ sequenceDiagram
     end
 ```
 
-## 5. Explicit provisioning (per_actor)
+## 5. Explicit allotment (per_actor)
 
 Money moves only on an admin command, with an idempotency key. The key goes straight into the
-`SecretStore`; the database stores only a `SecretRef`.
+`SecretStore`; the database stores only a `SecretRef`. The diagram is an engine with both halves. At a
+standalone clearinghouse `allot_for_delivery` runs the same steps without the `SecretStore`: the key is
+held for the one answer, which hands it to the enterprise's engine, and the actor's row records
+`credential_custody: work_engine` ([payments.md](../contracts/payments.md#payment-keys)).
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Op as Operator (admin key)
-    participant H as REST /v1/admin/.../allocation
+    participant H as REST /v1/clearinghouse/.../allocation
     participant Pay as PaymentsService
     participant B as BatteriesClient
     participant Bat as Batteries management API
     participant Sec as EncryptedDbSecretStore
     participant DB as SqlStore (lpb_actors)
-    Op->>H: POST {amount: {amount: "1", currency: "USD"}, grant_id: "g_…"}
-    H->>Pay: provision(admin, ProvisionRequest)
-    Pay->>Pay: policy.check(ADMIN_ALLOCATIONS)
+    Op->>H: POST {amount: {amount: "1", currency: "USD"}} (the path names the tenant, and a tenant admin's names none)
+    H->>Pay: allot(admin, AllotRequest)
+    Pay->>Pay: policy.check(ADMIN_ALLOCATIONS, the tenant)
     Pay->>DB: get_actor(app, actor)
-    alt already provisioned (under another reference)
-        Pay-->>Op: 409 already_provisioned, the actor (nothing applied: fund it instead)
+    alt already allotted (under another reference)
+        Pay-->>Op: 409 already_allotted, the actor (nothing applied: top it up instead)
     else new
-        Pay->>Pay: resolve grant (the request's, else the caller's own allocation's)
-        Pay->>B: create_key_for_grant(grant, name, Money, Idempotency-Key)
+        Pay->>B: create_key_for_grant(the tenant's id, name, Money, Idempotency-Key)
         B->>Bat: POST /v1/api-keys {grant_id, amount_usd}
         Bat-->>B: {allocation_id, id, api_key=lpg_…}
         B-->>Pay: NewAllocationKey (secret is a SecretStr)
         Pay->>Sec: put(name, lpg_…) → Fernet ciphertext in lpb_secrets
         Sec-->>Pay: SecretRef("db:…")
         Pay->>DB: save_actor(allocation_id, api_key_id, secret_ref)
-        Pay-->>Op: ProvisionedActor (never the key)
+        Pay-->>Op: ActorAllocation (never the key)
     end
 ```
 
@@ -204,7 +207,7 @@ sequenceDiagram
     J->>DB: job_by_operation_ref → 409 if already used
     J->>Adm: admit(app) → NoCapacity 503 if full (before payment)
     J->>DB: create_job(state=running, fingerprint)
-    J->>Pay: credential(actor) → PaymentCredential(token, allocation_id), or JobFailed(not_provisioned) before any attempt
+    J->>Pay: credential(actor) → PaymentKey(token, allocation_id), or JobFailed(not_provisioned) before any attempt
     loop each candidate (SelectionPolicy order, max_attempts)
         J->>DB: start_attempt(outcome=in_flight)
         J->>T: call(runner, request, credential)
@@ -276,15 +279,17 @@ sequenceDiagram
     participant Pay as PaymentsService (AllowanceReader)
     participant DB as SqlStore
     participant Bat as Batteries
-    Op->>C: GET /v1/admin/reconciliation?actor_id=alice
-    C->>Pay: allocation_for(app, actor)
+    Op->>C: GET /v1/costs/reconciliation?actor_id=alice (optional allocation_id: an earlier allocation)
+    C->>Pay: allocation_for(app, actor) → the current allocation
     Note over C,DB: one cost snapshot: a sync committing meanwhile is not seen
+    C->>DB: attempt_allocations(app, actor) → which allocation paid each attempt (#115, C9)
+    C->>C: the allocation to reconcile: the current one, or the named one if it is the actor's (else 404)
     C->>DB: projections_and_unprojected(app, actor) → fresh projections (each with its job's runner app), jobs none covers (running, ended since, older evidence version)
-    C->>C: classify the uncovered jobs live (running ones are pending) → sum attempts by cost_class
+    C->>C: classify the uncovered jobs live (running ones are pending) → sum by cost_class the attempts that allocation paid
     C->>DB: unattributed_usage(allocation) (rows with no matched payment session)
     C->>Pay: read_allowance(allocation)
     Pay->>Bat: GET /v1/allocations/{id} → spent_usd
-    C-->>Op: by_class (with pending) + unattributed + balanced (spent == sum)
+    C-->>Op: by_class (with pending) + unattributed + balanced (spent == sum) + other_allocations
 ```
 
 ## 9. Restart recovery
@@ -298,13 +303,16 @@ sequenceDiagram
     BE->>J: on start, before serving
     J->>DB: jobs_in_state("running")
     loop each interrupted job
-        alt any attempt in_flight or payment_sent
+        alt an async job with no attempt, fewer than 3 of its claims counted (ISS-26)
+            J->>DB: requeue_unstarted: back to queued, nothing went out
+        else any attempt in_flight or payment_sent
             J->>DB: finish_job(uncertain, Failure(interrupted))
         else nothing could have paid
             J->>DB: finish_job(failed, Failure(interrupted))
         end
     end
-    BE->>BE: discovery refresh, then the background loops (discovery, cost sync, retention)
+    BE->>DB: queued_stats: what the async worker finds waiting
+    BE->>BE: discovery refresh, then the background loops (discovery, cost sync, retention, the async worker)
 ```
 
 ## 10. Persistent session (planned, M4 · ISS-27)
@@ -336,11 +344,16 @@ sequenceDiagram
 
 ```mermaid
 stateDiagram-v2
-    [*] --> queued: submit (async, M4)
+    [*] --> queued: submit (async)
     [*] --> running: run (immediate)
-    queued --> running: worker picks it up (M4)
-    running --> succeeded: runner 2xx
-    running --> failed: refused everywhere, not provisioned, runner 4xx/5xx, signer refusal
+    queued --> running: a worker claims it, its gate first (a worker, a slot, the job), then a compare-and-set
+    queued --> failed: cancelled, or past the queue's time limit, nothing paid
+    running --> queued: restart or stop before its first attempt, three claims at most
+    running --> queued: claimed when no runner could take it, given back uncounted
+    running --> succeeded: runner 2xx, an async job's answer stored with its end
+    running --> failed: refused everywhere, no allocation, runner 4xx/5xx, signer refusal
+    running --> failed: an async answer too large to store, paid
+    running --> failed: timeout_s up before a further attempt, no runner called
     running --> uncertain: paid, then timeout or unreachable
     running --> uncertain: restart with an in_flight or paid attempt
     running --> failed: restart, nothing could have paid

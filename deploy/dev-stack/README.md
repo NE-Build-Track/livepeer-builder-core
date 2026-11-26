@@ -1,13 +1,16 @@
 # Dev stack
 
 An optional local stack for driving the engine against real Livepeer payment components. It is not
-part of CI. **Orchestrators and runners are assumed to exist on the network**, so the stack runs the
+part of CI. Its engine is in the `both` role, the default: self-hosted payments, as one deployment with
+one listener. A payment clearinghouse and an enterprise that uses it are the two projects beside this
+one ([../README.md](../README.md)); there the upstream program this stack calls `clearinghouse` is the
+service `batteries`, and "payment clearinghouse" means the engine in its `clearinghouse` role. **Orchestrators and runners are assumed to exist on the network**, so the stack runs the
 payment side, node's discovery and the engine:
 
 | Service | What it is |
 | --- | --- |
 | `clearinghouse` | Clearinghouse Batteries v0.0.3 (`03bc9fb`): authorization webhook, management API, embedded Kafka, accounting |
-| `signer` | livepeer/node `f45d83f` remote signer (main, 10 commits after v1.0.6). It only signs payments |
+| `signer` | livepeer/node `eee09c4` remote signer (v1.0.7). It only signs payments |
 | `discovery` | livepeer/node's `livepeer-discovery` from that same commit, static mode, on `127.0.0.1:8939`. The list is `config/discovery.toml`. The engine still only reads `GET /discovery` ([contract](../../docs/contracts/discovery.md)) |
 | `engine` | This repository, built from the checkout and served with `lpb serve` on `127.0.0.1:8080`. It reads runners from discovery (`LPB_DISCOVERY_URL`) |
 
@@ -32,11 +35,9 @@ cd deploy/dev-stack
 python3 config/init-secrets.py            # Batteries creds, engine token, webhook, Kafka users
 # add (mode 0600; no trailing newline): secrets/rpc-url, secrets/keystore.json, secrets/keystore-password
 docker compose up -d --build clearinghouse signer
-docker compose exec clearinghouse clearinghouse --db-path /data/clearinghouse.db \
-  grant create --name Dev --sponsor Dev --amount-usd 5 --status active      # note the grant id
 cp .env.example .env && chmod 600 .env     # fill LPB_BATTERIES_TOKEN (secrets/engine-token),
-                                           # LPB_BATTERIES_OPERATOR_TOKEN (secrets/grant-desk-token;
-                                           #   optional, turns on the grant desk),
+                                           # LPB_BATTERIES_GRANTS_TOKEN (secrets/grant-desk-token;
+                                           #   turns on the tenant desk, which onboards a tenant),
                                            # LPB_SECRET_KEY
 docker compose up -d --build engine
 docker compose up -d discovery
@@ -49,14 +50,18 @@ the engine sees). Readiness is on the metrics port, `127.0.0.1:8940/readyz`, whi
 ## Use
 
 ```sh
-docker compose exec engine lpb bootstrap-admin            # prints the admin token once
+docker compose exec engine lpb bootstrap-admin            # prints the clearinghouse admin token once
 ADMIN=lpk_...
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
-  -d '{"kind":"actor","actor_id":"alice","operation_ref":"dev-key-alice"}' \
-  http://127.0.0.1:8080/v1/admin/keys                                                  # an actor key
+  -d '{"name":"Dev","amount":{"amount":"5","currency":"USD"},"operation_ref":"dev-onboard"}' \
+  http://127.0.0.1:8080/v1/clearinghouse/tenants        # onboards a tenant: its grant, and its admin key
+TENANT=...                                              # "tenant_id" in the answer: the grant's id
 curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
-  -d '{"amount":{"amount":"1","currency":"USD"},"operation_ref":"dev-provision-alice"}' \
-  http://127.0.0.1:8080/v1/admin/applications/default/actors/alice/allocation          # explicit funding
+  -d '{"kind":"actor","actor_id":"alice","tenant_id":"'$TENANT'","operation_ref":"dev-key-alice"}' \
+  http://127.0.0.1:8080/v1/keys                                                        # an actor key
+curl -s -H "Authorization: Bearer $ADMIN" -H 'Content-Type: application/json' \
+  -d '{"amount":{"amount":"1","currency":"USD"},"operation_ref":"dev-allot-alice"}' \
+  http://127.0.0.1:8080/v1/clearinghouse/tenants/$TENANT/actors/alice/allocation  # explicit allotment
 ALICE=lpk_...
 curl -s http://127.0.0.1:8080/v1/offerings                                             # public, no key
 curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json' \
@@ -64,7 +69,16 @@ curl -s -i -H "Authorization: Bearer $ALICE" -H 'Content-Type: application/json'
   http://127.0.0.1:8080/v1/jobs
 ```
 
-Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/admin/reconciliation?actor_id=alice`.
+A tenant's id is its grant's id, so the allotment names no grant: it is allotted from the grant of the
+tenant in the path ([payments.md](../../docs/contracts/payments.md#tenants)). Onboarding answers with the
+tenant's first admin key too, shown once: the tenant's own admin allots with it, for that tenant only, at
+`/v1/clearinghouse/actors/alice/allocation`, which names no tenant: the tenant is the key's. The path
+that names the tenant is the clearinghouse admin's, and refuses the tenant's key.
+`GET /v1/clearinghouse/tenants` lists the tenants with each grant's balance. A grant created with the
+Batteries CLI (`grant create`) is a tenant as well: its id is the tenant's id.
+
+Check attribution with `GET /v1/jobs/{id}/cost` and
+`GET /v1/costs/reconciliation?actor_id=alice&tenant_id=$TENANT`.
 
 ## Status (19 October, at the pins of that day)
 
@@ -73,8 +87,14 @@ Check attribution with `GET /v1/jobs/{id}/cost` and `GET /v1/admin/reconciliatio
 - **Stacks created before 16 October** lack the `grant-desk` credential, and their `builder-engine`
   credential lacks `grants.fund`. Add both to `secrets/clearinghouse.toml` (as `config/init-secrets.py`
   writes them), save the grant-desk secret as `secrets/grant-desk-token`, set
-  `LPB_BATTERIES_OPERATOR_TOKEN` in `.env`, and recreate `clearinghouse` and `engine`. Without the
-  operator token the engine starts with the grant desk off (`/v1/admin/grants` is absent).
+  `LPB_BATTERIES_GRANTS_TOKEN` in `.env`, and recreate `clearinghouse` and `engine`. Without the
+  grants token the engine starts with the tenant desk off (onboarding and the tenant list are absent).
+- **Stacks created before 18 November 2026** have a `grant-desk` credential with `grants.read` and
+  `grants.create` only. The tenant desk also needs `grants.fund` (to onboard a tenant with an amount),
+  `grants.status` and `allocations.read`: add them to that credential in `secrets/clearinghouse.toml`
+  and recreate `clearinghouse`. A stack that allotted actors under the tenant `default` from a grant
+  made with the CLI keeps those allocations, and allots new ones under the grant's id
+  ([payments.md](../../docs/contracts/payments.md#records-from-before-a-tenants-id-was-its-grants-id)).
 - **T10 resolved:** the signer at `f970be6` pays orchestrators whose ticket recipient differs from
   their node address. Paid jobs on public orchestrators succeed and reconcile.
 - **T9 resolved:** SDK PR 5 reads node's lower-case `"state"` key, so attempts record their `auth_id`
@@ -103,21 +123,29 @@ and the [tech-debt tracker](../../docs/exec-plans/tech-debt-tracker.md).
   [evidence](../../docs/references/evidence/2026-10-30-m3-live-suite.md)).
 - **The signer container runs as root** (`user: "0:0"`) so bind-mounted secrets stay readable.
   Discovery and clearinghouse run as their images' own users. This is dev only.
+- **Stacks created before 19 November 2026** have a `grant-desk` credential without `escrow.read`,
+  which the wallet report (`GET /v1/clearinghouse/wallet`, #167) reads Batteries' escrow report with.
+  Add it to that credential in `secrets/clearinghouse.toml` and recreate `clearinghouse`; until then
+  the route answers 502. This stack runs Batteries without its on-chain listener, so the report's
+  `escrow` is empty here: the deposit and reserve are reported once Batteries runs with
+  `--enable-onchain-listener`, an RPC address of its own and the signer's address
+  ([payments.md](../../docs/contracts/payments.md#the-wallet-report)).
 - **The engine image runs as `lpb` (uid 10001)**, and `/.dockerignore` keeps `secrets/`, `.env`,
   `.venv` and caches out of the build context. An `engine-data` volume created by an older, root-run
   image needs its ownership fixed once:
   `docker compose run --rm --user 0 engine chown -R 10001:10001 /data`.
 - **The engine's management credential** (`builder-engine` in `secrets/clearinghouse.toml`) may
   `grants.fund` and has no `grants.*`. Batteries does not scope that permission to one grant, and an
-  engine admin may fund any grant it names. `grant-desk` has `grants.read` and `grants.create` for
-  `LPB_BATTERIES_OPERATOR_TOKEN`. A stack created before that credential existed needs it added to
-  `secrets/clearinghouse.toml`, plus `secrets/grant-desk-token`, before the engine's grant desk can
-  list or create grants.
+  clearinghouse admin may top up any tenant's grant. `grant-desk` has what the tenant desk needs for
+  `LPB_BATTERIES_GRANTS_TOKEN`. A stack created before that credential existed needs it added to
+  `secrets/clearinghouse.toml`, plus `secrets/grant-desk-token`, before the engine can onboard or list
+  tenants.
   Any deployment gives the engine the same permissions, which `config/init-secrets.py` writes:
   - `builder-engine` (`LPB_BATTERIES_TOKEN`): `grants.fund`, `allocations.create`, `allocations.fund`,
     `allocations.read`, `allocations.status`, `allocations.revoke`, `api_keys.create`, `api_keys.read`,
     `api_keys.revoke` and `usage.read`;
-  - `grant-desk` (`LPB_BATTERIES_OPERATOR_TOKEN`, optional): `grants.read` and `grants.create`.
+  - `grant-desk` (`LPB_BATTERIES_GRANTS_TOKEN`, optional): `grants.read`, `grants.create`,
+    `grants.fund`, `grants.status`, `allocations.read` and, for the wallet report, `escrow.read`.
 - **No pinned certificates.** The signer no longer discovers, so it needs no orchestrator certificates
   (T12 closed by D43). `config/pinned-certs/` is gone. The engine still verifies runner TLS against
   the system trust store.

@@ -6,48 +6,90 @@ from collections.abc import Mapping
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    ModelWrapValidatorHandler,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
-from livepeer_builder.contracts import AllocationMode, Contract, Currency, Operation
+from livepeer_builder.contracts import Contract, Currency, Role
+from livepeer_builder.contracts.access import reserved_scope
+from livepeer_builder.contracts.common import GrantId, without_input
 
 ENV_PREFIX = "LPB_"
+# The clearinghouse's runner list, after its address: what an enterprise's engine reads by default (D87).
+CLEARINGHOUSE_RUNNER_LIST = "/v1/clearinghouse/discovery"
+# What selects a payment clearinghouse: set together or not at all (D84, #168).
+_CLEARINGHOUSE = ("clearinghouse_url", "clearinghouse_token", "clearinghouse_tenant_id")
+# What reaches Batteries. An engine that uses a clearinghouse holds none of them: only the clearinghouse's
+# own engine reaches Batteries (D85 point 1). ``signer_url`` is not among them: such an engine signs at
+# the clearinghouse's published signer itself, and is told its address as any paying engine is.
+_BATTERIES = ("batteries_url", "batteries_token", "batteries_grants_token")
 DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./livepeer-builder.db"
 AuthMode = Literal["api_keys", "jwt"]
-# Scopes an ordinary token carries: an admin scope must be none of these, or every user is an admin (D47).
-RESERVED_SCOPES = frozenset(
-    {"openid", "profile", "email", "address", "phone", "offline_access"}
-    | {operation.value for operation in Operation}
-)
 # JWT signatures the engine accepts: asymmetric only, so a verification key can never sign (D45).
 ASYMMETRIC_ALGORITHMS = frozenset(
     {"RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"}
 )
 
 
-def _reserved(scope: str, prefix: str) -> bool:
-    """A scope ordinary tokens carry, as written or once the scope prefix is removed (#50 review):
-    with LPB_JWT_SCOPE_PREFIX=api:, api:jobs.run is the jobs.run every builder holds."""
-    return scope in RESERVED_SCOPES or (bool(prefix) and scope.removeprefix(prefix) in RESERVED_SCOPES)
+# What a refused admin scope is, in the refusal's words. No refusal repeats the value it was given.
+_ORDINARY_SCOPE = (
+    "a scope ordinary tokens carry (an operation's name or a standard scope, as written or after "
+    "LPB_JWT_SCOPE_PREFIX)"
+)
+# What an engine asked to start without LPB_DISCOVERY_URL is told (#154).
+DISCOVERY_URL_REQUIRED = (
+    "LPB_DISCOVERY_URL is required to start the engine: it reads its runners from that address, as "
+    "livepeer/node's /discovery contract (such as http://discovery:8939/discovery), and has no built-in list"
+)
+
+
+def _env(name: str) -> str:
+    return ENV_PREFIX + name.upper()
+
+
+def _runner_list_by_default(values: dict[str, Any]) -> dict[str, Any]:
+    """``values`` with the clearinghouse's runner list as the discovery address, when a clearinghouse is
+    named and no discovery address is (D87). An address that cannot be read is left for its validator."""
+    address = values.get("clearinghouse_url")
+    if values.get("discovery_url") or not isinstance(address, str) or not address.strip():
+        return values
+    return {**values, "discovery_url": address.strip().rstrip("/") + CLEARINGHOUSE_RUNNER_LIST}
 
 
 class EngineSettings(Contract):
-    # A refused value is never echoed: several settings are secrets, or may carry one (signer_url).
+    # A refused value is never echoed: several settings are secrets, or may carry one (signer_url). This
+    # hides it from str(error); _a_refusal_holds_no_value, below every rule, from every other form. That
+    # keeps each rule's words, so no rule's words quote a value given: they name the setting and say what
+    # it needs (tests/unit/test_settings_refusals.py tries every refusal with a value of its own).
     model_config = ConfigDict(hide_input_in_errors=True)  # merged with Contract's frozen, extra="forbid"
 
     engine_id: str = Field(default="livepeer-builder", min_length=1)  # namespaces provider idempotency keys
+    # Which half of the engine this deployment runs (D84, #169): "both" for self-hosted payments, "work"
+    # for an enterprise that uses a payment clearinghouse, "clearinghouse" for one, which never runs jobs.
+    # It chooses the routes, the payment adapters and what starts; the settings below must agree with it.
+    role: Role = "both"
 
     # persistence
     database_url: str = DEFAULT_DATABASE_URL  # durable by default; there is no silent in-memory store
     auto_migrate: bool = True  # production can set False and run `lpb migrate` explicitly
     retention_jobs_days: int | None = Field(default=None, ge=1)  # None keeps completed jobs forever
     retention_usage_days: int | None = Field(default=None, ge=1)  # None keeps cached usage rows forever
+    # a stored async result's bytes go after this many days (D69); None keeps them as long as the job
+    retention_results_days: int | None = Field(default=7, ge=1)
     retention_interval_s: float = Field(default=6 * 3600, gt=0)  # how often the retention purge runs
 
     # network
     signer_url: str | None = None
-    # Required. GET this URL for the livepeer/node /discovery contract (D63). The engine does not start
-    # without it, and it does not fall back to a built-in list.
-    discovery_url: str
+    # GET this URL for the livepeer/node /discovery contract (D63). The engine does not start without it,
+    # and it does not fall back to a built-in list. Settings without it are read: start() checks it, so a
+    # command that builds an engine and never starts it needs none (#154, require_discovery_url).
+    discovery_url: str | None = None
     discovery_interval_s: float = Field(default=15.0, gt=0)
     # How old an orchestrator-stamped rate may be before its offering is stale (D62 (3)). D63: the reader
     # keeps price_info as advertised, and this age is catalog policy.
@@ -58,6 +100,14 @@ class EngineSettings(Contract):
     max_concurrent_jobs: int | None = Field(default=64, ge=1)
     max_concurrent_jobs_per_app: int | None = Field(default=None, ge=1)
 
+    # async jobs (D69, ISS-26; docs/contracts/engine.md#async-jobs)
+    async_workers: int = Field(default=4, ge=1)  # queued jobs dispatched at once, inside the limits above
+    async_max_queued: int = Field(default=1000, ge=1)  # a submit beyond this is refused, before it is stored
+    async_queue_ttl_s: float = Field(default=3600.0, gt=0)  # a job still queued after this fails, unpaid
+    async_result_max_bytes: int = Field(default=16 * 1024 * 1024, ge=1)  # a larger reply is not stored
+    async_poll_s: float = Field(default=1.0, gt=0)  # how often the worker looks at the queue unprompted
+    async_drain_timeout_s: float = Field(default=30.0, ge=0)  # engine stop waits this long for running jobs
+
     # paid failover (D55): how many paid attempts a job may fail over from; 1 turns paid failover off
     max_paid_attempts: int = Field(default=2, ge=1, le=10)
 
@@ -67,18 +117,23 @@ class EngineSettings(Contract):
     stream_settle_s: float = Field(default=1.0, ge=0)  # after a disconnect, time for the runner to end
     stream_open_grace_s: float = Field(default=5.0, gt=0)  # how far past its deadline an open may run
 
-    # payments
-    allocation_mode: AllocationMode = "per_actor"
+    # payments: one allocation and key per actor, the only mode (D82); no setting holds a payment key
     default_currency: Currency = "USD"
-    shared_payment_key: SecretStr | None = None  # per_application mode: the one lpg_ key
     batteries_url: str | None = None  # management API and usage feed
     batteries_token: SecretStr | None = None  # allocations and usage; not grant administration
-    batteries_operator_token: SecretStr | None = None  # grants.read and grants.create for the admin desk
+    batteries_grants_token: SecretStr | None = None  # grants.read and grants.create for the admin desk
     batteries_timeout_s: float = Field(default=30.0, gt=0)  # each Batteries HTTP request
-    # per_application: the allocation behind shared_payment_key; every attempt stores it (200 characters)
-    shared_allocation_id: str | None = Field(default=None, max_length=200)
     secret_key: SecretStr | None = None  # Fernet key for the encrypted-database SecretStore
     cost_sync_interval_s: float = Field(default=30.0, gt=0)
+    # An engine that uses a payment clearinghouse (D84, #168): its address, the tenant admin key and the
+    # tenant's id, which is its grant's id (D83). Set together or not at all, and never with a Batteries
+    # setting: allotment, the allowance and usage then reach the clearinghouse. Signing does not: the
+    # engine signs at signer_url, the clearinghouse's published signer, with each actor's own key.
+    clearinghouse_url: str | None = None
+    clearinghouse_token: SecretStr | None = None  # the tenant admin key; sent as a bearer, never logged
+    clearinghouse_tenant_id: GrantId | None = None
+    # each request to the clearinghouse. Six of them fit in the default stale window, as the rule below asks
+    clearinghouse_timeout_s: float = Field(default=20.0, gt=0)
     # an admin command still started after this long is resumed by a repeat (D57, Q3: 4x batteries_timeout_s)
     operation_stale_s: float = Field(default=120.0, gt=0)
 
@@ -89,8 +144,10 @@ class EngineSettings(Contract):
     jwt_audience: str | None = None  # must be in aud: this engine
     jwt_algorithms: tuple[str, ...] = ("RS256", "ES256")
     jwt_actor_claim: str = Field(default="sub", min_length=1)
-    jwt_application_claim: str | None = None  # None: every token is in jwt_application_id
-    jwt_application_id: str = Field(default="default", min_length=1, max_length=200)  # as records store it
+    # With jwt, exactly one says a token's tenant, and neither has a default (#163 review): the claim that
+    # names it, or the one tenant every token is in, at most 200 characters as records store it
+    jwt_tenant_claim: str | None = Field(default=None, min_length=1)
+    jwt_tenant_id: str | None = Field(default=None, min_length=1, max_length=200)
     jwt_scope_claim: str = Field(default="scope", min_length=1)
     jwt_scope_prefix: str = ""  # stripped before scopes are matched to operations
     jwt_admin_scope: str | None = None  # None: no token is an admin credential
@@ -107,6 +164,11 @@ class EngineSettings(Contract):
     log_json: bool = True
     http_host: str = "127.0.0.1"
     http_port: int = Field(default=8080, ge=1, le=65535)
+    # The private listener (D84, #167). Unset: one listener, which serves every route. Set: http_host and
+    # http_port are the public listener, without the routes only a clearinghouse admin calls, and this
+    # one serves a clearinghouse admin only, without a tenant's own routes. Loopback unless set otherwise.
+    http_private_host: str = "127.0.0.1"
+    http_private_port: int | None = Field(default=None, ge=1, le=65535)
     # A /v1/ body over this is refused with 413 before it is read (D59); fits an 8 MiB raw_body as base64
     http_max_request_bytes: int = Field(default=16 * 1024 * 1024, ge=1024)
 
@@ -135,12 +197,49 @@ class EngineSettings(Contract):
             raise ValueError("signer_url needs a host, as http(s)://host[:port] or host:port")
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def _clearinghouse_runner_list_is_the_default(cls, values: Any) -> Any:
+        return _runner_list_by_default(values) if isinstance(values, dict) else values
+
+    @field_validator("clearinghouse_url")
+    @classmethod
+    def _clearinghouse_url_is_an_origin(cls, value: str | None) -> str | None:
+        """A scheme, a host and an optional port, and nothing after them: the engine calls the
+        clearinghouse's routes (``/v1/clearinghouse/...``) at the root of this address, and builds its
+        default discovery address from it. Error text and logs quote the address, so it carries no
+        userinfo either: the tenant admin key is a header. A trailing slash alone names no path and is
+        taken off. The value is not echoed."""
+        if value is None:
+            return None
+        value = value.strip()
+        try:
+            parts = urlsplit(value)
+            valid = (
+                parts.scheme in ("http", "https")
+                and bool(parts.hostname)
+                and parts.path in ("", "/")
+                and not any(mark in value for mark in "@?#")
+                and not any(char.isspace() for char in value)
+            )
+        except ValueError:  # an unclosed IPv6 literal, for example
+            valid = False
+        if not valid:
+            raise ValueError(
+                "LPB_CLEARINGHOUSE_URL must be http:// or https://, a host and an optional port, with no "
+                "path, query, fragment or userinfo, such as https://clearinghouse.example: the "
+                "clearinghouse's routes are called at its root"
+            )
+        return f"{parts.scheme}://{parts.netloc}"
+
     @field_validator("discovery_url")
     @classmethod
-    def _http_discovery_url(cls, value: str) -> str:
+    def _http_discovery_url(cls, value: str | None) -> str | None:
+        if value is None:  # unset: only an engine that starts needs it (require_discovery_url)
+            return None
         # Checked here, not on the first poll: a scheme-less host:port would fail every refresh, quietly.
         value = value.strip()  # urlsplit ignores padding; httpx refuses a newline and sends a space as %20
-        # A failed refresh's error quotes this URL, and /readyz serves it as discovery_error with no auth;
+        # A failed refresh's error quotes this URL in the log (/readyz shows only a code, #113 C7);
         # httpx also sends a URL's userinfo as Basic auth. So, like signer_url (D58), it carries no userinfo,
         # query or fragment, and this error does not echo it.
         if any(mark in value for mark in "@?#"):
@@ -156,8 +255,8 @@ class EngineSettings(Contract):
             valid = False
         if not valid:
             raise ValueError(
-                f"LPB_DISCOVERY_URL must be an http:// or https:// URL with a host, such as "
-                f"http://discovery:8939/discovery; got {value!r}"
+                "LPB_DISCOVERY_URL must be an http:// or https:// URL with a host and no whitespace, such "
+                "as http://discovery:8939/discovery"
             )
         return value
 
@@ -173,9 +272,11 @@ class EngineSettings(Contract):
     @field_validator("jwt_algorithms")
     @classmethod
     def _asymmetric(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        refused = sorted(set(value) - ASYMMETRIC_ALGORITHMS)
-        if not value or refused:
-            raise ValueError(f"jwt_algorithms takes asymmetric algorithms only; refused {refused}")
+        if not value or set(value) - ASYMMETRIC_ALGORITHMS:
+            raise ValueError(
+                "jwt_algorithms takes asymmetric algorithms only, at least one of: "
+                + ", ".join(sorted(ASYMMETRIC_ALGORITHMS, key=str.lower))
+            )
         return value
 
     @field_validator("jwt_token_types")
@@ -195,9 +296,111 @@ class EngineSettings(Contract):
         # A process paused longer than that (a frozen VM) is the lease's limit: only a provider idempotency
         # key would close it.
         if self.operation_stale_s < 4 * self.batteries_timeout_s:
+            raise ValueError("LPB_OPERATION_STALE_S must be at least four times LPB_BATTERIES_TIMEOUT_S")
+        return self
+
+    @model_validator(mode="after")
+    def _a_clearinghouse_is_whole_and_alone(self) -> "EngineSettings":
+        """A half setting, or a clearinghouse beside a Batteries setting, is refused before the engine
+        starts (#168), and so is a stale window shorter than six timeouts of a clearinghouse call. Only
+        names are said: three of these settings are secrets. ``LPB_SIGNER_URL`` is no part of this rule:
+        it is the clearinghouse's signer, set or unset as on any engine."""
+        named = [name for name in _CLEARINGHOUSE if getattr(self, name) is not None]
+        if not named:
+            return self
+        if len(named) < len(_CLEARINGHOUSE):
+            missing = ", ".join(_env(name) for name in _CLEARINGHOUSE if name not in named)
             raise ValueError(
-                f"LPB_OPERATION_STALE_S ({self.operation_stale_s:g}) must be at least four times "
-                f"LPB_BATTERIES_TIMEOUT_S ({self.batteries_timeout_s:g})"
+                f"{', '.join(map(_env, _CLEARINGHOUSE))} are set together or not at all; missing: {missing}"
+            )
+        mixed = [_env(name) for name in _BATTERIES if getattr(self, name) is not None]
+        if mixed:
+            raise ValueError(
+                f"{', '.join(mixed)} cannot be set with LPB_CLEARINGHOUSE_URL: only the clearinghouse's "
+                "own engine reaches Batteries, and an engine that uses a payment clearinghouse holds no "
+                "address or credential of it"
+            )
+        # As for Batteries, just above: the ledger cancels a run at half the stale window, and the longest
+        # command must fit in that half. Through the remote adapters that is three calls, each under one
+        # deadline of the timeout: a rotation that another rotation overtook in the engine reads the
+        # allocation, sends the rotation, and reads which key the allocation takes (OneKeyPerAllocation).
+        # Every other command makes one or two, and none writes after its second call: a read that is cut
+        # short leaves nothing in flight, and the resume asks again. 3 calls in the half, so 6 timeouts
+        # in the whole window, where Batteries' two calls make four.
+        if self.operation_stale_s < 6 * self.clearinghouse_timeout_s:
+            raise ValueError(
+                "LPB_OPERATION_STALE_S must be at least six times LPB_CLEARINGHOUSE_TIMEOUT_S: a command "
+                "is cancelled at half the stale window, and the longest one makes three calls to the "
+                "clearinghouse"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _the_settings_agree_with_the_role(self) -> "EngineSettings":
+        """The role is the one switch (D84, #169). ``work`` names a payment clearinghouse; ``both`` and
+        ``clearinghouse`` reach Batteries themselves and name none; and ``clearinghouse`` has the private
+        listener, where alone its admin's routes are served. Only names are said. ``LPB_SIGNER_URL`` is
+        no part of this rule either: every role may name a signer."""
+        named = [_env(name) for name in _CLEARINGHOUSE if getattr(self, name) is not None]
+        if self.uses_clearinghouse:
+            if not named:
+                raise ValueError(self._work_needs_a_clearinghouse())
+            return self
+        if named:
+            why = (
+                "an engine pays through a payment clearinghouse in its work role only"
+                if self.runs_jobs
+                else "a payment clearinghouse is not a tenant of another one"
+            )
+            raise ValueError(
+                f"{', '.join(named)} cannot be set unless LPB_ROLE=work: {why}. Set LPB_ROLE=work to use "
+                "a payment clearinghouse, or remove them"
+            )
+        if not self.runs_jobs and self.http_private_port is None:
+            raise ValueError(
+                "LPB_ROLE=clearinghouse needs LPB_HTTP_PRIVATE_PORT: what only a clearinghouse admin does "
+                "(onboarding, grant top-ups, tenant status, the wallet) is served on the private "
+                "listener and nowhere else"
+            )
+        return self
+
+    def _work_needs_a_clearinghouse(self) -> str:
+        held = [_env(name) for name in _BATTERIES if getattr(self, name) is not None]
+        beside = f", and cannot hold {', '.join(held)}" if held else ""
+        return (
+            f"LPB_ROLE=work needs {', '.join(map(_env, _CLEARINGHOUSE))}: an engine in its work role pays "
+            f"through a payment clearinghouse{beside}"
+        )
+
+    @property
+    def uses_clearinghouse(self) -> bool:
+        """Whether allotment, the allowance and usage reach a payment clearinghouse, and not Batteries:
+        the ``work`` role alone. The engine signs at ``signer_url`` either way."""
+        return self.role == "work"
+
+    @property
+    def runs_jobs(self) -> bool:
+        """Whether the engine runs jobs: every role but ``clearinghouse``, a payment clearinghouse's,
+        which does payments only (D82)."""
+        return self.role != "clearinghouse"
+
+    @property
+    def clearinghouse_runner_list_token(self) -> str | None:
+        """The tenant admin key, when the discovery address is the clearinghouse's runner list, which
+        needs it (D87); otherwise ``None``. The address must be that route exactly, scheme, host, port
+        and path: the key is sent to no other."""
+        if self.clearinghouse_url is None or self.clearinghouse_token is None:
+            return None
+        if self.discovery_url != self.clearinghouse_url + CLEARINGHOUSE_RUNNER_LIST:
+            return None
+        return self.clearinghouse_token.get_secret_value()
+
+    @model_validator(mode="after")
+    def _two_listeners_have_two_addresses(self) -> "EngineSettings":
+        if (self.http_private_host, self.http_private_port) == (self.http_host, self.http_port):
+            raise ValueError(
+                "LPB_HTTP_PRIVATE_PORT is the public listener's port (LPB_HTTP_PORT) on the same host: the "
+                "private listener needs an address of its own"
             )
         return self
 
@@ -214,29 +417,77 @@ class EngineSettings(Contract):
                     raise ValueError(
                         f"LPB_{name.upper()} must be https (LPB_JWT_ALLOW_HTTP=true for local development)"
                     )
-        if self.jwt_admin_scope is not None and _reserved(self.jwt_admin_scope, self.jwt_scope_prefix):
-            raise ValueError(
-                f"jwt_admin_scope {self.jwt_admin_scope!r} is a scope ordinary tokens carry, "
-                "so every user would be an admin"
-            )
+        if self.jwt_admin_scope is not None and reserved_scope(self.jwt_admin_scope, self.jwt_scope_prefix):
+            raise ValueError(f"jwt_admin_scope is {_ORDINARY_SCOPE}, so every user would be an admin")
         read = self.jwt_admin_read_scope
-        if read is not None and (_reserved(read, self.jwt_scope_prefix) or read == self.jwt_admin_scope):
+        if read is not None and (reserved_scope(read, self.jwt_scope_prefix) or read == self.jwt_admin_scope):
             raise ValueError(
-                f"jwt_admin_read_scope {read!r} is a scope ordinary tokens carry, or the admin scope, "
-                "so it would not mark a read-only admin"
+                f"jwt_admin_read_scope is {_ORDINARY_SCOPE}, or the admin scope, so it would not mark a "
+                "read-only admin"
             )
         return self
 
+    @model_validator(mode="after")
+    def _jwt_names_one_tenant_source(self) -> "EngineSettings":
+        """An engine still set with a variable the rename retired reads none of the two, and with a default
+        it put every token in one tenant: users of different organisations shared it (#163 review)."""
+        if "jwt" not in self.auth:
+            return self
+        named = (self.jwt_tenant_claim is not None) + (self.jwt_tenant_id is not None)
+        if named != 1:
+            raise ValueError(
+                "LPB_AUTH includes jwt, so exactly one of LPB_JWT_TENANT_CLAIM and LPB_JWT_TENANT_ID must be "
+                "set: the claim that names each token's tenant, or the one tenant every token is in; "
+                + ("both are set" if named else "neither is set")
+            )
+        return self
+
+    # The last model validator: pydantic runs each one defined after it outside it, where its refusal would
+    # carry every setting given (tests/unit/test_settings_refusals.py fails if one is).
+    @model_validator(mode="wrap")
+    @classmethod
+    def _a_refusal_holds_no_value(
+        cls, values: Any, handler: ModelWrapValidatorHandler["EngineSettings"]
+    ) -> "EngineSettings":
+        """A refusal names each setting, with its type and its words, and holds no value given (#162
+        review). ``hide_input_in_errors`` hides values from ``str(error)`` only: ``errors()`` and
+        ``json()`` keep them, and a whole-settings rule's or a missing setting's is every setting given,
+        credentials too. A rule's exception is kept as its words: its traceback holds the settings. The
+        words are the rule's own, so a rule that quoted what it refused would put the value back."""
+        try:
+            return handler(values)
+        except ValidationError as refused:
+            title, details = refused.title, refused.errors(include_url=False)
+        # Raised here, outside the except block, so the refusal does not chain the error that holds them.
+        raise ValidationError.from_exception_data(title, [without_input(detail) for detail in details])
+
+    def require_discovery_url(self) -> str:
+        """The discovery address, for an engine about to start: ``BuilderEngine.start()`` asks before
+        anything polls, and ``serve`` before it opens anything (D63). Reading settings does not ask
+        (#154). The refusal is not pydantic's: it holds no setting."""
+        if self.discovery_url is None:
+            raise ValueError(DISCOVERY_URL_REQUIRED)
+        return self.discovery_url
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "EngineSettings":
-        """Build settings from ``LPB_<FIELD>`` variables; unset variables keep their defaults."""
+        """Build settings from ``LPB_<FIELD>`` variables; unset variables keep their defaults, and an
+        empty variable is unset."""
         source = os.environ if env is None else env
-        values: dict[str, str] = {}
+        values: dict[str, Any] = {}
         for name in cls.model_fields:
             raw = source.get(ENV_PREFIX + name.upper())
             if raw is not None and raw != "":
                 values[name] = raw
-        return cls.model_validate(values)
+        return cls.model_validate(_runner_list_by_default(values))
+
+    @classmethod
+    def database_url_from_env(cls, env: Mapping[str, str] | None = None) -> str:
+        """``LPB_DATABASE_URL`` alone, read as ``from_env`` reads it: for the commands that open only the
+        store (``lpb migrate``, ``revision``, ``backup``, ``restore``), which need no other setting
+        (#112, C23)."""
+        source = os.environ if env is None else env
+        return source.get(ENV_PREFIX + "DATABASE_URL") or DEFAULT_DATABASE_URL
 
 
 def generate_secret_key() -> str:

@@ -11,12 +11,12 @@ from pydantic import ValidationError
 
 from livepeer_builder import EngineSupply
 from livepeer_builder.adapters.sdk import SdkRunnerTransport
-from livepeer_builder.contracts import ActorContext, JobRequest, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, JobRequest, Money
 from livepeer_builder.errors import JobFailed
 from livepeer_builder.testing import ScriptedStreamTransport, StreamScript
 from tests.conftest import EngineFactory
 from tests.unit.livepeer_net import Net, Reply, start
-from tests.unit.test_streaming import APP, collect, provisioned, read_all
+from tests.unit.test_streaming import APP, allotted, collect, read_all
 
 
 @pytest.fixture
@@ -43,7 +43,7 @@ async def test_a_runner_that_never_answers_times_out_without_failover(
     paid: bool,
     state: str,
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(open_delay_s=5, payment_sent=paid, manifest_ids=("m-1",) if paid else ())]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.streaming.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
@@ -60,7 +60,7 @@ async def test_the_engine_stops_a_transport_that_ignores_its_deadline(
     alice: ActorContext,
     transport: ScriptedStreamTransport,
 ) -> None:
-    engine = await provisioned(make_engine, admin, stream_open_grace_s=0.05)
+    engine = await allotted(make_engine, admin, stream_open_grace_s=0.05)
     transport.opens = [StreamScript(open_delay_s=5, honors_deadline=False, payment_sent=False)]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.streaming.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
@@ -94,14 +94,13 @@ async def test_the_live_transport_times_out_by_whether_signing_finished(
         net.replies = [Reply(hang_s=5)]
     runners = (net.runner(), net.runner(orchestrator_url="https://other-orch.example"))
     engine = await make_engine(runners=runners, supply=EngineSupply(transport=SdkRunnerTransport(net.url)))
-    request = ProvisionRequest(
-        operation_ref="provision:default:alice",
-        application_id="default",
+    request = AllotRequest(
+        operation_ref="allot:default:alice",
+        tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
-        grant_id="g",
     )
-    await engine.payments.provision(admin, request)
+    await engine.payments.allot(admin, request)
     # The deadline must land in the hang (5 s), never in an earlier phase: a slow sign-orchestrator-info
     # under load is signer_unavailable since D58, so a tight deadline made the outcome depend on timing.
     with pytest.raises(JobFailed) as failed:
@@ -134,14 +133,13 @@ async def test_a_first_byte_deadline_while_the_signer_identifies_is_signer_unava
     engine = await make_engine(
         runners=(net.runner(),), supply=EngineSupply(transport=SdkRunnerTransport(net.url))
     )
-    request = ProvisionRequest(
-        operation_ref="provision:default:alice",
-        application_id="default",
+    request = AllotRequest(
+        operation_ref="allot:default:alice",
+        tenant_id="default",
         actor_id="alice",
         amount=Money(amount=Decimal(5), currency="USD"),
-        grant_id="g",
     )
-    await engine.payments.provision(admin, request)
+    await engine.payments.allot(admin, request)
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.streaming.stream(alice, JobRequest(app=net.runner().app, first_byte_timeout_s=0.3))
     job = failed.value.job
@@ -158,7 +156,7 @@ async def test_a_first_byte_deadline_while_the_signer_identifies_is_signer_unava
 async def test_headers_without_a_first_chunk_time_out_on_first_byte(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[5.0, b"late"])]
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, first_byte_timeout_s=0.05))
     with pytest.raises(JobFailed):
@@ -170,11 +168,13 @@ async def test_headers_without_a_first_chunk_time_out_on_first_byte(
 async def test_time_spent_opening_counts_against_timeout_s(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
-    # 60 ms to open plus 60 ms of chunks: within 0.1 s if the clock started at the first read, not overall
-    transport.opens = [StreamScript(open_delay_s=0.06, events=[b"a", 0.03, b"b", 0.03, b"c"])]
+    engine = await allotted(make_engine, admin)
+    # 0.6 s to open plus 0.6 s of chunks: within 1 s if the clock started at the first read, not overall.
+    # The open must fit in what is left of timeout_s when it begins, so the 0.4 s between them is the
+    # room the engine's own work before the open may take. At a tenth of these times that room was 40 ms.
+    transport.opens = [StreamScript(open_delay_s=0.6, events=[b"a", 0.3, b"b", 0.3, b"c"])]
     stream = await engine.jobs.streaming.stream(
-        alice, JobRequest(app=APP, timeout_s=0.1, idle_timeout_s=None)
+        alice, JobRequest(app=APP, timeout_s=1.0, idle_timeout_s=None)
     )
     with pytest.raises(JobFailed):
         await read_all(stream)
@@ -184,7 +184,7 @@ async def test_time_spent_opening_counts_against_timeout_s(
 async def test_timeout_s_does_not_apply_once_the_runner_has_finished(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     transport.opens = [StreamScript(events=[b"a", b"b"])]  # the runner is done straight away
     stream = await engine.jobs.streaming.stream(alice, JobRequest(app=APP, timeout_s=0.3))
     received: list[bytes] = []
@@ -199,7 +199,7 @@ async def test_timeout_s_does_not_apply_once_the_runner_has_finished(
 async def test_idle_applies_between_chunks_only(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
-    engine = await provisioned(make_engine, admin)
+    engine = await allotted(make_engine, admin)
     # a slow first chunk is fine under first_byte_timeout_s; a gap after it is not under idle_timeout_s
     transport.opens = [StreamScript(events=[0.08, b"a", 0.08, b"b"])]
     request = JobRequest(app=APP, first_byte_timeout_s=1, idle_timeout_s=0.05)

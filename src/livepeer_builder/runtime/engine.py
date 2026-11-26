@@ -8,10 +8,12 @@ Construction (supply, decorate, assemble) lives in livepeer_builder.runtime.asse
 import asyncio
 import contextlib
 import logging
+from collections.abc import Coroutine
 from importlib.metadata import PackageNotFoundError, version
+from typing import Any
 
 from livepeer_builder.config import EngineSettings
-from livepeer_builder.contracts import EngineHealth, PurgeReport
+from livepeer_builder.contracts import EngineHealth, PurgeReport, Role
 from livepeer_builder.runtime.assembly import Decorate, EngineServices, EngineSupply, build
 from livepeer_builder.utils import run_shielded
 
@@ -37,6 +39,7 @@ class BuilderEngine:
         Use ``BuilderEngine.create`` rather than calling this directly.
         """
         self.settings = settings
+        self.role: Role = settings.role  # which half of the engine this deployment runs (D84, #169)
         self.store = services.store
         self.clock = services.clock
         self.policy = services.policy
@@ -46,12 +49,14 @@ class BuilderEngine:
         self.payments = services.payments
         self.costs = services.costs
         self.keys = services.keys
+        self.runner_list = services.runner_list
         self.admission = services.admission
         self.events = services.events
         self.sessions = services.sessions
         self._own_authenticators = services.own_authenticators  # the deployment's, tried before API keys
         self._resources = resources or contextlib.AsyncExitStack()
         self._stopped = False
+        self._started = False  # one start() per engine (#113, C27)
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
 
@@ -71,39 +76,75 @@ class BuilderEngine:
         return cls(settings, services, resources)
 
     async def start(self) -> None:
-        """Resolve jobs a restart interrupted, take one discovery snapshot, then start background loops.
+        """Check the discovery address and the schema, resolve jobs a restart interrupted, take one
+        discovery snapshot, then start background loops.
 
-        If starting fails (a store error, or a cancellation), the engine stops: what ``create`` opened is
-        closed before the error reaches the caller, and a new engine is needed.
+        An engine does not start without ``LPB_DISCOVERY_URL`` (D63), whatever its discovery source is:
+        the refusal comes before anything is polled or written (#154).
+
+        An engine in its ``clearinghouse`` role (#169) starts none of the work half's machinery: it
+        resolves no interrupted job, and runs no cost sync, no retention purge and no async worker,
+        because it holds no job. It still reads discovery, for the runner list it publishes.
+
+        If starting fails (no address, a schema that does not match, a store error, or a cancellation), the
+        engine stops: what ``create`` opened is closed before the error reaches the caller, and a new
+        engine is needed.
+        A second ``start()`` is refused, and the running engine carries on (#113, C27).
         """
         if self._stopped:
             raise RuntimeError("engine is stopped; create a new one")
+        if self._started:
+            raise RuntimeError(
+                "engine is already started; stop() it, then create a new one to start again. "
+                "To serve an engine you start yourself, pass create_app(engine, manage_lifecycle=False)"
+            )
+        self._started = True
+        runs_jobs = self.settings.runs_jobs
         try:
-            await self.jobs.recover_interrupted()
+            self.settings.require_discovery_url()
+            await self._require_current_schema()
+            if runs_jobs:
+                await self.jobs.recover_interrupted()
+                # what the async worker finds waiting (ISS-26): counted here, before any loop runs, so
+                # the worker's loop reads the queue only while a job waits
+                await self.jobs.worker.count_queue()
             await self.discovery.refresh()
         except BaseException:
             await run_shielded(self.stop())  # __aexit__ and a lifespan's finally never run after this
             raise
         self._stop.clear()
-        self._tasks = [
-            asyncio.create_task(self.discovery.run(self._stop), name="lpb-discovery"),
-            asyncio.create_task(self.costs.run(self._stop), name="lpb-cost-sync"),
-            asyncio.create_task(self._retention_loop(), name="lpb-retention"),
-        ]
+        self._tasks = []
+        self._run_loop(self.discovery.run(self._stop), "lpb-discovery")
+        if runs_jobs:
+            self._run_loop(self.costs.run(self._stop), "lpb-cost-sync")
+            self._run_loop(self._retention_loop(), "lpb-retention")
+            # after recover_interrupted, which put back the jobs a restart left claimed (ISS-26)
+            self._run_loop(self.jobs.worker.run(self._stop), "lpb-async-jobs")
         _LOG.info(
             "engine started",
             extra={
                 "event": "engine.started",
+                "role": self.role,
                 "version": package_version(),
                 "api_keys": "on" if self.keys is not None else "off",
                 "own_authenticators": self._own_authenticators,
-                "grant_desk": "on" if self.payments.grants is not None else "off",
+                "tenant_desk": "on" if self.payments.tenants is not None else "off",
             },
         )
 
+    def _run_loop(self, loop: Coroutine[Any, Any, None], name: str) -> None:
+        """Start a background loop and keep its task until ``stop()`` has cancelled and awaited it. The
+        event loop holds a running task only weakly, so the engine holds it."""
+        task = asyncio.create_task(loop, name=name)
+        self._tasks.append(task)
+
     async def stop(self) -> None:
+        # First, and with no await before it: from here on no async job is claimed, so none is claimed
+        # and paid while the streams below are given their time (ISS-26). Running ones carry on.
+        self.jobs.worker.close()
         await self.jobs.close_streams()  # before the store closes: open streams drain, then end abandoned
         self._stop.set()
+        await self.jobs.worker.drain()  # running async jobs end or are cancelled, and every end is written
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
@@ -124,14 +165,17 @@ class BuilderEngine:
     def health(self) -> EngineHealth:
         snapshot = self.discovery.snapshot
         return EngineHealth(
+            role=self.role,
             ready=snapshot.last_attempt_at is not None,
             discovery_fresh=self.discovery.is_fresh(),
             discovery_observed_at=snapshot.observed_at,
             discovery_error=snapshot.last_error,
             cost_sync_at=self.costs.last_synced_at,
             cost_sync_error=self.costs.last_error,
+            cost_sync_set_aside=self.costs.set_aside_rows,
             running_jobs=self.admission.running,
-            allocation_mode=self.payments.mode,
+            queued_jobs=self.jobs.worker.queued_jobs,
+            oldest_queued_s=self.jobs.worker.oldest_queued_s,
             version=package_version(),
         )
 
@@ -147,8 +191,38 @@ class BuilderEngine:
         maintenance = self.store.maintenance
         return None if maintenance is None else await maintenance.schema_revision()
 
+    async def _require_current_schema(self) -> None:
+        """With ``LPB_AUTO_MIGRATE=false``, the database must be at this package's revision, neither behind
+        nor ahead, or the engine would pay and then fail to record (#112, C8). Checked at start only, so a
+        replica already running through a rolling deploy is not stopped. Only the packaged migrations are
+        checked: a supplied store with housekeeping of its own reports revisions of its own schema, which
+        ``lpb migrate`` cannot change, and one with no ``maintenance`` reports none."""
+        if self.settings.auto_migrate:
+            return
+        # here: importing the package loads no Alembic
+        from livepeer_builder.store.maintenance import SqlMaintenance
+
+        maintenance = self.store.maintenance
+        if not isinstance(maintenance, SqlMaintenance):
+            return
+        mismatch = await maintenance.schema_mismatch()
+        if mismatch is not None:
+            raise RuntimeError(mismatch)
+
     async def _retention_loop(self) -> None:
-        if self.settings.retention_jobs_days is None and self.settings.retention_usage_days is None:
+        """Purge every ``retention_interval_s``, in every engine that runs jobs. The first purge runs at
+        start where it did before ISS-26: with job or usage retention on. Otherwise it waits one
+        interval first, so an engine with the default settings, where results retention alone is on
+        (D69 (6)), adds no write at start beside its caller's own first ones.
+
+        The loop does not ask whether a setting is on. A stored result says itself when it goes
+        (``expires_at``, stamped when its job ended), and one stored while results had a time keeps it
+        after every retention setting is turned off: the purge deletes it when that time comes. An
+        expired result is never served meanwhile (``read_result`` reads its ``expires_at``): only its
+        space waits. With no setting on and no such result, a purge deletes nothing."""
+        settings = self.settings
+        at_start = settings.retention_jobs_days is not None or settings.retention_usage_days is not None
+        if not at_start and await self._stopped_within(settings.retention_interval_s):
             return
         while not self._stop.is_set():
             try:
@@ -156,7 +230,13 @@ class BuilderEngine:
                 _LOG.info("retention purge", extra={"event": "store.purged", **report.model_dump()})
             except Exception:
                 _LOG.exception("retention purge failed", extra={"event": "store.purge_failed"})
-            try:
-                await asyncio.wait_for(self._stop.wait(), timeout=self.settings.retention_interval_s)
-            except TimeoutError:
-                continue
+            if await self._stopped_within(settings.retention_interval_s):
+                return
+
+    async def _stopped_within(self, seconds: float) -> bool:
+        """Wait up to ``seconds`` for the engine to stop. Whether it did."""
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=seconds)
+        except TimeoutError:
+            return False
+        return True

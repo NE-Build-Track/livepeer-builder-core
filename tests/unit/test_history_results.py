@@ -1,7 +1,7 @@
 """ISS-15 (D59): job history pages over REST, and what the docs promise about inputs and results.
 
 Results are returned inline once and not kept; the job keeps a ``ResultRef`` (size and sha256) so a
-builder can check a copy it saved, and ``GET /v1/jobs/{id}/result`` answers 501 until M4 (ISS-26).
+builder can check a copy it saved, and ``GET /v1/jobs/{id}/result`` answers 410 for it (ISS-26).
 """
 
 import hashlib
@@ -17,7 +17,7 @@ from livepeer_builder import BuilderEngine
 from livepeer_builder.contracts import ActorContext
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FixedClock, ScriptedTransport
-from tests.conftest import EngineFactory
+from tests.conftest import EngineFactory, allot
 from tests.unit.livepeer_net import Net, Reply, start
 from tests.unit.test_signing_intent import paid_engine
 
@@ -52,8 +52,9 @@ class History:
 async def history(
     make_engine: EngineFactory, clock: FixedClock, transport: ScriptedTransport
 ) -> AsyncIterator[History]:
-    engine = await make_engine(allocation_mode="per_application", shared_payment_key="lpg_shared")
-    operator = ActorContext(actor_id="operator", credential_kind="admin")
+    engine = await make_engine()
+    await allot(engine, ActorContext(actor_id="alice"), ActorContext(actor_id="bob"))
+    operator = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
     admin = await engine.keys.bootstrap_admin()
     alice = await engine.keys.issue(operator, kind="actor", actor_id="alice", operation_ref="issue-alice")
     bob = await engine.keys.issue(operator, kind="actor", actor_id="bob", operation_ref="issue-bob")
@@ -76,7 +77,7 @@ async def test_before_pages_the_history_newest_first_and_only_the_callers_own(hi
     assert await history.page(history.alice, limit=2) == [third, second]
     cursor = (await history.client.get(f"/v1/jobs/{second}", headers=history.alice)).json()["created_at"]
     assert await history.page(history.alice, limit=2, before=cursor) == [first]  # bob's is not alice's
-    assert await history.page(history.admin, before=cursor) == [bobs, first]  # the application's
+    assert await history.page(history.admin, before=cursor) == [bobs, first]  # the tenant's
 
 
 async def test_before_in_another_zone_is_the_same_instant_in_utc(history: History) -> None:
@@ -89,6 +90,7 @@ async def test_before_in_another_zone_is_the_same_instant_in_utc(history: Histor
     assert await history.page(history.alice, before=shifted) == [first]
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="changing the process timezone requires Unix tzset")
 async def test_paging_does_not_depend_on_the_servers_local_zone(
     history: History, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -112,16 +114,19 @@ async def test_before_needs_a_time_with_its_offset(history: History, before: str
     assert response.status_code == 422
 
 
-async def test_the_result_route_is_404_for_another_actors_job_then_501_naming_m4_and_iss_26(
+async def test_the_result_route_is_404_for_another_actors_job_then_410_for_an_immediate_job(
     history: History,
 ) -> None:
+    """Until ISS-26 the owner's answer was a 501 naming M4. An immediate job's result is returned once
+    and not kept, so the route answers 410 for it; a stored result is an async job's
+    (tests/unit/test_async_http.py)."""
     job_id = await history.run(history.alice)
     assert (await history.client.get(f"/v1/jobs/{job_id}/result", headers=history.bob)).status_code == 404
-    reserved = await history.client.get(f"/v1/jobs/{job_id}/result", headers=history.alice)
-    assert reserved.status_code == 501
-    body = reserved.json()
-    assert (body["milestone"], body["ticket"]) == ("M4", "ISS-26")
-    assert "M4 (ISS-26)" in body["error"]
+    gone = await history.client.get(f"/v1/jobs/{job_id}/result", headers=history.alice)
+    assert gone.status_code == 410
+    body = gone.json()
+    assert (body["code"], body["job"]["id"]) == ("result_expired", job_id)
+    assert body["job"]["result"]["storage"] == "inline" and "not kept" in body["error"]
 
 
 # -- inputs and results through the real runner call (tests/unit/livepeer_net.py) ----------------------

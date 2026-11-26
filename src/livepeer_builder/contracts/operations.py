@@ -3,7 +3,7 @@
 See docs/contracts/payments.md#repeat-safe-commands.
 
 An admin command that moves money or creates a credential is identified by a caller-chosen
-``operation_ref``, scoped to the caller ``(application_id, actor_id)``. The ledger stores it with the
+``operation_ref``, scoped to the caller ``(tenant_id, actor_id)``. The ledger stores it with the
 command's fingerprint before the first provider call (``started``) and the public result after the
 last step (``done``). A repeat is answered from this record. It never holds a secret: ``context`` holds
 what a resume needs (key ids, secret references), ``result`` what the caller was answered, without a token.
@@ -18,10 +18,12 @@ from pydantic import Field
 from livepeer_builder.contracts.common import Contract, StoredText
 
 OperationCommand = Literal[
-    "provision",
-    "fund",
-    "fund_grant",
-    "create_grant",
+    "allot",
+    "top_up",
+    "top_up_grant",
+    "create_grant",  # no command writes it since #165: records made before it still read
+    "onboard_tenant",
+    "set_tenant_status",
     "rotate_payment_key",
     "issue_key",
     "rotate_access_key",
@@ -31,7 +33,7 @@ OperationRef = Annotated[StoredText, Field(min_length=1)]  # required on every a
 
 
 class OperationRecord(Contract):
-    application_id: str  # the caller's scope, with actor_id and operation_ref: unique together
+    tenant_id: str  # the caller's scope, with actor_id and operation_ref: unique together
     actor_id: str
     operation_ref: OperationRef
     command: OperationCommand
@@ -47,3 +49,9 @@ class OperationRecord(Contract):
 OPERATION_REPLAYED: ContextVar[bool] = ContextVar("lpb_operation_replayed", default=False)
 """Whether the last admin command run in this context was answered from the ledger (a replay). Read it
 right after the call: the REST service turns it into ``Idempotent-Replayed: true``. Each command resets it."""
+
+OPERATION_RESUMED: ContextVar[bool] = ContextVar("lpb_operation_resumed", default=False)
+"""Whether the last admin command run in this context resumed a run an earlier attempt left unfinished
+(its record was taken over). That attempt's outcome is unknown: it may have applied steps, and its answer
+was lost. Read it right after the call. Each command resets it; a replay of a finished command is not a
+resume."""

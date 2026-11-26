@@ -1,15 +1,23 @@
 """The REST request bodies: what a route parses before it calls the engine. A 422 here moves no money."""
 
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from livepeer_builder import contracts
-from livepeer_builder.contracts import AllocationStatus, CredentialKind, Money, OperationRef
-from livepeer_builder.contracts.common import StoredText
+from livepeer_builder.contracts import AllocationStatus, CredentialKind, OperationRef, TenantStatus
+from livepeer_builder.contracts.common import AllotAmount, StoredText
 
 _BASE64 = TypeAdapter(bytes, config=ConfigDict(val_json_bytes="base64"))
+
+
+class Body(BaseModel):
+    """A request body that refuses a field it does not know (#163 review): a client that still sends an
+    old name, or misspells one, gets a 422 naming it, never an answer as if it had not sent it.
+    ``tests/structure/test_request_names.py`` keeps every route's body so."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 # The contract's JobRequest as a REST body, under the same schema name (no docstring: it would become
@@ -22,40 +30,55 @@ class JobRequest(contracts.JobRequest):
         return _BASE64.validate_json(json.dumps(value)) if isinstance(value, str) else value
 
 
-class IssueKeyBody(BaseModel):
+class IssueKeyBody(Body):
     kind: CredentialKind = "actor"
     actor_id: Annotated[StoredText, Field(min_length=1)]  # a key for nobody could never authenticate
-    application_id: Annotated[StoredText, Field(min_length=1)] = "default"
+    tenant_id: Annotated[StoredText, Field(min_length=1)]  # required: no key lands in a tenant unnamed
     permissions: list[str] | None = None
     label: StoredText = ""
     operation_ref: OperationRef  # required (D57, Q4)
 
 
-class ProvisionBody(BaseModel):
-    amount: Money
-    label: StoredText = ""  # ProvisionedActor.label; a 422 before money moves
-    grant_id: StoredText = ""  # as stored: also a 422 before money moves
+# The path names the tenant, and a tenant's id is its grant's id (D83): a body that still names a grant
+# or a tenant is a 422 (``Body`` refuses every field it does not know), never a field the engine ignores
+# while money moves.
+class AllotBody(Body):
+    amount: AllotAmount  # as AllotRequest: a 422 before money moves (#112, C11)
+    label: StoredText = ""  # ActorAllocation.label; a 422 before money moves
     operation_ref: OperationRef  # required (D57, Q4)
 
 
-class GrantBody(BaseModel):
-    name: str
-    amount: Money
+class OnboardBody(Body):
+    name: Annotated[StoredText, Field(min_length=1)]  # the tenant's name, and its grant's
+    amount: AllotAmount  # the grant's first total; zero onboards a tenant to top up later
+    admin_actor_id: Annotated[StoredText, Field(min_length=1)] = "tenant-admin"  # whose key the first is
     operation_ref: OperationRef  # required (D57, Q4)
 
 
-class StatusBody(BaseModel):
+class TenantStatusBody(Body):
+    status: TenantStatus  # active or paused: a grant is never closed (D82)
+    operation_ref: OperationRef  # required: a late repeat never pauses a tenant resumed since
+
+
+class TenantKeyBody(Body):
+    kind: Literal["auditor", "tenant_admin"] = "auditor"  # tenant_admin: a clearinghouse admin's to issue
+    actor_id: Annotated[StoredText, Field(min_length=1)]
+    label: StoredText = ""
+    operation_ref: OperationRef  # required (D57, Q4)
+
+
+class StatusBody(Body):
     status: AllocationStatus
 
 
-class RotateKeyBody(BaseModel):
+class RotateKeyBody(Body):
     label: StoredText | None = None  # keep the key's label unless given
     operation_ref: OperationRef  # required (D57, Q4)
 
 
-class RotateBody(BaseModel):
+class RotateBody(Body):
     operation_ref: OperationRef  # required (D57, Q4)
 
 
-class UsageBody(BaseModel):
+class UsageBody(Body):
     quantities: dict[str, int]

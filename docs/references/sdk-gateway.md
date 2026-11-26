@@ -1,6 +1,6 @@
 # Python gateway SDK (as relied on by the engine)
 
-Baseline `44df061`. Pinned to `2017a80`, the head of [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) `main` on 26 October: "Enforce TLS" ([#76](https://github.com/livepeer/livepeer-python-gateway/pull/76)), streamable runner bodies ([#80](https://github.com/livepeer/livepeer-python-gateway/pull/80)), the payment session callback ([#81](https://github.com/livepeer/livepeer-python-gateway/pull/81), which superseded [#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) and livepeer #71) and the runner-side session stop ([#83](https://github.com/livepeer/livepeer-python-gateway/pull/83), [below](#runner-session-stop-83)). The 22 October pin was `76a1a1c`; every call the engine makes is the same in both. The 21 October pin was NE-Build-Track `dev/bytestreaming` `3238731`. See [upstream-baseline.md](upstream-baseline.md) and tech debt T1.
+Baseline `44df061`. Pinned to `7dc2a07`, the head of [livepeer/livepeer-python-gateway](https://github.com/livepeer/livepeer-python-gateway) `main` on 6 November. It is `2017a80` (26 October) plus the challenge probe before a streamed upload ([#90](https://github.com/livepeer/livepeer-python-gateway/pull/90)), which the engine does not use. `2017a80` brought: "Enforce TLS" ([#76](https://github.com/livepeer/livepeer-python-gateway/pull/76)), streamable runner bodies ([#80](https://github.com/livepeer/livepeer-python-gateway/pull/80)), the payment session callback ([#81](https://github.com/livepeer/livepeer-python-gateway/pull/81), which superseded [#77](https://github.com/livepeer/livepeer-python-gateway/pull/77) and livepeer #71) and the runner-side session stop ([#83](https://github.com/livepeer/livepeer-python-gateway/pull/83), [below](#runner-session-stop-83)). The 22 October pin was `76a1a1c`; every call the engine makes is the same in both. The 21 October pin was NE-Build-Track `dev/bytestreaming` `3238731`. See [upstream-baseline.md](upstream-baseline.md) and tech debt T1.
 
 The engine's paid runner call is its own (`adapters/runner_call.py`, D53), adapted from
 `live_runner.call_runner` at `2017a80` (MIT). It sends the runner request over aiohttp, answers the 402
@@ -18,6 +18,22 @@ pinned SDK's `call_runner` path changes, so a pin bump reviews the copy.
 | `LivepeerHTTPError.status_code` | Signer refusals: 400/481 → `payment_refused` (failover, paid or not: D26, D52), others → `payment`. An exhausted `SignerRefreshRequired` (480) is `payment_refused` too. The runner's own refusals are mapped by the engine, which knows they came from the runner URL |
 | `call_runner(...)` | **Not called** since D53; the copy follows it at `2017a80`. A missing `payload` is still sent as `{}` (T15) |
 | `selection.reserve_session(...)` → `LiveRunnerSession(app_url, control_url)` | Persistent sessions (M4), proxied by the engine |
+
+## How the SDK reaches a signer (#166)
+
+The SDK calls a signer at two paths and nowhere else the engine reaches: `get_signer_info` posts `{}` to
+`{origin}/sign-orchestrator-info`, and `LivePaymentSession._payment_request` posts the payment request to
+`{origin}/generate-live-payment` (`remote_signer.py`). `origin` is `http._http_origin(signer_url)`: the
+scheme and the host, with any path, query or fragment dropped. Both calls carry the signer headers the
+engine gives (`Authorization: Bearer <key>`), have 5 seconds in all, open a session of their own and are
+not retried. An error status keeps its body on `LivepeerHTTPError.body`; 480 and 482 are errors of
+their own.
+
+So a signer is named by its origin: a path in `LPB_SIGNER_URL` is dropped, and a signer cannot be
+published under a path of another host. An enterprise's engine that uses a payment clearinghouse points
+the SDK at the clearinghouse's signer in the same way, with each actor's payment key as the bearer
+([payments.md](../contracts/payments.md#payment-keys)). The SDK remembers a signer's identity for the
+life of the process, by address and headers, so the identity call is made once for each payment key.
 
 ## Runner session stop (#83)
 
@@ -51,5 +67,5 @@ The orchestrator mints a fresh manifest for each 402 challenge (`core.RandomMani
 bytes from `math/rand`, written as 8 hex characters. It rejects a duplicate only while the first
 session is live (409). See T13.
 
-Signer headers are per call, so `per_actor` mode sends each actor's own key. **Deferred beyond M2:**
+Signer headers are per call, so the engine sends each actor's own key. **Deferred beyond M2:**
 #70 (runner pool size and ordering) and multipart request bodies (D24).

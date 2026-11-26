@@ -16,9 +16,9 @@ from livepeer_builder.contracts import OperationRecord
 from livepeer_builder.store import schema as t
 
 
-def scope(application_id: str, actor_id: str, operation_ref: str) -> ColumnElement[bool]:
+def scope(tenant_id: str, actor_id: str, operation_ref: str) -> ColumnElement[bool]:
     c = t.operations.c
-    return and_(c.application_id == application_id, c.actor_id == actor_id, c.operation_ref == operation_ref)
+    return and_(c.tenant_id == tenant_id, c.actor_id == actor_id, c.operation_ref == operation_ref)
 
 
 async def insert_operation(conn: AsyncConnection, record: OperationRecord) -> None:
@@ -27,9 +27,9 @@ async def insert_operation(conn: AsyncConnection, record: OperationRecord) -> No
 
 
 async def read_operation(
-    conn: AsyncConnection, application_id: str, actor_id: str, operation_ref: str
+    conn: AsyncConnection, tenant_id: str, actor_id: str, operation_ref: str
 ) -> OperationRecord | None:
-    query = select(t.operations).where(scope(application_id, actor_id, operation_ref))
+    query = select(t.operations).where(scope(tenant_id, actor_id, operation_ref))
     row = (await conn.execute(query)).mappings().first()
     return _record(row) if row else None
 
@@ -45,7 +45,7 @@ class SqlOperations:
                 await insert_operation(conn, record)
             return None
         except IntegrityError:
-            held = await self.get_operation(record.application_id, record.actor_id, record.operation_ref)
+            held = await self.get_operation(record.tenant_id, record.actor_id, record.operation_ref)
             if held is None:  # deleted (abandoned) between the insert and the read: try once more
                 return await self.begin_operation(record)
             return held
@@ -76,17 +76,17 @@ class SqlOperations:
             return (await conn.execute(delete(t.operations).where(fenced(record)))).rowcount == 1
 
     async def get_operation(
-        self, application_id: str, actor_id: str, operation_ref: str
+        self, tenant_id: str, actor_id: str, operation_ref: str
     ) -> OperationRecord | None:
         async with self.engine.connect() as conn:
-            return await read_operation(conn, application_id, actor_id, operation_ref)
+            return await read_operation(conn, tenant_id, actor_id, operation_ref)
 
 
 def fenced(record: OperationRecord) -> ColumnElement[bool]:
     """The row is still the started run ``record`` belongs to: no resume took it over, nothing ended it."""
     c = t.operations.c
     return and_(
-        scope(record.application_id, record.actor_id, record.operation_ref),
+        scope(record.tenant_id, record.actor_id, record.operation_ref),
         c.state == "started",
         c.fencing_token == record.fencing_token,
     )

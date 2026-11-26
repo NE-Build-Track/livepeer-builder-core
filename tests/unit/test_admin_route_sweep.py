@@ -1,8 +1,16 @@
 """ISS-23: authorization denial across the whole admin surface, read from the FastAPI route table.
 
-Every ``/v1/admin/*`` route answers 403 to an actor key and 401 with no credential, and every admin write
-answers 403 to an auditor key (a read-only admin, D46). The routes come from ``app.routes``, so an admin
-route added later is swept without editing this test; one whose body has no sample fails here and says so.
+Every admin route answers 403 to an actor key and 401 with no credential, and every admin write answers
+403 to an auditor key (a read-only admin, D46). The admin surface is every ``/v1/clearinghouse/*`` route
+and, in the work half since #164, an engine's own access keys (``/v1/keys``), reconciliation and cost
+sync. The routes come from ``app.routes``, so an admin route added later under one of those paths is swept
+without editing this test; one whose body has no sample fails here and says so.
+
+#165: every route that names a tenant in its path answers 403 to the admin of another tenant, before any
+lookup or provider call. Since 19 November 2026 (D87 point 3, as amended) such a route is a clearinghouse
+admin's, and it answers 403 to a tenant admin of any tenant, its own included; the tenant admin's own
+routes name no tenant (tests/unit/test_tenant_from_credential.py). Those routes come from ``app.routes``
+too, so one added later is swept, or fails here until its body has a sample.
 """
 
 import re
@@ -15,20 +23,24 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorContext, Money, ProvisionRequest
+from livepeer_builder.contracts import ActorContext, AllotRequest, Money
 from livepeer_builder.http import create_app
 from livepeer_builder.testing import FakeAllocationManager
 from tests.conftest import EngineFactory
 
 WRITES = {"POST", "PUT", "PATCH", "DELETE"}
+# Where the admin routes are: the clearinghouse set, and the work set's admin routes.
+ADMIN_PATHS = ("/v1/clearinghouse/", "/v1/keys", "/v1/costs/reconciliation", "/v1/costs/sync")
 USD = {"amount": "0.01", "currency": "USD"}
 # A valid body for each admin body model, so a denial is the policy's answer and never a 422.
 SAMPLE_BODIES: dict[str, dict[str, Any]] = {
-    "IssueKeyBody": {"actor_id": "mallory", "operation_ref": "sweep"},
+    "IssueKeyBody": {"actor_id": "mallory", "tenant_id": "default", "operation_ref": "sweep"},
     "RotateKeyBody": {"operation_ref": "sweep"},
-    "ProvisionBody": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
-    "FundRequest": {"amount": USD, "grant_id": "grant_1", "operation_ref": "sweep"},
-    "GrantBody": {"name": "sweep", "amount": USD, "operation_ref": "sweep"},
+    "AllotBody": {"amount": USD, "operation_ref": "sweep"},
+    "TopUpRequest": {"amount": USD, "operation_ref": "sweep"},
+    "OnboardBody": {"name": "sweep", "amount": USD, "operation_ref": "sweep"},
+    "TenantStatusBody": {"status": "paused", "operation_ref": "sweep"},
+    "TenantKeyBody": {"actor_id": "mallory", "operation_ref": "sweep"},
     "StatusBody": {"status": "paused"},
     "RotateBody": {"operation_ref": "sweep"},
 }
@@ -39,7 +51,7 @@ def admin_routes(app: FastAPI) -> list[tuple[str, str, APIRoute]]:
     return [
         (method, route.path, route)
         for route in app.routes
-        if isinstance(route, APIRoute) and route.path.startswith("/v1/admin/")
+        if isinstance(route, APIRoute) and route.path.startswith(ADMIN_PATHS)
         for method in sorted(route.methods)
     ]
 
@@ -57,17 +69,17 @@ def body_for(route: APIRoute) -> dict[str, Any] | None:
 async def surface(
     make_engine: EngineFactory, admin: ActorContext
 ) -> AsyncIterator[tuple[FastAPI, httpx.AsyncClient, BuilderEngine, dict[str, str]]]:
-    """An engine with keys and the grant desk on, alice provisioned, and real ids for every path."""
+    """An engine with keys and the grant desk on, alice allotted, and real ids for every path."""
     engine = await make_engine()
-    await engine.payments.provision(
+    await engine.payments.allot(
         admin,
-        ProvisionRequest(
-            operation_ref="provision:default:alice", application_id="default", actor_id="alice",
-            amount=Money.model_validate(USD), grant_id="grant_1",
+        AllotRequest(
+            operation_ref="allot:default:alice", tenant_id="default", actor_id="alice",
+            amount=Money.model_validate(USD),
         ),
     )  # fmt: skip
     alice = await engine.keys.issue(admin, kind="actor", actor_id="alice", operation_ref="sweep-alice")
-    params = {"key_id": alice.key.key_id, "application_id": "default", "actor_id": "alice"}
+    params = {"key_id": alice.key.key_id, "tenant_id": "default", "actor_id": "alice"}
     app = create_app(engine, manage_lifecycle=False)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://engine") as client:
         yield app, client, engine, params
@@ -75,6 +87,15 @@ async def surface(
 
 def filled(path: str, params: dict[str, str]) -> str:
     return re.sub(r"\{(\w+)\}", lambda match: params[match.group(1)], path)
+
+
+def query_for(route: APIRoute, params: dict[str, str]) -> dict[str, str]:
+    """Each query parameter the route requires, from the same real ids, so a denial is never a 422."""
+    return {
+        field.alias: params[field.alias]
+        for field in route.dependant.query_params
+        if field.field_info.is_required()
+    }
 
 
 async def test_every_admin_route_is_denied_to_actor_and_auditor_keys_and_needs_a_credential(
@@ -91,7 +112,9 @@ async def test_every_admin_route_is_denied_to_actor_and_auditor_keys_and_needs_a
 
     routes = admin_routes(app)
     writes = [(method, path) for method, path, _ in routes if method in WRITES]
-    assert len(writes) >= 11, f"the sweep found too few admin writes to be meaningful: {writes}"
+    assert len(writes) >= 15, f"the sweep found too few admin writes to be meaningful: {writes}"
+    swept = {path for _, path, _ in routes}
+    assert all(any(path.startswith(prefix) for path in swept) for prefix in ADMIN_PATHS), swept
     wrong: list[str] = []
     for method, path, route in routes:
         url, body = filled(path, params), body_for(route)
@@ -99,9 +122,66 @@ async def test_every_admin_route_is_denied_to_actor_and_auditor_keys_and_needs_a
         if method in WRITES:
             callers.append(("auditor", as_auditor, 403))
         for who, headers, expected in callers:
-            answer = await client.request(method, url, json=body, headers=headers)
+            query = query_for(route, params)
+            answer = await client.request(method, url, params=query, json=body, headers=headers)
             if answer.status_code != expected:
                 wrong.append(f"{method} {path} as {who}: {answer.status_code}, expected {expected}")
     assert not wrong, "an admin route answered a caller it must refuse:\n" + "\n".join(wrong)
     assert await engine.store.list_access_keys(None) == keys_before  # no key issued, rotated or revoked
     assert manager.calls == calls_before  # and the payment provider was never called
+
+
+async def everything_stored(engine: BuilderEngine) -> tuple[object, ...]:
+    """What a refused request must leave as it was: the keys, the actors and the operation ledger."""
+    async with engine.store.engine.connect() as conn:  # type: ignore[attr-defined]
+        operations = (await conn.exec_driver_sql("SELECT * FROM lpb_operations ORDER BY 1, 2, 3")).all()
+    return await engine.store.list_access_keys(None), await engine.store.list_actors(None), operations
+
+
+async def test_every_route_that_names_a_tenant_is_403_for_another_tenants_admin_before_any_provider_call(
+    surface: tuple[FastAPI, httpx.AsyncClient, BuilderEngine, dict[str, str]],
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+) -> None:
+    """The tenant ``default`` has an actor with an allocation, a key and a grant, so nothing is refused
+    here for being missing. Both tenants' grants exist at the provider, which hears of none of it. Since
+    19 November 2026 each 403 is for the kind: a path that names a tenant is a clearinghouse admin's."""
+    app, client, engine, params = surface
+    manager.add_grant("other")
+    outsider = await engine.keys.issue(
+        admin, kind="tenant_admin", actor_id="other-admin", tenant_id="other", operation_ref="sweep-other"
+    )
+    as_outsider = {"Authorization": f"Bearer {outsider.token}"}
+    stored_before, calls_before = await everything_stored(engine), list(manager.calls)
+
+    routes = [
+        (method, route.path, route)
+        for route in app.routes
+        if isinstance(route, APIRoute) and "{tenant_id}" in route.path
+        for method in sorted(route.methods)
+    ]
+    assert len(routes) >= 15, f"the sweep found too few routes that name a tenant: {routes}"
+    assert {path for _, path, _ in routes} >= {
+        "/v1/clearinghouse/tenants/{tenant_id}/grant",
+        "/v1/clearinghouse/tenants/{tenant_id}/grant/top-up",
+        "/v1/clearinghouse/tenants/{tenant_id}/status",
+        "/v1/clearinghouse/tenants/{tenant_id}/actors",
+        "/v1/clearinghouse/tenants/{tenant_id}/actors/{actor_id}/allocation/rotate-payment-key",
+        "/v1/clearinghouse/tenants/{tenant_id}/keys/{key_id}/revoke",
+    }
+    wrong: list[str] = []
+    for method, path, route in routes:
+        answer = await client.request(method, filled(path, params), json=body_for(route), headers=as_outsider)
+        if answer.status_code != 403:
+            wrong.append(f"{method} {path}: {answer.status_code} {answer.text[:120]}")
+    assert not wrong, "a route let another tenant's admin past the tenant in its path:\n" + "\n".join(wrong)
+    assert manager.calls == calls_before  # the payment provider was never called
+    assert await everything_stored(engine) == stored_before  # and nothing was read into a change
+
+    # The same key is refused at its own tenant's path too, since 19 November 2026: the refusals above are
+    # for the kind. It is an admin of its own tenant at the routes that name none, and reads that tenant.
+    own = {"Authorization": f"Bearer {outsider.token}"}
+    assert (await client.get("/v1/clearinghouse/tenants/other/actors", headers=own)).status_code == 403
+    assert (await client.get("/v1/clearinghouse/tenants/other/grant", headers=own)).status_code == 403
+    assert (await client.get("/v1/clearinghouse/actors", headers=own)).json() == []
+    assert (await client.get("/v1/clearinghouse/grant", headers=own)).json()["tenant_id"] == "other"

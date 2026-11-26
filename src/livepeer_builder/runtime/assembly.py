@@ -12,6 +12,10 @@
 3. **Assemble.** ``assemble`` builds every service from the final parts. It does no I/O, so it cannot
    leave anything half-open, and a decorated policy reaches every service.
 
+The engine's role (``LPB_ROLE``, D84) is wired here and in ``payment_defaults``: an engine in its ``work``
+role uses a payment clearinghouse and is nobody's clearinghouse, and one in its ``clearinghouse`` role
+runs no jobs, stores no allocation's key, and must be able to allot and onboard.
+
 Parts are ports (behaviour). Tuning values stay in ``EngineSettings``.
 """
 
@@ -20,47 +24,53 @@ import enum
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.clock import SystemClock
-from livepeer_builder.config import EngineSettings
-from livepeer_builder.contracts import SecretRef
+from livepeer_builder.config import DISCOVERY_URL_REQUIRED, EngineSettings
+from livepeer_builder.contracts import Runner
 from livepeer_builder.protocols import (
     AccessPolicy,
     AllocationManager,
+    AllowanceReader,
     Authenticator,
     Clock,
+    CredentialResolver,
+    DiscoveryDocumentSource,
     DiscoverySource,
     EngineStore,
+    EscrowSource,
     EventFeed,
     KeyRepo,
     RunnerTransport,
     SecretStore,
     SelectionPolicy,
     SessionManager,
+    SignerProbe,
+    TenantUsageSource,
     UsageSource,
 )
+from livepeer_builder.runtime.payment_defaults import payment_defaults
 from livepeer_builder.services.admission import AdmissionLimiter
+from livepeer_builder.services.async_jobs import AsyncJobWorker, AsyncLimits
 from livepeer_builder.services.costs import CostService, CostSyncWorker
 from livepeer_builder.services.discovery import DiscoveryService, MostCapacityFirst
+from livepeer_builder.services.dispatch import Dispatcher
 from livepeer_builder.services.jobs import JobService
 from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.ledger import OperationLedger
 from livepeer_builder.services.payments import PaymentsService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.services.reserved import ReservedEventFeed, ReservedSessions
+from livepeer_builder.services.runner_list import RunnerList
 from livepeer_builder.services.sightings import SightingRecorder
 from livepeer_builder.services.streams import StreamLimits
-
-# The one deliberate conditional import: the default adapters load inside default_parts, so that
-# `import livepeer_builder` stays light (tests/structure/test_import_weight.py). This annotation-only
-# import keeps cryptography out of the import too.
-if TYPE_CHECKING:
-    from livepeer_builder.adapters.secrets import SettingsSecretStore
+from livepeer_builder.services.tenant_usage import TenantUsage
+from livepeer_builder.services.tenants import TenantDesk
+from livepeer_builder.services.wallet import Wallet
 
 _LOG = logging.getLogger(__name__)
-_SHARED_KEY = "shared_payment_key"
 
 
 class _Unset(enum.Enum):
@@ -104,6 +114,10 @@ class EngineParts:
     secret_store: SecretStore
     events: EventFeed
     sessions: SessionManager
+    # The two payment ports the engine answers from its own records unless it is given others (#168):
+    # None is the engine's own, the payment key in its secret store and the allowance at its provider.
+    credentials: CredentialResolver | None = None
+    allowances: AllowanceReader | None = None
 
 
 @dataclass(frozen=True)
@@ -123,9 +137,20 @@ class EngineSupply:
     secret_store: SecretStore | _Unset = UNSET
     events: EventFeed | _Unset = UNSET
     sessions: SessionManager | _Unset = UNSET
+    credentials: CredentialResolver | _Unset | None = UNSET
+    allowances: AllowanceReader | _Unset | None = UNSET
 
 
 Decorate = Callable[[EngineParts], EngineParts]
+
+
+class NoDiscoveryAddress:
+    """The discovery source of an engine built without ``LPB_DISCOVERY_URL`` (#154): it has no address
+    to read. ``lpb purge`` and ``lpb bootstrap-admin`` build such an engine and never start it; ``start()``
+    refuses it before anything polls (D63). Asked anyway, it gives no answer, in the refusal's words."""
+
+    async def fetch(self) -> tuple[Runner, ...]:  # NOSONAR - async by protocol (DiscoverySource)
+        raise RuntimeError(DISCOVERY_URL_REQUIRED)
 
 
 def own(stack: contextlib.AsyncExitStack, resource: object, close: Callable[[], Awaitable[None]]) -> None:
@@ -147,92 +172,26 @@ async def default_parts(
 ) -> EngineParts:
     """Build every part that was not supplied. Resources go on ``stack`` the moment they open.
 
-    The default adapters and the SQL store are imported here, not at module level, so importing the
-    package loads no database, HTTP, crypto or SDK library (tests/structure/test_import_weight.py).
+    The default adapters and the SQL store are imported where they are built, not at module level, so
+    importing the package loads no database, HTTP, crypto or SDK library
+    (tests/structure/test_import_weight.py).
     """
-    from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
-    from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
-    from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
-    from livepeer_builder.store import SqlStore
-
     supply = supply or EngineSupply()
-    clock = supply.clock if not isinstance(supply.clock, _Unset) else SystemClock()
-    policy = supply.policy if not isinstance(supply.policy, _Unset) else DefaultPolicy()
+    clock = _supplied(supply.clock, SystemClock)
+    policy = _supplied(supply.policy, DefaultPolicy)
+    store = await _sql_store(settings, stack) if isinstance(supply.store, _Unset) else supply.store
+    api_keys = _supplied(supply.api_keys, lambda: _engine_keys(settings, store))
+    authenticators = _supplied(supply.authenticators, lambda: _own_authenticators(settings, stack))
+    secret_store = _supplied(supply.secret_store, lambda: _built_in_secret_store(settings, store, clock))
 
-    store: EngineStore
-    if isinstance(supply.store, _Unset):
-        sql = await SqlStore.connect(settings.database_url, migrate=settings.auto_migrate)
-        own(stack, sql, sql.close)
-        store = sql
-    else:
-        store = supply.store
-
-    if isinstance(supply.api_keys, _Unset):
-        api_keys = ApiKeys(store) if "api_keys" in settings.auth else None  # LPB_AUTH=jwt replaces keys
-    else:
-        api_keys = supply.api_keys
-
-    authenticators: tuple[Authenticator, ...]
-    if not isinstance(supply.authenticators, _Unset):
-        authenticators = supply.authenticators
-    elif "jwt" in settings.auth:
-        from livepeer_builder.adapters.jwt import jwt_authenticator
-
-        bearer = jwt_authenticator(settings)
-        own(stack, bearer, bearer.aclose)
-        authenticators = (bearer,)
-    else:
-        authenticators = ()
-
-    secret_store: SecretStore
-    if isinstance(supply.secret_store, _Unset):
-        database = (
-            EncryptedDbSecretStore(store, settings.secret_key.get_secret_value(), clock)
-            if settings.secret_key
-            else None
-        )
-        secret_store = RoutingSecretStore(_configured_secrets(settings), database)
-    else:
-        secret_store = supply.secret_store
-
-    token = settings.batteries_token.get_secret_value() if settings.batteries_token else None
-    allocation_manager: AllocationManager | None
-    if not isinstance(supply.allocation_manager, _Unset):
-        allocation_manager = supply.allocation_manager
-    elif settings.batteries_url and token:
-        client = BatteriesClient(settings.batteries_url, token, timeout_s=settings.batteries_timeout_s)
-        own(stack, client, client.aclose)
-        allocation_manager = client
-    else:
-        allocation_manager = None
-
-    operator = (
-        settings.batteries_operator_token.get_secret_value() if settings.batteries_operator_token else None
+    # Each payment part the caller did not supply: Batteries and the signer, or a payment clearinghouse
+    # (runtime/payment_defaults.py). Asked for one by one, so a supplied part is never built.
+    defaults = payment_defaults(
+        settings, lambda resource, close: own(stack, resource, close), store, secret_store
     )
-    grants_manager: AllocationManager | None
-    if not isinstance(supply.grants_manager, _Unset):
-        grants_manager = supply.grants_manager
-    elif settings.batteries_url and operator:
-        desk = BatteriesClient(settings.batteries_url, operator, timeout_s=settings.batteries_timeout_s)
-        own(stack, desk, desk.aclose)
-        grants_manager = desk
-    else:
-        grants_manager = None  # the grant desk is off; the engine token cannot list or create grants
-
-    usage_source: UsageSource | None
-    if not isinstance(supply.usage_source, _Unset):
-        usage_source = supply.usage_source
-    elif settings.batteries_url and token:
-        usage = BatteriesUsageSource(settings.batteries_url, token, timeout_s=settings.batteries_timeout_s)
-        own(stack, usage, usage.aclose)
-        usage_source = usage
-    else:
-        usage_source = None
-
-    # Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source.
-    http_source = HttpDiscoverySource(settings.discovery_url)
-    own(stack, http_source, http_source.aclose)
-    discovery_source: DiscoverySource = http_source
+    allocation_manager = _supplied(supply.allocation_manager, defaults.allocation_manager)
+    grants_manager = _supplied(supply.grants_manager, defaults.grants_manager)
+    usage_source = _supplied(supply.usage_source, defaults.usage_source)
 
     return EngineParts(
         store=store,
@@ -240,20 +199,74 @@ async def default_parts(
         policy=policy,
         authenticators=authenticators,
         api_keys=api_keys,
-        discovery_source=discovery_source,
-        transport=(
-            supply.transport
-            if not isinstance(supply.transport, _Unset)
-            else SdkRunnerTransport(settings.signer_url, settings.max_payment_challenge_retries)
-        ),
-        selection=supply.selection if not isinstance(supply.selection, _Unset) else MostCapacityFirst(),
+        discovery_source=_discovery_source(settings, stack),
+        transport=_supplied(supply.transport, defaults.transport),
+        selection=_supplied(supply.selection, MostCapacityFirst),
         allocation_manager=allocation_manager,
         grants_manager=grants_manager,
         usage_source=usage_source,
         secret_store=secret_store,
-        events=supply.events if not isinstance(supply.events, _Unset) else ReservedEventFeed(),
-        sessions=supply.sessions if not isinstance(supply.sessions, _Unset) else ReservedSessions(),
+        events=_supplied(supply.events, ReservedEventFeed),
+        sessions=_supplied(supply.sessions, ReservedSessions),
+        credentials=_supplied(supply.credentials, defaults.credentials),
+        allowances=_supplied(supply.allowances, defaults.allowances),
     )
+
+
+def _discovery_source(settings: EngineSettings, stack: contextlib.AsyncExitStack) -> DiscoverySource:
+    """Always the HTTP reader (D63). Callers wrap it through decorate; there is no other source. It
+    carries the tenant admin key only when the address is the clearinghouse's runner list (D87). It
+    does not ask whose key that is: the list is the same for every tenant (#165). Without the address
+    there is nothing to read: the engine is built, and ``start()`` refuses it (#154)."""
+    from livepeer_builder.adapters.sdk import HttpDiscoverySource  # here: see default_parts
+
+    if settings.discovery_url is None:
+        return NoDiscoveryAddress()
+    http_source = HttpDiscoverySource(settings.discovery_url, bearer=settings.clearinghouse_runner_list_token)
+    own(stack, http_source, http_source.aclose)
+    return http_source
+
+
+def _supplied[T](part: T | _Unset, default: Callable[[], T]) -> T:
+    """The part the caller supplied, or its default, which is built only when none was supplied."""
+    return default() if isinstance(part, _Unset) else part
+
+
+async def _sql_store(settings: EngineSettings, stack: contextlib.AsyncExitStack) -> EngineStore:
+    from livepeer_builder.store import SqlStore
+
+    sql = await SqlStore.connect(settings.database_url, migrate=settings.auto_migrate)
+    own(stack, sql, sql.close)
+    return sql
+
+
+def _engine_keys(settings: EngineSettings, store: EngineStore) -> ApiKeys | None:
+    return ApiKeys(store) if "api_keys" in settings.auth else None  # LPB_AUTH=jwt replaces keys
+
+
+def _own_authenticators(
+    settings: EngineSettings, stack: contextlib.AsyncExitStack
+) -> tuple[Authenticator, ...]:
+    """The deployment's own authenticators when it supplies none: the JWT bearer, with LPB_AUTH=jwt."""
+    built: list[Authenticator] = []
+    if "jwt" in settings.auth:
+        from livepeer_builder.adapters.jwt import jwt_authenticator
+
+        bearer = jwt_authenticator(settings)
+        own(stack, bearer, bearer.aclose)
+        built.append(bearer)
+    return tuple(built)
+
+
+def _built_in_secret_store(settings: EngineSettings, store: EngineStore, clock: Clock) -> SecretStore:
+    from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
+
+    database = (
+        EncryptedDbSecretStore(store, settings.secret_key.get_secret_value(), clock)
+        if settings.secret_key
+        else None
+    )
+    return RoutingSecretStore(database)
 
 
 @dataclass(frozen=True)
@@ -269,6 +282,7 @@ class EngineServices:
     payments: PaymentsService
     costs: CostService
     keys: KeyService | None
+    runner_list: RunnerList | None  # None: the discovery source holds no document to serve (#166)
     admission: AdmissionLimiter
     events: EventFeed
     sessions: SessionManager
@@ -277,6 +291,11 @@ class EngineServices:
 
 def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
     """Build every service from the final parts. No I/O: it opens nothing, so it leaves nothing open."""
+    # The role (D84, #169). An engine in its work role uses a clearinghouse and is not one: it reports no
+    # wallet and publishes no runner list, whatever its parts could do. One in its clearinghouse role
+    # runs no jobs and syncs no job's cost.
+    is_clearinghouse = not settings.uses_clearinghouse
+    runs_jobs = settings.runs_jobs
     discovery = DiscoveryService(
         parts.discovery_source,
         parts.policy,
@@ -285,8 +304,21 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         rate_max_age_s=settings.rate_max_age_s,
     )
     ledger = OperationLedger(parts.store, parts.clock, settings.operation_stale_s)  # one, for every command
+    authenticators: list[Authenticator] = list(parts.authenticators)
+    keys: KeyService | None = None
+    if parts.api_keys is not None:
+        authenticators.append(ApiKeyAuthenticator(parts.api_keys.store, parts.api_keys.realm))
+        keys = KeyService(parts.api_keys.store, parts.policy, parts.clock)
+    tenants: TenantDesk | None = None
+    if parts.grants_manager is not None:  # otherwise the tenant desk is off
+        tenants = TenantDesk(
+            parts.grants_manager, parts.policy, settings.default_currency, ledger, settings.engine_id, keys
+        )
+    usage: TenantUsage | None = None
+    if isinstance(parts.usage_source, TenantUsageSource):  # otherwise no tenant's usage is served (#166)
+        usage = TenantUsage(parts.usage_source, parts.policy)
+    runner_list, wallet = _offered_as_a_clearinghouse(parts) if is_clearinghouse else (None, None)
     payments = PaymentsService(
-        mode=settings.allocation_mode,
         store=parts.store,
         secrets=parts.secret_store,
         policy=parts.policy,
@@ -294,38 +326,60 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         engine_id=settings.engine_id,
         ledger=ledger,
         manager=parts.allocation_manager,
-        grants=parts.grants_manager,
+        tenants=tenants,
+        usage=usage,
+        wallet=wallet,
         currency=settings.default_currency,
-        shared_secret=_shared_secret_ref(settings),
-        shared_allocation_id=settings.shared_allocation_id,
+        allowances=parts.allowances,
     )
-    admission = AdmissionLimiter(settings.max_concurrent_jobs, settings.max_concurrent_jobs_per_app)
-    jobs = JobService(
+    if not runs_jobs:
+        _require_a_whole_clearinghouse(parts, tenants)
+    admission = AdmissionLimiter(
+        settings.max_concurrent_jobs,
+        settings.max_concurrent_jobs_per_app,
+        runs_jobs=runs_jobs,
+        async_workers=settings.async_workers,  # the async worker's lane, inside the two limits (ISS-26)
+    )
+    stream_limits = StreamLimits(
+        finalize_timeout_s=settings.stream_finalize_timeout_s,
+        drain_timeout_s=settings.stream_drain_timeout_s,
+        settle_s=settings.stream_settle_s,
+        open_grace_s=settings.stream_open_grace_s,
+    )
+    dispatcher = Dispatcher(  # the paid call, one for every way a job runs
         parts.store,
         discovery,
         parts.transport,
         parts.selection,
-        payments,
-        parts.policy,
-        admission,
+        parts.credentials or payments,
         parts.clock,
-        StreamLimits(
-            finalize_timeout_s=settings.stream_finalize_timeout_s,
-            drain_timeout_s=settings.stream_drain_timeout_s,
-            settle_s=settings.stream_settle_s,
-            open_grace_s=settings.stream_open_grace_s,
-        ),
+        stream_limits,
         max_paid_attempts=settings.max_paid_attempts,
     )
-    worker = CostSyncWorker(parts.usage_source, parts.store) if parts.usage_source is not None else None
-    costs = CostService(
-        parts.store, parts.policy, parts.clock, worker, payments, settings.cost_sync_interval_s
+    worker = AsyncJobWorker(  # one, built here: the job service queues for it and the engine starts it
+        parts.store,
+        dispatcher,
+        admission,
+        parts.clock,
+        AsyncLimits(
+            max_queued=settings.async_max_queued,
+            queue_ttl_s=settings.async_queue_ttl_s,
+            result_max_bytes=settings.async_result_max_bytes,
+            results_days=settings.retention_results_days,
+            poll_s=settings.async_poll_s,
+            drain_timeout_s=settings.async_drain_timeout_s,
+        ),
     )
-    authenticators: list[Authenticator] = list(parts.authenticators)
-    keys: KeyService | None = None
-    if parts.api_keys is not None:
-        authenticators.append(ApiKeyAuthenticator(parts.api_keys.store, parts.api_keys.realm))
-        keys = KeyService(parts.api_keys.store, parts.policy, parts.clock)
+    jobs = JobService(
+        parts.store, dispatcher, parts.transport, parts.policy, admission, parts.clock, stream_limits, worker
+    )
+    # Cost sync attributes the provider's usage to this engine's jobs: an engine that runs none has no
+    # worker. A tenant's usage route reads the provider itself (TenantUsage, above).
+    source = parts.usage_source if runs_jobs else None
+    cost_sync = CostSyncWorker(source, parts.store) if source is not None else None
+    costs = CostService(
+        parts.store, parts.policy, parts.clock, cost_sync, payments, settings.cost_sync_interval_s
+    )
     return EngineServices(
         store=parts.store,
         clock=parts.clock,
@@ -336,11 +390,56 @@ def assemble(settings: EngineSettings, parts: EngineParts) -> EngineServices:
         payments=payments,
         costs=costs,
         keys=keys,
+        runner_list=runner_list,
         admission=admission,
         events=parts.events,
         sessions=parts.sessions,
         own_authenticators=len(parts.authenticators),
     )
+
+
+def _offered_as_a_clearinghouse(parts: EngineParts) -> tuple[RunnerList | None, Wallet | None]:
+    """What an engine offers as a clearinghouse, each only when its parts can: the runner list it
+    publishes and the wallet report. It signs for nobody: its tenants' engines sign at the signer
+    themselves (D85 point 1)."""
+    runner_list: RunnerList | None = None
+    if isinstance(parts.discovery_source, DiscoveryDocumentSource):  # otherwise no list is served (#166)
+        runner_list = RunnerList(parts.discovery_source, parts.policy)
+    wallet: Wallet | None = None
+    # otherwise no wallet report is served (#167): the grants manager reports the escrow and the grants,
+    # and the transport asks the signer at LPB_SIGNER_URL for its identity
+    if isinstance(parts.grants_manager, EscrowSource) and isinstance(parts.transport, SignerProbe):
+        wallet = Wallet(parts.grants_manager, parts.grants_manager, parts.transport, parts.policy)
+    return runner_list, wallet
+
+
+def _require_a_whole_clearinghouse(parts: EngineParts, tenants: TenantDesk | None) -> None:
+    """A payment clearinghouse allots from its tenants' grants and onboards them (#169). One that cannot
+    would serve routes that do nothing, so it does not start. Judged on the parts the engine will run
+    with, as the secret store is: a supplied part counts. Only settings are named.
+
+    The signer is not asked for here. The engine signs nothing in this role, and its tenants' engines
+    reach the signer at its published address, not through this engine: ``LPB_SIGNER_URL`` is only
+    where the wallet report reads the signer's readiness, and ``lpb payments check`` says when it is
+    missing."""
+    missing = [
+        needed
+        for needed, absent in (
+            (
+                "LPB_BATTERIES_URL and LPB_BATTERIES_TOKEN (the allocations it allots)",
+                parts.allocation_manager is None,
+            ),
+            (
+                "LPB_BATTERIES_URL and LPB_BATTERIES_GRANTS_TOKEN (the tenant desk, which onboards tenants)",
+                tenants is None,
+            ),
+        )
+        if absent
+    ]
+    if missing:
+        raise ValueError(
+            f"LPB_ROLE=clearinghouse needs {'; '.join(missing)}, or the part supplied in its place"
+        )
 
 
 async def build(
@@ -354,6 +453,8 @@ async def build(
         parts = await default_parts(settings, stack, supply)
         if decorate is not None:
             parts = decorate(parts)
+        if settings.runs_jobs:  # a clearinghouse hands each key to the caller and stores none (#169)
+            await _require_storable_payment_keys(parts)  # the final parts, after decoration
         resources = stack.pop_all()  # out of the stack: the caller takes them with the services
     try:
         return assemble(settings, parts), resources
@@ -362,12 +463,23 @@ async def build(
         raise
 
 
-def _configured_secrets(settings: EngineSettings) -> "SettingsSecretStore":
-    from livepeer_builder.adapters.secrets import SettingsSecretStore
+async def _require_storable_payment_keys(parts: EngineParts) -> None:
+    """Allotment would fund an allocation, then fail to keep its key (#112, C2): asked of every engine
+    that stores allocation keys, which is every role that runs jobs. In its ``both`` role an engine
+    stores the keys its Batteries mints, and in its ``work`` role the keys its clearinghouse hands
+    over. An engine in its ``clearinghouse`` role stores none and is not asked; a command that would
+    store one there is refused when it is made (``PaymentKeys.require_writable``). Judged on the parts the
+    engine will run with, so a decorator that turns the provider off or installs its own store is not
+    refused, and one that adds a provider is. Only the built-in store is asked here: a plug-in store that
+    cannot write at boot (a sealed vault) still starts, and is asked per request."""
+    from livepeer_builder.adapters.secrets import RoutingSecretStore
 
-    shared_key = settings.shared_payment_key.get_secret_value() if settings.shared_payment_key else None
-    return SettingsSecretStore({_SHARED_KEY: shared_key} if shared_key else {})
-
-
-def _shared_secret_ref(settings: EngineSettings) -> SecretRef | None:
-    return _configured_secrets(settings).ref(_SHARED_KEY) if settings.shared_payment_key else None
+    if (
+        parts.allocation_manager is not None
+        and isinstance(parts.secret_store, RoutingSecretStore)
+        and not await parts.secret_store.writable()
+    ):
+        raise ValueError(
+            "LPB_SECRET_KEY is required with a payment provider: the built-in secret store needs it to keep "
+            "each actor's payment key (lpb gen-secret-key), or supply a secret_store"
+        )

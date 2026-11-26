@@ -4,6 +4,10 @@ One guide per M5 tracker (M5: independent installation and release). The tracker
 items on the project board. Each guide is a proposal until it is locked in review with Mike and John.
 Written 29 October 2026 and verified against builder-core `releases/m3` at `d3df806`.
 
+**Amended on 18 November 2026.** ISS-31 was replaced by the payment clearinghouse (D82 to D86 in
+[m4-decisions.md](../m4-decisions.md)). Each guide here carries an "Amended on 18 November 2026"
+section that says what changes for it.
+
 **No M5 guide needs an upstream change.** Publishing to PyPI is blocked while the SDK is a git
 dependency (T1); a GitHub release wheel works without it, and the remaining SDK imports could be vendored
 if PyPI matters.

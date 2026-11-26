@@ -1,31 +1,95 @@
 """Generators for docs/generated. CI runs ``lpb gen-docs --check`` so committed docs never drift."""
 
 import json
+from typing import Any, Literal
 
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.runtime import BuilderEngine
 from livepeer_builder.store.schema import metadata
 
+# The roles a schema is published for. ``work`` has none of its own: it serves the work routes of the
+# ``both`` role's document and nothing else.
+PublishedRole = Literal["both", "clearinghouse"]
 
-async def render_openapi() -> str:
-    from livepeer_builder.http import create_app
+
+async def render_openapi(role: PublishedRole = "both") -> str:
+    """The schema of the app ``lpb serve`` runs for an engine in ``role``, built the same way.
+
+    ``both``, the default, is ``openapi.json``: every route, on one listener. Its allotment and rotation
+    answer the allocation alone, because that engine stores each key for its own jobs.
+    ``clearinghouse`` is ``openapi-clearinghouse.json``: every route of a payment clearinghouse. That
+    role has two listeners and neither serves them all: a tenant's own routes are on the public one, and
+    the paths a clearinghouse admin names a tenant in on the private one (D87 point 3, as amended on 19
+    November 2026). So the document is the two listeners' put together (``_of_both_listeners``), and
+    each route's tag says which serves it. Its allotment and rotation answer the allocation with its key
+    (``allocation_api_key``, ``replayed``, ``resumed``), which only that role hands over (#169). An
+    engine in its ``work`` role serves the work routes of ``openapi.json`` and nothing else, so it has
+    no file of its own."""
+    from livepeer_builder.http.app import create_app
+    from livepeer_builder.http.listeners import delivers_allocation_keys
     from livepeer_builder.runtime.assembly import EngineSupply
-    from livepeer_builder.testing import FakeAllocationManager
+    from livepeer_builder.testing import FakeAllocationManager, FakeUsageSource
 
-    # Every optional capability on (API keys by default; the grant desk needs a grants manager),
+    # Every optional capability on (API keys by default; the tenant desk needs a grants manager),
     # so the committed spec documents the whole API. A deployment without one lacks those routes.
+    values: dict[str, Any] = {}
+    supply = EngineSupply(grants_manager=FakeAllocationManager())
+    standalone = delivers_allocation_keys(role)
+    if standalone:  # a clearinghouse has two listeners, allots, and serves each tenant's usage
+        provider = FakeAllocationManager()
+        values = {"role": role, "http_private_port": 8081}
+        supply = EngineSupply(
+            allocation_manager=provider, grants_manager=provider, usage_source=FakeUsageSource()
+        )
     settings = EngineSettings(
         database_url="sqlite+aiosqlite:///:memory:",
         log_json=False,
-        discovery_url="http://127.0.0.1:9/discovery",
+        # The runner list route is served only by an engine whose discovery source reads an address
+        # (#166), so this one is given a reserved name. The engine is built and never started, and
+        # nothing is asked there (#154).
+        discovery_url="https://discovery.invalid/discovery",
+        **values,
     )
-    engine = await BuilderEngine.create(settings, supply=EngineSupply(grants_manager=FakeAllocationManager()))
+    engine = await BuilderEngine.create(settings, supply=supply)
     try:
-        schema = create_app(engine, manage_lifecycle=False).openapi()
+        # The app ``lpb serve`` runs, built the same way, so the spec documents what ships (#186 review).
+        if standalone:
+            schema = _of_both_listeners(
+                create_app(engine, manage_lifecycle=False, listener="public").openapi(),
+                create_app(engine, manage_lifecycle=False, listener="private").openapi(),
+            )
+        else:
+            schema = create_app(engine, manage_lifecycle=False).openapi()
     finally:
         await engine.stop()
     schema["info"]["version"] = "generated"  # keep the file stable across dev versions
     return json.dumps(schema, indent=2, sort_keys=True) + "\n"
+
+
+def _of_both_listeners(public: dict[str, Any], private: dict[str, Any]) -> dict[str, Any]:
+    """One document for an engine with two listeners: every path and every component of either, and the
+    tags of both, the public listener's first. What both listeners describe (the runner list, health, a
+    model both answer with) must be described the same way by both: a difference is an error here, never
+    one side silently kept."""
+    merged = dict(private)
+    merged["paths"] = _union("path", public["paths"], private["paths"])
+    merged["components"] = {
+        section: _union(
+            section, public["components"].get(section, {}), private["components"].get(section, {})
+        )
+        for section in sorted({*public["components"], *private["components"]})
+    }
+    seen = {tag["name"] for tag in public.get("tags", [])}
+    more = [tag for tag in private.get("tags", []) if tag["name"] not in seen]
+    merged["tags"] = [*public.get("tags", []), *more]
+    return merged
+
+
+def _union(what: str, one: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+    differing = sorted(name for name in one.keys() & other.keys() if one[name] != other[name])
+    if differing:
+        raise ValueError(f"the two listeners describe the same {what} differently: {differing}")
+    return {**one, **other}
 
 
 def render_db_schema() -> str:
@@ -57,7 +121,7 @@ def render_db_schema() -> str:
 
 # Relationships the schema expresses by convention rather than foreign keys (joined in queries).
 _LOGICAL_LINKS = (
-    ('lpb_actors ||--o{ lpb_jobs : "owns (application_id, actor_id)"'),
+    ('lpb_actors ||--o{ lpb_jobs : "owns (tenant_id, actor_id)"'),
     ('lpb_actors ||--o| lpb_secrets : "secret_ref"'),
     ('lpb_payment_sessions }o--o| lpb_usage_rows : "matched payment_session_id"'),
     ('lpb_actors ||--o{ lpb_usage_rows : "allocation_id"'),

@@ -1,7 +1,7 @@
 # Access contract
 
-**Tickets:** ISS-03, ISS-08, #49 (ISS-33) · **Design accepted:** 12 October 2026 (decisions D12–D16);
-ISS-08 on 26 October (D44); JWT bearer on 26 October (D45) · **Code:** `contracts/access.py`, `protocols/`,
+**Tickets:** ISS-03, ISS-08, #49 (ISS-33), #165 (ISS-31) · **Design accepted:** 12 October 2026 (decisions D12–D16);
+ISS-08 on 26 October (D44); JWT bearer on 26 October (D45); the tenant admin on 18 November (D83) · **Code:** `contracts/access.py`, `protocols/`,
 `services/policy.py`, `services/ownership.py`, `services/keys.py`, `adapters/auth.py`, `adapters/jwt.py`,
 `adapters/secrets.py`
 
@@ -14,17 +14,26 @@ in adapters.
 | Field | Meaning |
 | --- | --- |
 | `actor_id` | Opaque to the engine; the owner of jobs, costs and allocations |
-| `application_id` | Tenant isolation; defaults to `default` |
+| `tenant_id` | Tenant isolation; defaults to `default`. A tenant's id is its grant's id ([payments.md](payments.md#tenants)) |
 | `permissions` | `Operation` values (see below) |
-| `credential_kind` | `actor`, `admin`, `auditor` (a read-only admin, D46) or `service` |
+| `credential_kind` | `actor`, `clearinghouse_admin` (an admin of every tenant), `tenant_admin` (an admin of one tenant, its own: D83), `auditor` (a read-only admin of one tenant, D46) or `service` |
 | `attributes` | Non-secret labels copied onto records. **Never secrets** |
 | `auth` | Provenance (method, issuer, credential id), for audit only |
 
 **Operations:** `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`, `admin.keys`,
-`admin.allocations`, `admin.costs`, `admin.read`, `actors.assert`. `admin.read` is every admin read of one
-application: the key list and key inspection, the actor list and one actor's allocation, and
-reconciliation. The other `admin.*` operations are the writes. The grant list is `admin.allocations`:
-grants fund every application and carry none, so only an admin reads them, never an auditor.
+`admin.allocations`, `admin.costs`, `admin.read`, `admin.tenants`, `actors.assert`. `admin.read` is every
+admin read of one tenant: the key list and key inspection, the actor list and one actor's allocation,
+the tenant's grant, and reconciliation. The other `admin.*` operations are the writes.
+`admin.tenants` (#165) is what only a clearinghouse admin does to a tenant: onboard it, list every
+tenant, top up its grant, pause or resume it. The tenant list is every tenant's grant, so no tenant
+admin and no auditor reads it.
+
+**Where the admin routes are.** The routes are two sets (D84, #164). The clearinghouse set, under
+`/v1/clearinghouse/tenants`, has tenants and their grants, a tenant's actors and their allocations, and a
+tenant's access keys ([payments.md](payments.md#tenants)). The work set has
+three groups of admin routes beside the routes every actor calls: an engine's own access keys
+(`/v1/keys`), reconciliation (`GET /v1/costs/reconciliation`) and cost sync (`POST /v1/costs/sync`). The
+set a route is in decides nothing about access: each route needs the operation it needed before.
 
 ## Protocols
 
@@ -50,20 +59,48 @@ class AccessPolicy(Protocol):
 - `AuthenticatorChain` runs the deployment's own authenticators (`EngineSupply.authenticators`) in
   order, then `ApiKeyAuthenticator` when engine API keys are on, and combines their challenges into one
   `WWW-Authenticate` header.
+- **A bearer longer than 16 KiB is refused first (#113, C22).** The chain answers `NotAuthenticated`
+  (401) before any authenticator sees an `Authorization: Bearer` credential longer than 16,384
+  characters, so it also protects the API-key path and a deployment's own authenticators. It is counted
+  on the whole header (16,384 characters and `Bearer `), whatever the scheme and however it is spelled,
+  because a supplied authenticator may read as a bearer what the engine does not (a tab after `Bearer`). The cap is a
+  fixed constant (`adapters/auth.py`, `MAX_BEARER_LENGTH`), not a setting.
 - **Imported mode needs no authenticator.** The application builds `ActorContext` itself. The policy
   still applies.
 
 ## DefaultPolicy
 
-- **Admin operations** (`admin.*`) need an **admin credential kind**. A permission string on an actor
-  key is not enough.
-- **An admin credential** may act on any application's records.
+- **Admin operations** (`admin.*`) need an **admin credential**: one of kind `clearinghouse_admin` or
+  `tenant_admin`. A permission string on an actor key is not enough.
+- **A clearinghouse admin credential** may act on any tenant's records.
+- **A tenant admin credential** (D83, #165) is an admin of its own tenant and of no other. It divides
+  its tenant's grant and cannot enlarge it:
+  - **In its own tenant** it does what an admin does: allot, top up, pause and revoke allocations,
+    rotate payment keys, issue and manage keys that are not admin keys, read its grant, its actors and
+    their allocations, its usage and the clearinghouse's runner list (#166), and, on the work set, read
+    every actor's jobs and costs and reconcile.
+  - **Another tenant** is `AccessDenied`, whatever the operation: 403 for a tenant a body or an embedded
+    call names, before any lookup or provider call. No route lets it name a tenant in a path: its own
+    routes at the clearinghouse name none and act on its tenant, and a path that names a tenant is a
+    clearinghouse admin's (D87 point 3, as amended on 19 November 2026; [Listeners](#listeners)).
+    Another tenant's record found by its id alone (a job, a key, an actor) reads as missing, as for
+    anyone ([Answers](#answers)).
+  - **Never, in any tenant:** `admin.tenants` (onboard a tenant, list tenants, top up a grant, set a
+    tenant's status); cost sync (`admin.costs`), which reads every tenant's usage; `actors.assert`; and
+    issuing, rotating or revoking a `tenant_admin` or `clearinghouse_admin` key, its own included.
+  - **It is confined by the policy, not by each route.** Every write passes the tenant it acts on to the
+    policy as the resource (`ResourceRef.tenant_id`), and a key command passes the key's kind
+    (`ResourceRef.credential_kind`). A write that names no tenant is refused to a tenant admin, so a
+    command that forgot to name one fails closed.
+  - In this release a tenant admin credential is an engine key of kind `tenant_admin`. Mapping an
+    identity provider's role to it is ISS-33.
 - **An auditor credential** (D46) only reads: `admin.read`, `discover`, `jobs.read`, `costs.read` and
-  `events.read`, across every actor of its own application. Every write is `AccessDenied`, and so is any
-  record of another application. It is for a dashboard or an audit reader that must not move money. An
+  `events.read`, across every actor of its own tenant. Its tenant's usage and the clearinghouse's runner
+  list are `admin.read` (#166). Every write is `AccessDenied`, and so is any
+  record of another tenant. It is for a dashboard or an audit reader that must not move money. An
   engine key can be issued as `auditor`, and a JWT is one with `LPB_JWT_ADMIN_READ_SCOPE`.
 - **Everyone else** needs the operation's permission, and may touch only resources owned by their own
-  `(application_id, actor_id)`.
+  `(tenant_id, actor_id)`.
 - **Another actor's record** reads as missing (404), never 403, so its existence isn't revealed. A
   missing permission is 403. The order of the two checks is in [Answers](#answers).
 
@@ -80,23 +117,178 @@ Every route on a job or its cost answers the same way (D44, `services/ownership.
 
 1. **The permission first, before any lookup.** A caller without the operation's permission gets
    `AccessDenied` (403), whether or not the job exists, so the answer says nothing about any job.
-2. **Then ownership.** Another actor's or application's job, and a job that does not exist, are both
+2. **Then ownership.** Another actor's or tenant's job, and a job that does not exist, are both
    `NotFound` (404).
+
+**An id no record can hold is a 422 (#113, C26).** Every id a route reads from its path or query string
+(a tenant, actor or key id, `app`, a filter such as `actor_id`) is stored text: at most 200
+characters and no NUL, as every record keeps it. A longer one, or one holding a NUL, is a 422 when the
+request is parsed, after authentication (401) and before the permission check and any query, as a job id
+that is not a UUID already was. Such a lookup used to answer 404 (an empty 200 for a list filter or the
+catalog, 400 for a key's rotate or revoke), and a NUL was a 500 on PostgreSQL. `tests/structure/test_route_params.py` fails when a
+route declares a plain string path or query parameter.
+
+A time in a query string (`before` on `GET /v1/jobs`, `start` and `end` on `GET /v1/costs/summary`) is
+converted to UTC when the request is parsed. One that UTC cannot hold, because its offset puts it before
+year 1 or after year 9999 (`0001-01-01T00:00:00+14:00`), is a 422 at the same point; it was a 500. The
+same test fails when a route declares a plain `datetime` query parameter.
+
+A summary with no `start` starts 30 days before its `end`. An `end` before `0001-01-31T00:00:00Z` has no
+such start, so with no `start` it is a 400 that names `end` (`InvalidRequest` in process), after the
+permission check; it was a 500 (#158). The same `end` with its own `start` is read as before.
+
+**A 422 repeats the input it refused, as JSON every client reads.** Its body is FastAPI's: `detail` lists
+each refused field with its `loc`, `msg`, `type` and `input`. Two inputs cannot be repeated as they came.
+A lone surrogate is written as the escape it came in as (`"\ud800"`; #113, C26). A `NaN` or an infinity,
+which the engine's JSON reader takes as a number and JSON has no number for, is written as a string of its
+token: `"NaN"`, `"Infinity"` or `"-Infinity"` (#158). `POST /v1/jobs` with
+`{"app":"example/echo","timeout_s":NaN}` answers 422 with `"input":"NaN"`; it was a 500, because the 422
+could not be written. Every other 422 is byte for byte what FastAPI sends.
 
 | Route | Permission |
 | --- | --- |
-| `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read` |
-| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its application. Newest first, paged with `before` ([job history](engine.md#job-history)) |
+| `GET /v1/jobs/{id}`, `GET /v1/jobs/{id}/result` | `jobs.read`. The result is an async job's stored answer, and goes to the job's own actor only: an admin or an auditor reads another actor's job and gets 404 for its result ([engine.md](engine.md#results-of-an-async-job)) |
+| `GET /v1/jobs` | `jobs.read`. An actor lists its own jobs; an admin or an auditor lists every actor's jobs in its tenant. Newest first, paged with `before` ([job history](engine.md#job-history)) |
 | `POST /v1/jobs/{id}/usage` | `jobs.run` (not `jobs.read`) |
-| `POST /v1/jobs` (including `mode=async`, which then answers 501) | `jobs.run` |
+| `POST /v1/jobs/{id}/cancel` | `jobs.run` (not `jobs.read`): cancels a queued async job. With the default policy the job's owner, a tenant admin of its tenant and a clearinghouse admin may; an auditor may not ([engine.md](engine.md#cancel), ISS-26) |
+| `POST /v1/jobs` (including `mode=async`, which queues the job: [async jobs](engine.md#async-jobs)) | `jobs.run` |
 | `GET /v1/jobs/{id}/cost` | `costs.read` |
-| `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its application; summary and allowance take `?actor_id=` to name one |
-| `GET /v1/admin/actors`, `GET /v1/admin/applications/{app}/actors/{actor}/allocation` | `admin.read`. Every known actor (`KnownActor`): the provisioned ones and the people an identity provider signed in (D48), each with `provisioned`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `application_id`, `status` (allocations only), `provisioned` and `limit`. An admin lists every application unless it names one; an auditor lists its own. The single read returns the allocation (`ProvisionedActor`) |
+| `GET /v1/costs/projections`, `GET /v1/costs/summary`, `GET /v1/allowance` | `costs.read`. An admin's or an auditor's projections and summary cover every actor in its tenant; summary and allowance take `?actor_id=` to name one |
+| `GET /v1/clearinghouse/tenants/{tenant}/actors`, `GET /v1/clearinghouse/tenants/{tenant}/actors/{actor}/allocation` | `admin.read`. Every known actor of the tenant (`KnownActor`): the allotted ones and the people an identity provider signed in (D48), each with `allotted`, its `allocation` when there is one, `label`, the provider's `name` and when it was first and last seen. Filter by `status` (allocations only), `allotted` and `limit`. A tenant admin or an auditor lists its own tenant; a clearinghouse admin lists any. The single read returns the allocation with its amounts (`AllocationRead`: the record, and `allowance` as the provider reports it, #168). In embedded mode `payments.list_actors` still takes `tenant_id=None`, which is every tenant for a clearinghouse admin and its own for anyone else |
+| `GET /v1/clearinghouse/tenants/{tenant}/grant` | `admin.read` ([payments.md](payments.md#tenants)) |
+| `POST /v1/clearinghouse/tenants`, `GET /v1/clearinghouse/tenants`, `POST .../tenants/{tenant}/grant/top-up`, `POST .../tenants/{tenant}/status`, `GET /v1/clearinghouse/wallet` | `admin.tenants`: a clearinghouse admin. With two [listeners](#listeners), on the private one only |
 
-`GET /v1/jobs/{id}/result` answers 501 until M4 (ISS-26), but only to the job's owner: the two checks
-come first.
+**Every route of a tenant answers the same way (#165):**
+
+| The request | Answer |
+| --- | --- |
+| No credential, or a bad one | 401 |
+| A kind that may not call the route (an actor on an admin route, an auditor on a write, a tenant admin on `admin.tenants`) | 403 |
+| A tenant credential at a path that names a tenant, another tenant's or its own (since 19 November 2026); a clearinghouse admin at a tenant's own routes, which name none | 403, before any store lookup or provider call |
+| A record that does not exist (no such actor, key or grant), or another tenant's named by its id at a tenant's own routes | 404 (400 for a key's rotate or revoke, as before) |
+| No allocation, or an empty one, when a job needs it | 402 |
+
+`tests/unit/test_admin_route_sweep.py` and `tests/unit/test_tenant_from_credential.py` read the routes
+from the app, so a route added later that names a tenant is held to the third row. Until 19 November
+2026 the third row was "another tenant's id in the path", the policy's refusal; a tenant credential
+can no longer name a tenant in a path at all.
+
+`GET /v1/jobs/{id}/result` and `POST /v1/jobs/{id}/cancel` say what they say of a job (409 while it
+has not ended, 410 for a result the engine does not hold) only to a caller the two checks let
+through: they come first (ISS-26). Until then the result route answered 501.
+
+**A result is its owner's alone.** After the two checks, `GET /v1/jobs/{id}/result` (`jobs.result`)
+answers only the actor the job belongs to, in its tenant. Everybody else gets the 404 of the second
+check, whatever their kind of credential: an auditor, a tenant admin and a clearinghouse admin read
+the job's record and not its result. This one rule is the engine's and not the policy's, so a policy
+you supply cannot hand a result's bytes to anybody but the owner
+([engine.md](engine.md#results-of-an-async-job)). The cancel has no such rule: it answers whoever the
+policy lets run the job.
 
 Enterprises replace the policy for teams, organization admins or RBAC by implementing `AccessPolicy`.
+
+## Listeners
+
+**The role chooses the half, and the listener chooses within it.** An engine serves the routes of its
+role (`LPB_ROLE`, D84, #169), and a listener serves some or all of those:
+
+| `LPB_ROLE` | Routes served | Listeners |
+| --- | --- | --- |
+| `both`, the default | The work routes and the clearinghouse routes | One, or two with `LPB_HTTP_PRIVATE_PORT` |
+| `work` | The work routes. A clearinghouse route, the wallet and the runner list are each 404, as any path the engine does not know, with a credential or without one | One, or two with `LPB_HTTP_PRIVATE_PORT`. It has no private group, so both serve the work routes, and the rule about kinds below still holds |
+| `clearinghouse` | The clearinghouse routes. Every work route is 404 the same way: the job routes, `GET /v1/offerings`, `/v1/runners`, the cost routes, `GET /v1/allowance`, `/v1/events`, `/v1/sessions` and `/v1/keys` | Two, always: the settings do not load without `LPB_HTTP_PRIVATE_PORT`, and `create_app` refuses to build it the app of one listener |
+
+`/livez` and `/readyz` are served in every role and on every listener, with no credential, and `/readyz`
+names the role. The tables below describe an engine in its `both` role; in another role, read "every
+route" as every route of that role.
+
+A clearinghouse admin onboards tenants and tops up grants, so a leaked clearinghouse admin key could
+spend the wallet. A deployment can keep what only a clearinghouse admin does off the address it
+publishes (D84, #167).
+
+**A tenant's routes come in two forms** (D87 point 3, as Mike amended it on 19 November 2026 after the
+reviewer's comment on #175), and the rule about them holds on every listener. A tenant's own routes name
+no tenant (`GET /v1/clearinghouse/grant`, `GET /v1/clearinghouse/usage`, `/v1/clearinghouse/actors/...`,
+`/v1/clearinghouse/keys/...`): they act on the tenant of the credential, take a `tenant_admin` or an
+`auditor` credential, and refuse any other with 403, a clearinghouse admin's included, which has no
+tenant of its own. The same routes under `/v1/clearinghouse/tenants/{tenant_id}` act on the tenant the
+path names, take a `clearinghouse_admin` credential, and refuse any other with 403, a tenant admin's of
+that tenant included. Each kind keeps what it may do on each route ([DefaultPolicy](#defaultpolicy)).
+The tenant is resolved where the route authenticates (`http/clearinghouse.py`), before the service is
+asked, and both forms call the same service with it.
+
+**One listener is the default.** Without `LPB_HTTP_PRIVATE_PORT` the engine serves one listener, on
+`LPB_HTTP_HOST` and `LPB_HTTP_PORT`, with every route, as before #167, and both forms of a tenant's routes,
+each to its own kinds. Self-hosted payments runs this way, and its clearinghouse admin key does
+everything it did, at the paths that name a tenant.
+
+**With `LPB_HTTP_PRIVATE_PORT` set, the engine serves two**, each with an app of its own over one engine
+in one process:
+
+| | Public listener | Private listener |
+| --- | --- | --- |
+| Address | `LPB_HTTP_HOST`, `LPB_HTTP_PORT` | `LPB_HTTP_PRIVATE_HOST` (`127.0.0.1` unless set), `LPB_HTTP_PRIVATE_PORT` |
+| Routes | Every route but the private group | Every route but a tenant's own routes |
+| The private group: onboarding, the tenant list, a grant's top-up, a tenant's status, the wallet report, and a tenant's routes at the paths that name the tenant | 404, as any path the engine does not know, with a credential or without one | Served |
+| A tenant's own routes, which name no tenant | Served | 404, the same way |
+| A clearinghouse admin credential | 403 on every route that takes a credential, the work routes included | Accepted |
+| A tenant admin, an auditor, an actor or a service credential | Accepted, as with one listener | 403 on every route, its own tenant's included |
+| No credential, or a bad one | 401 | 401 |
+| `/livez`, `/readyz`, `GET /v1/offerings` | Served, with no credential | Served, with no credential |
+| `/openapi.json`, `/docs` | The public listener's routes only | The private listener's routes only |
+
+- **The private listener is for a clearinghouse admin only.** It is where a clearinghouse admin does
+  everything, for any tenant, naming the tenant in the path. A tenant's admin and its auditor use the
+  public listener, at their own routes, and a tenant credential that reaches the private address is
+  refused there.
+- **A tenant admin key of kind `tenant_admin` is issued on the private listener:**
+  `POST /v1/clearinghouse/tenants/{tenant_id}/keys` is served there only, and only a clearinghouse admin
+  may issue that kind ([a tenant's access keys](#a-tenants-access-keys)).
+- **Who keeps an allocation's key follows the role, on one listener or two** (#169). An engine in its
+  `both` role runs jobs, so allotment and rotation store the key in its `SecretStore` and answer the
+  allocation alone, on the public listener and on the private one. An engine in its `clearinghouse`
+  role hands each key to the caller once and stores none, on both of its listeners: to the tenant's
+  admin on the public one, at the path that names no tenant, and to a clearinghouse admin on the
+  private one, at the path that names the tenant, who passes it to the tenant
+  ([payments.md](payments.md#payment-keys)). `delivers_allocation_keys(role)` in `http/listeners.py`
+  decides, and `create_app` passes its answer to every app it builds. No listener serves a signer path
+  in any role: an engine signs at the signer itself.
+- **The credential rule is a property of the listener, not of each route.** It is applied where every
+  route authenticates (`http/auth.py`), by kind, after the credential is verified. A route added later
+  is covered with no check of its own, and so is a route an extension adds with `actor_dependency`
+  ([extending the engine](../design-docs/extending-the-engine.md#service-mode)). A JWT with the admin
+  scope is a clearinghouse admin credential and is treated as one.
+- **Which group is served by which role and on which listener is one table,** `ROUTE_GROUPS` in
+  `http/listeners.py`: each group of routes with its half and which of two listeners serves it
+  (`served_on`: `every`, `public` or `private`). A group of routes that is not in it fails a test
+  (`tests/unit/test_listeners.py`), which also reads the routes from each app: every route of the
+  private group is 404 on the public listener, every route that takes a credential refuses a
+  clearinghouse admin key on the public listener before the provider or the store is asked, and a
+  tenant's own routes are the public listener's alone. `tests/unit/test_tenant_from_credential.py`
+  sweeps both forms of a tenant's routes for the kinds each refuses. The routes that take no credential
+  are named there, so a new one is a decision somebody made.
+- **The published schema.** `docs/generated/openapi.json` is generated from an engine in its `both`
+  role with one listener, so it has every route. Each route but health carries the tag of its half,
+  `work half` or `clearinghouse half`, whose description names the roles that serve it. The routes of
+  the private group also carry the tag `private listener`, and a tenant's own routes the tag
+  `public listener`. Its allotment and rotation answer the allocation alone, as that engine does.
+  `docs/generated/openapi-clearinghouse.json` is generated from an engine in its `clearinghouse` role:
+  the routes of that role and no other, with the answer that hands an allocation's key over
+  ([payments.md](payments.md#payment-keys)). No one listener of that role serves them all, so the
+  document is its two listeners' put together, and the two tags say which serves each route. An
+  engine's own `/openapi.json` names the routes of its role and its listener, and no other.
+- **A clearinghouse has no route that issues a second clearinghouse admin key** (#169). `/v1/keys`,
+  which issues every kind, is a work route. The first clearinghouse admin key is `lpb bootstrap-admin`'s,
+  once. It is kept under the tenant `default`, so its holder lists, rotates and revokes it on the private
+  listener under `/v1/clearinghouse/tenants/default/keys`, where a tenant's keys are; those routes issue
+  auditor and tenant admin keys only (tech debt T42).
+- **Publish the public listener only.** The private one listens on loopback unless
+  `LPB_HTTP_PRIVATE_HOST` says otherwise. Whoever can reach it still needs a clearinghouse admin
+  credential.
+
+An engine in its `clearinghouse` role requires the private listener (#169); in its other two roles it
+is a deployment's choice. In embedded mode there is no listener: the enterprise app builds the
+`ActorContext` and the policy applies as before.
 
 ## Modes
 
@@ -105,7 +297,7 @@ enterprise identity provider's concern.
 
 | Mode | Where it lives | Status |
 | --- | --- | --- |
-| Engine API key (`lpk_…`, hashed at rest, scoped, revocable) | `ApiKeyAuthenticator` | **Implemented**, on by default. `EngineSupply(api_keys=None)` turns keys off: `engine.keys` is `None`, the `/v1/admin/keys` routes are absent and OpenAPI declares no bearer scheme |
+| Engine API key (`lpk_…`, hashed at rest, scoped, revocable) | `ApiKeyAuthenticator` | **Implemented**, on by default. `EngineSupply(api_keys=None)` turns keys off: `engine.keys` is `None`, the `/v1/keys` routes are absent and OpenAPI declares no bearer scheme |
 | JWT bearer: `iss`, `aud`, `exp`, resource (RFC 8707) via JWKS; claim mapping in config | `JwtBearerAuthenticator` | **Implemented** (D45): `LPB_AUTH=jwt` or `jwt,api_keys`. See [JWT bearer](#jwt-bearer) |
 | MCP OAuth (PKCE public clients) | Enterprise authorization server issues; engine verifies with JWT bearer and publishes RFC 9728 protected-resource metadata | Defined, with MCP (M3/M4) |
 | Trusted backend (see [service mode](#service-mode)) | `ServiceCredentialAuthenticator` | Defined, M4 |
@@ -138,14 +330,14 @@ mode, with no code:
 - an `LPB_JWT_ADMIN_SCOPE` that ordinary tokens carry: an operation name (`jobs.run`, ...) or a standard
   OpenID scope (`openid`, `profile`, `email`, `address`, `phone`, `offline_access`), whether written bare or
   with `LPB_JWT_SCOPE_PREFIX` (`api:jobs.run` with the prefix `api:`, D49). The admin scope makes an
-  engine-wide admin that skips permission and ownership checks in every application, so it must be a scope
+  engine-wide admin that skips permission and ownership checks in every tenant, so it must be a scope
   the provider issues to operators alone;
   - **This check is a denylist.** It catches the scopes every provider puts on ordinary tokens, not ones
     a provider invents. Choosing a scope that only operators are ever issued stays the operator's
     responsibility. A dedicated namespace or a separate admin claim would remove that reliance (a
     follow-up, not built: [#58](https://github.com/NE-Build-Track/livepeer-builder-core/issues/58), T19);
 - an `LPB_JWT_ADMIN_READ_SCOPE` that ordinary tokens carry (bare or prefixed, D49), or that equals the admin scope (D46): the read
-  scope marks a read-only admin across the application, so it too must be issued to operators and dashboards
+  scope marks a read-only admin across the tenant, so it too must be issued to operators and dashboards
   alone;
 - an empty `LPB_JWT_TOKEN_TYPES`.
 
@@ -208,25 +400,25 @@ mode, with no code:
 
 | The credential | Answer |
 | --- | --- |
-| Not a JWT (an `lpk_` key, Basic, garbage), or a JWT from another issuer | `None`: the next authenticator gets a turn |
-| From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, token type, lifetime, unknown key, a key the algorithm cannot use or one that is too short, missing claim, or a header PyJWT refuses (an unknown `crit`, a `kid` that is not text). The issuer is read from the payload before the header, so a bad header cannot make this issuer's token look like another's |
+| Not a JWT (an `lpk_` key, Basic, garbage), or a JWT from another issuer | `None`: the next authenticator gets a turn. A payload that cannot be read, a deeply nested one that makes JSON parsing raise `RecursionError` included, names no issuer (#113, C22) |
+| From this issuer, failing a check | `NotAuthenticated` (401), with the reason: expired, not yet valid, audience, signature, algorithm, token type, lifetime, unknown key, a key the algorithm cannot use or one that is too short, missing claim, or a header PyJWT refuses (an unknown `crit`, a `kid` that is not text) or that cannot be read, a deeply nested one included (`RecursionError`, #113, C22). The issuer is read from the payload before the header, so a bad header cannot make this issuer's token look like another's |
 | The provider's keys cannot be read, or its discovery document names another issuer | `ProviderUnavailable` (503) with a fixed message, because no token can be checked. The details are logged |
 
 **Claims become an `ActorContext`:**
 
 | Field | From |
 | --- | --- |
-| `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`). Keep the default: `sub` is the provider's immutable subject, while a username can be renamed or reused, and the engine keys money and history on `actor_id`. A readable name is the actor's `label`, given at provisioning (D46). At most 200 characters, as every record stores it: a longer claim is a 401, never cut |
-| `application_id` | `LPB_JWT_APPLICATION_CLAIM` when set, otherwise `LPB_JWT_APPLICATION_ID` (`default`, at most 200 characters: a longer one fails at startup); a claim over 200 characters is a 401 |
+| `actor_id` | `LPB_JWT_ACTOR_CLAIM` (`sub`). Keep the default: `sub` is the provider's immutable subject, while a username can be renamed or reused, and the engine keys money and history on `actor_id`. A readable name is the actor's `label`, given at allotment (D46). At most 200 characters, as every record stores it: a longer claim is a 401, never cut |
+| `tenant_id` | `LPB_JWT_TENANT_CLAIM`, the claim that names it, or `LPB_JWT_TENANT_ID`, the one tenant every token is in (at most 200 characters: a longer one fails at startup). Exactly one is set: neither has a default, and with neither or both the engine refuses to start (#163 review). A claim over 200 characters is a 401 |
 | `permissions` | The scopes in `LPB_JWT_SCOPE_CLAIM` (`scope`, a space-separated string, or a list such as `scp`) that name an operation after `LPB_JWT_SCOPE_PREFIX` is removed: `discover`, `jobs.run`, `jobs.read`, `costs.read`, `events.read`. Never `actors.assert` (the trusted backend's) and never `admin.*` |
-| `credential_kind` | `admin` when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `auditor` when it carries `LPB_JWT_ADMIN_READ_SCOPE` (a dashboard's service account); otherwise `actor` |
+| `credential_kind` | `clearinghouse_admin` when the token carries `LPB_JWT_ADMIN_SCOPE`; otherwise `auditor` when it carries `LPB_JWT_ADMIN_READ_SCOPE` (a dashboard's service account); otherwise `actor` |
 | `auth` | `AuthProvenance(method="jwt", issuer, credential_id=jti)`. The token itself is never kept or logged |
 | `display_name` | `LPB_JWT_NAME_CLAIM` (`preferred_username`), when it is text. Only for the operator's actor list (D48): never an identity, never copied onto records |
 
 **Registration on first sign-in (D48).** An actor is the provider's `sub`, which an operator cannot
 guess. So the first time a builder's token reaches the engine, the engine records that actor in
 `lpb_actor_sightings`, with the provider's display name. The operator's actor list then shows them
-before any allocation (`provisioned: false`), and provisioning them takes that name as the label
+before any allocation (`allotted: false`), and allotting to them takes that name as the label
 unless the operator gives one. The allocation still belongs to the `sub`: a renamed person keeps
 their actor, and a reused name never inherits one.
 - **Who:** actor credentials only. Operators (admin), auditors and engine-key actors are not recorded;
@@ -254,9 +446,9 @@ An enterprise backend calls the deployed engine on behalf of many users in one o
 
 - **(A) JWT bearer.** Use this for direct clients (browser, MCP). The enterprise identity provider
   issues tokens whose audience is the engine. The engine is configured with issuer(s), audience and a
-  claim mapping (`sub` → `actor_id`, a claim → `application_id`, the scope claim → permissions).
+  claim mapping (`sub` → `actor_id`, a claim → `tenant_id`, the scope claim → permissions).
 - **(B) Trusted backend.** Use this for backend-to-engine calls. The backend holds a **service
-  credential** with `actors.assert`, **bound to one `application_id`**, and names the actor in a
+  credential** with `actors.assert`, **bound to one `tenant_id`**, and names the actor in a
   `Livepeer-Actor` header. The header is honored **only** for that credential, so it is never an
   unchecked request field. Service credentials are never issued to browsers.
 
@@ -270,10 +462,19 @@ Both are generic: no enterprise logic lives in the engine.
 - **Browser:** browsers never hold admin, management or payment credentials. A browser reaches the
   engine through the enterprise backend, or directly with a JWT whose audience is the engine. CORS is
   off by default.
-- **Admin:** admin is a distinct credential kind. The first admin key comes from
-  `lpb bootstrap-admin`, which works only while no active admin key exists, and only when engine API
-  keys are on. There is no network
-  bootstrap route and no static admin token.
+- **Admin:** `clearinghouse_admin` and `tenant_admin` are distinct credential kinds. The first
+  clearinghouse admin key comes from `lpb bootstrap-admin`, which works only while no active
+  clearinghouse admin key exists, and only when engine API keys are on. There is no network
+  bootstrap route and no static admin token. A tenant's first admin key comes from onboarding it, and
+  only a clearinghouse admin issues another. A deployment with a private listener accepts a
+  clearinghouse admin credential there only ([listeners](#listeners)).
+- **Payment keys (#166):** an allocation's key (`lpg_`) is no access key. It is a credential at the
+  signer and nowhere else: as a bearer on any engine route it gets what no credential gets, 401. The
+  engine that runs an actor's jobs holds that actor's key. With self-hosted payments that is the one
+  engine, which keeps it in its `SecretStore` and returns it in no answer. At a standalone clearinghouse
+  it is the enterprise's engine: allotment and rotation hand it the key once, in an answer only that
+  tenant's admin or a clearinghouse admin can get, and the clearinghouse keeps none
+  ([payments.md](payments.md#payment-keys)).
 - **Request fields:** no request field establishes identity. The body's `actor_id` on admin routes
   names a *target* and needs an admin credential.
 
@@ -281,13 +482,15 @@ Both are generic: no enterprise logic lives in the engine.
 
 | Credential | Issued by | Held by | Rotated / revoked by |
 | --- | --- | --- | --- |
-| Caller API key (`lpk_`) | Engine admin (`POST /v1/admin/keys`) | Client or enterprise backend | Engine admin: `rotate` (instant) / `revoke`, see the [example flow](#example-standalone-flow) |
+| Caller API key (`lpk_`) | Engine admin (`POST /v1/keys`) | Client or enterprise backend | Engine admin: `rotate` (instant) / `revoke`, see the [example flow](#example-standalone-flow) |
 | Caller JWT | Enterprise identity provider | Client | Identity provider (expiry) |
 | Service credential (`actors.assert`) | Engine admin | Enterprise backend | Engine admin |
-| Engine admin credential | `lpb bootstrap-admin`, then an admin | Operator | Engine admin |
+| Clearinghouse admin credential | `lpb bootstrap-admin`, then a clearinghouse admin | Operator | Clearinghouse admin |
+| Tenant admin key | Onboarding the tenant (`POST /v1/clearinghouse/tenants`), then a clearinghouse admin (`POST .../tenants/{tenant_id}/keys`, kind `tenant_admin`) | The enterprise app | Clearinghouse admin; never a tenant admin |
+| A tenant's auditor key | That tenant's admin (`POST /v1/clearinghouse/keys`), or a clearinghouse admin (`POST .../tenants/{tenant_id}/keys`) | A dashboard or audit reader | That tenant's admin, or a clearinghouse admin |
 | Batteries management credential | Batteries operator | Engine settings (`LPB_BATTERIES_TOKEN`) | Batteries operator |
-| Batteries operator credential (grant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_OPERATOR_TOKEN`), optional; without it the grant desk is off | Batteries operator |
-| Allocation key (`lpg_`) | Engine, through the Batteries management API | `SecretStore` (a reference in the DB) | Engine: `rotate-key` / `revoke` |
+| Batteries grants credential (tenant desk) | Batteries operator | Engine settings (`LPB_BATTERIES_GRANTS_TOKEN`), optional; without it the tenant desk is off | Batteries operator |
+| Allocation key (`lpg_`) | Engine, through the Batteries management API | Self-hosted payments: the engine's `SecretStore` (a reference in the DB). At a standalone clearinghouse: the enterprise's engine, handed the key once by allotment or rotation; the clearinghouse keeps a receipt and no key (`credential_custody`, [payments.md](payments.md#payment-keys)) | Engine: `rotate-payment-key` / `revoke`, on the tenant admin's command |
 | Signer webhook token; Kafka credentials | Batteries operator | Signer | Batteries operator |
 
 ## Example standalone flow
@@ -298,12 +501,35 @@ same steps run on the dev stack.
 | Step | Call | Answer |
 | --- | --- | --- |
 | 1. First admin key | `lpb bootstrap-admin` (CLI only; refused once an active admin key exists) | `{"key_id", "token": "lpk_...", "note": "shown once; store it now"}` |
-| 2. A key for the user | `POST /v1/admin/keys` `{"kind": "actor", "actor_id": "alice", "label": "alice laptop", "operation_ref": "key-alice-1"}` | `201` `IssuedKey`: the key and its token, **shown once**. Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read`. A repeat of the reference is answered without the token ([below](#repeated-key-commands)) |
-| 3. Fund the user (`per_actor` mode) | `POST /v1/admin/applications/default/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "grant_id": "...", "operation_ref": "provision-alice"}` | `201` `ProvisionedActor`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
+| 2. A key for the user | `POST /v1/keys` `{"kind": "actor", "actor_id": "alice", "tenant_id": "<tenant id>", "label": "alice laptop", "operation_ref": "key-alice-1"}` | `201` `IssuedKey`: the key and its token, **shown once**. `tenant_id` is required, and a field the body does not know is a 422 (#163 review). Permissions default to `discover`, `jobs.run`, `jobs.read`, `costs.read`. A repeat of the reference is answered without the token ([below](#repeated-key-commands)) |
+| 3. Allot to the user | `POST /v1/clearinghouse/tenants/{tenant_id}/actors/alice/allocation` `{"amount": {"amount": "5", "currency": "USD"}, "operation_ref": "allot-alice"}`, where the tenant's id is its grant's id (onboard the tenant first, and issue the user's key with that `tenant_id`) | `201` `ActorAllocation`; the payment key (`lpg_`) goes straight into the `SecretStore` and is never returned |
 | 4. The user works | `POST /v1/jobs` with `Authorization: Bearer lpk_...` | the runner's answer, with `Livepeer-Job-Id` |
-| 5. Inspect the key, and who is provisioned | `GET /v1/admin/keys/{key_id}` (or `GET /v1/admin/keys` for all); `GET /v1/admin/actors` for the provisioned actors | `AccessKey`: kind, actor, application, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
-| 6. Rotate it | `POST /v1/admin/keys/{key_id}/rotate` `{"operation_ref": "rotate-alice-1"}`, optionally with `"label"` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, application and permissions carry over. A revoked or unknown key answers 400 |
-| 7. Revoke it | `POST /v1/admin/keys/{key_id}/revoke` | `204`; the token answers 401 from then on |
+| 5. Inspect the key, and who is allotted | `GET /v1/keys/{key_id}` (or `GET /v1/keys` for all); `GET /v1/clearinghouse/tenants/{tenant_id}/actors` for the allotted actors | `AccessKey`: kind, actor, tenant, permissions, label, created and revoked times. Never the token, which the engine does not keep; never its hash |
+| 6. Rotate it | `POST /v1/keys/{key_id}/rotate` `{"operation_ref": "rotate-alice-1"}`, optionally with `"label"` | `201` `IssuedKey` with a new key ID and token, shown once. The old token answers 401 at once: there is no overlap window. Kind, actor, tenant and permissions carry over. A revoked or unknown key answers 400 |
+| 7. Revoke it | `POST /v1/keys/{key_id}/revoke` | `204`; the token answers 401 from then on |
+
+### A tenant's access keys
+
+A tenant's keys are also in the clearinghouse set (D87, #165), in two forms (D87 point 3, as amended on
+19 November 2026). Its admin and auditor call `GET`, `POST /v1/clearinghouse/keys`,
+`GET .../keys/{key_id}`, `POST .../keys/{key_id}/rotate` and `POST .../keys/{key_id}/revoke`, which name
+no tenant: the tenant is the credential's. A clearinghouse admin calls the same routes under
+`/v1/clearinghouse/tenants/{tenant_id}/keys`, for the tenant it names. They are the commands above with
+the tenant taken from the credential or the path:
+
+- **The body names no tenant** (a `tenant_id` there is a 422) **and takes two kinds:** `auditor` (the
+  default) and `tenant_admin`. An actor's or a service's key belongs to an engine that runs jobs, and
+  is issued under `/v1/keys`.
+- **A tenant admin** issues, lists, inspects, rotates and revokes its tenant's keys that are not admin
+  keys. Issuing, rotating or revoking a `tenant_admin` key is 403 for it, its own key included.
+- **A clearinghouse admin** issues another tenant admin key with kind `tenant_admin`, and revokes one.
+- **A key of another tenant**, named by its id under this tenant's routes, is missing: 404 for the read,
+  400 for a rotate or revoke, as for a key that never existed.
+
+Under `/v1/keys`, where no path names a tenant, a tenant admin is confined the same way: it lists its
+own tenant's keys, a body that names another tenant (or leaves the default, `default`) is 403, another
+tenant's key is missing, and an admin key is 403. A tenant admin key is bound to its tenant when it is
+issued, and rotation carries the tenant over: nothing moves a key to another tenant.
 
 ### Repeated key commands
 
@@ -314,13 +540,17 @@ as it was issued, **`"token": null`** and **`"replayed": true`** (`false` on the
 `Idempotent-Replayed: true`:
 the engine keeps only the token's hash, so it cannot show the token again. An admin who lost it
 rotates the key (under a new reference). The same reference with another request, or on another
-command, is 409 `code: operation_conflict` ([payments.md](payments.md#repeat-safe-commands)). Revoking
+command, is 409 `code: operation_conflict` ([payments.md](payments.md#repeat-safe-commands)). A
+repeated rotation is answered from its record only to a caller its first run would have answered
+(#165 review): repeated under another tenant's path it is `400`, as for a key that tenant never had, and
+repeated by a caller who may not change a key of that kind it is `403`. Neither shows the replacement
+key. Revoking
 a key takes no reference: a repeat cannot revoke twice, and a repeat of one that finished answers as
 the first did (`204`), so a retry after a lost answer is not an error (D61); a key that never existed is
 `400`. `lpb bootstrap-admin` takes none either.
 
 **Audit log.** Each change is one INFO line: `keys.bootstrapped`, `keys.issued`, `keys.rotated` (with
-`replaced_key_id`) and `keys.revoked`, carrying `key_id`, `kind`, `actor_id`, `application_id` and
+`replaced_key_id`) and `keys.revoked`, carrying `key_id`, `kind`, `actor_id`, `tenant_id` and
 `by` (the acting admin's `actor_id`, or `cli`). No log line carries a token, a token hash or a payment
 key (`tests/unit/test_access.py`). A database driver's own DEBUG output echoes the parameters it
 stores, token hashes among them; the engine's logging never turns that on, and a hash is not a

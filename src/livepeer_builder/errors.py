@@ -1,12 +1,12 @@
 """Engine errors. Each maps to one HTTP status in livepeer_builder.http (see docs/contracts/engine.md)."""
 
 from livepeer_builder.contracts import (
+    ActorAllocation,
     AttemptOutcome,
     CallTimings,
     Job,
     OperationRecord,
     PaymentReason,
-    ProvisionedActor,
 )
 
 
@@ -31,7 +31,7 @@ class InvalidRequest(EngineError):
 
 
 class OperationExists(EngineError):
-    """This (application, actor, operation_ref) already dispatched a job with the same request (409).
+    """This (tenant, actor, operation_ref) already dispatched a job with the same request (409).
 
     ``job`` is that job. ``operation`` is set instead when the reference names an admin command (D57,
     ISS-11); such a repeat is answered with the command's result, so only ``OperationInProgress`` carries one.
@@ -58,11 +58,16 @@ class OperationInProgress(OperationExists):
 
 
 class OperationConflict(EngineError):
-    """The operation_ref was reused with a different request body (409). ``job`` or ``operation`` holds it."""
+    """The operation_ref was reused with a different request body (409). ``job`` or ``operation`` holds it.
 
-    def __init__(self, holder: Job | OperationRecord) -> None:
+    Also the answer to an allotment or a payment key rotation that would resume a run the other kind of
+    command began (docs/contracts/payments.md, "Payment keys"): ``message`` then says which command began
+    it."""
+
+    def __init__(self, holder: Job | OperationRecord, message: str | None = None) -> None:
         super().__init__(
-            f"operation_ref {holder.operation_ref!r} was used by {_name(holder)} with another request"
+            message
+            or f"operation_ref {holder.operation_ref!r} was used by {_name(holder)} with another request"
         )
         self.job, self.operation = _held(holder)
 
@@ -84,6 +89,35 @@ class JobFailed(EngineError):
         self.job = job
 
 
+class JobNotFinished(EngineError):
+    """The job has not ended, so it has no result yet (409, ``job_not_finished``, ``Retry-After``; ISS-26).
+    ``job`` is the job as it is now, ``queued`` or ``running``. Ask again later."""
+
+    def __init__(self, job: Job, retry_after_s: int = 1) -> None:
+        super().__init__(f"job {job.id} is {job.state}: it has no result yet")
+        self.job = job
+        self.retry_after_s = retry_after_s
+
+
+class ResultExpired(EngineError):
+    """The job succeeded and the engine no longer holds its result, or never did (410, ``result_expired``;
+    ISS-26): a stored result past its time, or the result of an immediate job, which was returned once
+    and not kept. ``job`` still records the result's size and hash."""
+
+    def __init__(self, job: Job, why: str) -> None:
+        super().__init__(f"the result of job {job.id} is gone: {why}")
+        self.job = job
+
+
+class JobNotQueued(EngineError):
+    """A cancel of a job that is not waiting in the queue (409, ``job_not_queued``; D69): it is running,
+    or it has ended. Only a queued job is cancelled; ``job`` is the job as it is now."""
+
+    def __init__(self, job: Job) -> None:
+        super().__init__(f"job {job.id} is {job.state}: only a queued job can be cancelled")
+        self.job = job
+
+
 class NoCapacity(EngineError):
     """Admission limits refused the job before dispatch (503 with Retry-After)."""
 
@@ -93,23 +127,32 @@ class NoCapacity(EngineError):
 
 
 class NotProvisioned(EngineError):
-    """per_actor mode and this actor has no allocation. Provisioning is always explicit."""
+    """per_actor mode and this actor has no allocation. Allotment is always explicit."""
 
 
-class AlreadyProvisioned(EngineError):
-    """Provisioning an actor that already has an allocation, under a new reference (409; D57). Nothing is
-    applied, the amount included: funding an existing actor is ``fund``."""
+class AlreadyAllotted(EngineError):
+    """Allotting to an actor that already has an allocation, under a new reference (409; D57). Nothing is
+    applied, the amount included: adding to an allocation is ``top_up``."""
 
-    def __init__(self, actor: ProvisionedActor) -> None:
+    def __init__(self, actor: ActorAllocation) -> None:
         super().__init__(
-            f"actor {actor.actor_id!r} is already provisioned (allocation {actor.allocation_id}); "
-            "fund it instead"
+            f"actor {actor.actor_id!r} already has an allocation ({actor.allocation_id}); top it up instead"
         )
         self.actor = actor
 
 
 class ProviderUnavailable(EngineError):
     """The payment provider or its usage feed cannot be reached or is not configured (503)."""
+
+
+class ProviderOutcomeUnknown(ProviderUnavailable):
+    """A command was sent to the payment provider and no answer says whether it was applied (503; D87,
+    #168): the answer was lost, timed out, or was a server error. It may have been applied. Repeat the
+    same request under the same ``operation_ref``: the operation ledger kept the reference, and the
+    provider answers the repeat from its own record. Under a new reference it could apply twice.
+
+    A ``ProviderUnavailable``, so callers that catch that keep working. That one alone says nothing
+    was applied when a clearinghouse raises it."""
 
 
 class ProviderError(EngineError):

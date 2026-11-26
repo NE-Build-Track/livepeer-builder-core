@@ -220,6 +220,21 @@ The docs at the release candidate tag pass the same checks.
   already structured (OpenAPI, the schema); guard completeness elsewhere.
 - **A separate docs repository.** Rejected, because docs and code could no longer share a tag.
 
+## Amended on 18 November 2026
+
+ISS-31 was replaced on 18 November (D82 to D86 in [m4-decisions.md](../m4-decisions.md)). It changes what
+this documentation covers.
+
+- **Both payment configurations** are self-hosted payments and a payment clearinghouse.
+  `docs/guides/payment-operation.md` covers installing each one, and the settings of an enterprise's
+  engine in its `work` role.
+- **The reference Compose projects** for a clearinghouse, self-hosted payments and an enterprise app are
+  part of this task.
+- **`per_application` is gone.** The allocation mode and `LPB_SHARED_ALLOCATION_ID` are removed, so T5
+  closes and the gap in the table above goes with them.
+- **Audiences.** "Operator" in the new guides becomes the clearinghouse admin, the tenant admin or the
+  person who installs, as fits each page.
+
 ## Open questions to lock
 
 - **Q1.** Operator material in `docs/guides/` (recommended, one index) or a new `docs/operations/`?

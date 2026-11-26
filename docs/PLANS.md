@@ -57,9 +57,13 @@ it is met.
 
 ## M4: Reuse and reliability (open)
 
-No exec plan is active yet. The implementation guides are in
-[design-docs/m4-guides/](design-docs/m4-guides/index.md), and what M3 left open is in
-[milestones.md](product-specs/milestones.md#carried-forward-to-m4). Add a plan to `exec-plans/active/`
-when work on a ticket starts.
+The implementation guides are in [design-docs/m4-guides/](design-docs/m4-guides/index.md), and what M3
+left open is in [milestones.md](product-specs/milestones.md#carried-forward-to-m4). Add a plan to
+`exec-plans/active/` when work on a ticket starts.
+
+| Ticket | Plan | Owners |
+| --- | --- | --- |
+| ISS-31 The payment clearinghouse (P1 to P8, #162 to #169) | [active/iss-31-payment-clearinghouse.md](exec-plans/active/iss-31-payment-clearinghouse.md) | Mike |
+| ISS-26 Asynchronous jobs and durable recovery handles | [active/iss-26-async-jobs.md](exec-plans/active/iss-26-async-jobs.md) | John (Mike reviews) |
 
 Nothing closes without Mike's review. Josh reviews engine code.

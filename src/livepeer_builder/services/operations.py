@@ -2,8 +2,11 @@
 
 ``retry_of`` and ``never_reached_a_runner`` are the rules, pure functions with no I/O. ``check_operation``
 and ``claim_operation`` apply them to the ``JobRepo`` before a job is admitted and when it is written.
+``async_repeat`` is the rule for a repeated async submit (D69 (1), ISS-26), which answers with the job
+the reference names; ``check_async_operation`` and ``claim_async_operation`` apply it the same way.
 """
 
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from livepeer_builder.contracts import ActorContext, Attempt, FailureKind, Job
@@ -32,6 +35,20 @@ def retry_of(holder: Job, *, same_request: bool) -> UUID:
     if never_reached_a_runner(holder):
         return holder.id
     raise OperationExists(holder)
+
+
+def async_repeat(holder: Job, *, same_request: bool) -> UUID | None:
+    """The answer to a repeated async submit of the reference ``holder`` holds (D69 (1), ISS-26).
+
+    ``None``: answer with ``holder`` itself, whatever its state. An async job is read back by its id, so
+    the repeat gets the handle it already has, where an immediate repeat is refused because its output
+    was not kept. The id of ``holder`` instead when it failed without ever reaching a runner (D57): a
+    new queued job supersedes it. Raises ``OperationConflict`` for a different request, and for a holder
+    that is not an async job: an immediate and an async request under one reference are two requests.
+    """
+    if not same_request or holder.mode != "async":
+        raise OperationConflict(holder)
+    return holder.id if never_reached_a_runner(holder) else None
 
 
 def never_reached_a_runner(job: Job) -> bool:
@@ -63,7 +80,7 @@ async def check_operation(
 ) -> UUID | None:
     """Before admission: the failed job a new one supersedes, or None for a reference nobody holds.
     Raises as ``retry_of`` does. A fingerprint stored before fingerprints existed matches any request."""
-    found = await store.job_by_operation_ref(actor.application_id, actor.actor_id, operation_ref)
+    found = await store.job_by_operation_ref(actor.tenant_id, actor.actor_id, operation_ref)
     if found is None:
         return None
     existing, existing_fingerprint = found
@@ -86,3 +103,36 @@ async def claim_operation(store: JobRepo, job: Job, fingerprint: str, retrying: 
             holder = taken.job
             retrying = retry_of(holder, same_request=True)
     raise OperationInProgress(holder)  # other requests keep re-dispatching it
+
+
+async def check_async_operation(
+    store: JobRepo, actor: ActorContext, operation_ref: str | None, fingerprint: str
+) -> tuple[Job | None, UUID | None]:
+    """Before an async job is queued (D69 (1)): the job a repeat is answered with, or the failed job a new
+    one supersedes, or neither for a reference nobody holds. Raises as ``async_repeat`` does."""
+    found = None
+    if operation_ref is not None:
+        found = await store.job_by_operation_ref(actor.tenant_id, actor.actor_id, operation_ref)
+    if found is None:
+        return None, None
+    holder, holder_fingerprint = found
+    retrying = async_repeat(holder, same_request=holder_fingerprint in (None, fingerprint))
+    return (None, retrying) if retrying is not None else (holder, None)
+
+
+async def claim_async_operation(write: Callable[..., Awaitable[None]], retrying: UUID | None) -> Job | None:
+    """Write an async job with ``write(retry_of=...)``. ``None`` once it is written. A reference another
+    request took since the check is answered as a repeat: with the job holding it now, unless that one
+    never reached a runner, which the write then supersedes."""
+    for _ in range(CLAIMS):
+        try:
+            await write(retry_of=retrying)
+            return None
+        except OperationExists as taken:  # the store compared fingerprints (OperationConflict)
+            if taken.job is None:  # a JobRepo raises with the job; anything else is not ours to answer
+                raise
+            holder = taken.job
+            retrying = async_repeat(holder, same_request=True)
+            if retrying is None:
+                return holder
+    raise OperationInProgress(holder)  # other requests keep queueing it again

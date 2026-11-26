@@ -17,17 +17,19 @@ from livepeer_builder.adapters.batteries import (
     batteries_http_client,
 )
 from livepeer_builder.adapters.discovery_inventory import read_inventory
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
+from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
 from livepeer_builder.config import EngineSettings
 from livepeer_builder.contracts import Money, SecretRef
 from livepeer_builder.errors import (
     CursorMismatch,
     InvalidRequest,
+    NotFound,
     ProviderError,
     ProviderUnavailable,
 )
 from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FixedClock
+from tests.unit.refusal_forms import carried
 
 
 def mock_client(handler: httpx.MockTransport) -> httpx.AsyncClient:
@@ -57,35 +59,23 @@ async def test_create_key_for_grant_is_one_idempotent_call() -> None:
     assert seen[0].headers["Idempotency-Key"] == "idem-1"
 
 
-async def test_list_grants_keeps_grant_objects_only() -> None:
+async def test_list_grants_reads_each_grant_object_and_refuses_any_other_item() -> None:
+    """A grant list of objects is read. An item that is not an object, or an answer with no ``items``,
+    used to read as fewer grants or none; each is now a provider error (#114, C21)."""
+    grant = {"id": "grant_1", "name": "ops", "status": "active", "currency": "usd", "total_usd": "10"}
+    answers: list[dict[str, object]] = [{"items": [grant]}, {"items": [grant, "skip"]}, {}]
+
     def listed(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={
-                "items": [
-                    {
-                        "id": "grant_1",
-                        "name": "ops",
-                        "status": "active",
-                        "currency": "usd",
-                        "total_usd": "10",
-                    },
-                    "skip",
-                ]
-            },
-        )
+        return httpx.Response(200, json=answers.pop(0))
 
     client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(listed)))
     grants = await client.list_grants()
     assert [(grant.id, grant.name, grant.currency, grant.total) for grant in grants] == [
         ("grant_1", "ops", "USD", "10")
     ]
-
-    def empty(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={})
-
-    client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(empty)))
-    assert await client.list_grants() == []
+    for _ in range(2):
+        with pytest.raises(ProviderError, match="items are not a list of objects"):
+            await client.list_grants()
 
 
 async def test_create_grant_returns_the_response_record() -> None:
@@ -111,7 +101,7 @@ async def test_create_grant_returns_the_response_record() -> None:
     client = BatteriesClient(
         "https://batteries.test", "t", client=mock_client(httpx.MockTransport(missing_id))
     )
-    with pytest.raises(ProviderError, match="missing id") as error:
+    with pytest.raises(ProviderError, match="no usable id") as error:
         await client.create_grant("ops", Money(amount=Decimal("1"), currency="USD"))
     assert error.value.status_code == 200
 
@@ -165,6 +155,8 @@ async def test_a_grant_carries_the_engines_tag_as_batteries_metadata() -> None:
             return httpx.Response(201, json={"id": "grant_9"})
         tagged = {"id": "grant_9", "name": "ops", "metadata": '{"lpb_operation": "abc"}'}
         free_text = {"id": "grant_1", "name": "legacy", "metadata": "set up by hand"}
+        if request.url.path != "/v1/grants":  # the read-back of the one grant
+            return httpx.Response(200, json=tagged)
         return httpx.Response(200, json={"items": [free_text, tagged], "next_cursor": ""})
 
     client = BatteriesClient("https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle)))
@@ -272,11 +264,6 @@ def test_discovery_entries_become_runners() -> None:
 
 
 async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
-    configured = SettingsSecretStore({"shared": "lpg_shared"})
-    assert await configured.get(configured.ref("shared")) == "lpg_shared"
-    with pytest.raises(InvalidRequest):
-        await configured.put("x", "y")
-
     key = generate_secret_key()
     database = EncryptedDbSecretStore(store, key, clock)
     ref = await database.put("lpg/default/alice", "lpg_alice")
@@ -284,33 +271,71 @@ async def test_secret_stores(store: SqlStore, clock: FixedClock) -> None:
     with pytest.raises(InvalidRequest, match="decrypted"):
         await EncryptedDbSecretStore(store, generate_secret_key(), clock).get(ref)
 
-    routing = RoutingSecretStore(configured, database)
-    assert await routing.get(SecretRef(ref="settings:shared")) == "lpg_shared"
-    assert await routing.get(ref) == "lpg_alice"
+    built_in = RoutingSecretStore(database)
+    assert await built_in.get(ref) == "lpg_alice"
     with pytest.raises(InvalidRequest, match="LPB_SECRET_KEY"):
-        await RoutingSecretStore(configured, None).put("x", "y")
+        await RoutingSecretStore(None).put("x", "y")
+    # #112 C2: the optional check allotment asks before the provider is called
+    assert await built_in.writable() and not await RoutingSecretStore(None).writable()
+
+
+async def test_no_secret_comes_from_settings(store: SqlStore, clock: FixedClock) -> None:
+    """The shared payment key was the one secret the built-in store read from settings, under a
+    ``settings:`` reference. It went with per_application (#162): such a reference is unknown."""
+    built_in = RoutingSecretStore(EncryptedDbSecretStore(store, generate_secret_key(), clock))
+    with pytest.raises(NotFound, match="unknown secret reference"):
+        await built_in.get(SecretRef(ref="settings:shared_payment_key"))
 
 
 def test_settings_from_environment() -> None:
     settings = EngineSettings.from_env(
         {
-            "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
-            "LPB_ALLOCATION_MODE": "per_application",
+            "LPB_DEFAULT_CURRENCY": "ETH",
             "LPB_MAX_CONCURRENT_JOBS": "3",
-            "LPB_SHARED_PAYMENT_KEY": "lpg_x",
+            "LPB_BATTERIES_TOKEN": "token_x",
         }
     )
-    assert settings.allocation_mode == "per_application" and settings.max_concurrent_jobs == 3
-    assert settings.shared_payment_key is not None and "lpg_x" not in repr(settings)
+    assert settings.default_currency == "ETH" and settings.max_concurrent_jobs == 3
+    assert settings.batteries_token is not None and "token_x" not in repr(settings)
     assert settings.database_url.startswith("sqlite+aiosqlite:///")  # durable default, never in-memory
-    ignored = EngineSettings.from_env(
-        {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery", "LPB_GRANT_ID": "grant_old"}
-    )
+    ignored = EngineSettings.from_env({"LPB_GRANT_ID": "grant_old"})
     assert "grant_id" not in ignored.model_dump()
 
 
+REMOVED_WITH_PER_APPLICATION = {
+    "LPB_ALLOCATION_MODE": "per_application",
+    "LPB_SHARED_PAYMENT_KEY": "lpg_shared",
+    "LPB_SHARED_ALLOCATION_ID": "alloc_shared",
+}
+
+
+def test_the_allocation_mode_and_shared_key_variables_name_no_setting() -> None:
+    """``per_actor`` is the only allocation mode (D82, #162). An environment that still sets the removed
+    variables starts the same engine as one that does not: no shared key is read, so none can pay."""
+    leftover = EngineSettings.from_env(REMOVED_WITH_PER_APPLICATION)
+    assert leftover == EngineSettings.from_env({})
+    assert "lpg_shared" not in repr(leftover.model_dump())
+
+
+@pytest.mark.parametrize(
+    "name", [variable.removeprefix("LPB_").lower() for variable in REMOVED_WITH_PER_APPLICATION]
+)
+def test_a_removed_payment_setting_given_in_code_is_refused_and_not_echoed(name: str) -> None:
+    """Settings built in code refuse a field they do not have, so an embedder that still passes one
+    learns it when it builds them. The refusal names the field and never repeats its value, in any form
+    an embedder may log: its text, ``errors()``, ``json()`` or its traceback (#162 review; every kind of
+    refusal is in tests/unit/test_settings_refusals.py)."""
+    value = "lpg_shared"
+    given = {name: value}
+    with pytest.raises(ValidationError) as refused:
+        EngineSettings.model_validate(given)  # not the value itself: the traceback quotes this line
+    (error,) = refused.value.errors()
+    assert (error["type"], error["loc"]) == ("extra_forbidden", (name,))
+    assert carried(refused.value, value) == []
+
+
 def test_tuning_values_are_settings_with_todays_defaults() -> None:
-    defaults = EngineSettings(discovery_url="http://127.0.0.1:9/discovery")
+    defaults = EngineSettings()
     assert (defaults.stream_open_grace_s, defaults.batteries_timeout_s, defaults.retention_interval_s) == (
         5.0,
         30.0,
@@ -318,7 +343,6 @@ def test_tuning_values_are_settings_with_todays_defaults() -> None:
     )
     tuned = EngineSettings.from_env(
         {
-            "LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery",
             "LPB_STREAM_OPEN_GRACE_S": "0.5",
             "LPB_BATTERIES_TIMEOUT_S": "7",
             "LPB_RETENTION_INTERVAL_S": "60",
@@ -331,27 +355,24 @@ def test_tuning_values_are_settings_with_todays_defaults() -> None:
     )
     for field in ("stream_open_grace_s", "batteries_timeout_s", "retention_interval_s"):
         with pytest.raises(ValidationError):
-            EngineSettings.model_validate({field: 0, "discovery_url": "http://127.0.0.1:9/discovery"})
+            EngineSettings.model_validate({field: 0})
 
 
 def test_the_paid_attempt_cap_is_an_operator_setting() -> None:
-    assert EngineSettings(discovery_url="http://127.0.0.1:9/discovery").max_paid_attempts == 2  # D55
-    assert (
-        EngineSettings.from_env(
-            {"LPB_DISCOVERY_URL": "http://127.0.0.1:9/discovery", "LPB_MAX_PAID_ATTEMPTS": "3"}
-        ).max_paid_attempts
-        == 3
-    )
+    assert EngineSettings().max_paid_attempts == 2  # D55
+    assert EngineSettings.from_env({"LPB_MAX_PAID_ATTEMPTS": "3"}).max_paid_attempts == 3
     for value in (0, 11):
         with pytest.raises(ValidationError):
-            EngineSettings.model_validate(
-                {"max_paid_attempts": value, "discovery_url": "http://127.0.0.1:9/discovery"}
-            )
+            EngineSettings.model_validate({"max_paid_attempts": value})
 
 
-def test_discovery_url_is_required() -> None:
-    with pytest.raises(ValidationError):
-        EngineSettings()
+def test_discovery_url_is_required_to_start_an_engine_not_to_read_settings() -> None:
+    """#154: settings without it are read. The engine asks for it when it starts (D63)."""
+    settings = EngineSettings()
+    assert settings.discovery_url is None
+    with pytest.raises(ValueError, match="LPB_DISCOVERY_URL is required to start the engine") as refused:
+        settings.require_discovery_url()
+    assert not isinstance(refused.value, ValidationError)
 
 
 @pytest.mark.parametrize(
@@ -464,7 +485,7 @@ async def test_usage_feed_is_unfiltered_by_default() -> None:
 
     def handle(request: httpx.Request) -> httpx.Response:
         seen.append(dict(request.url.params))
-        return httpx.Response(200, json={"items": [], "next_cursor": None})
+        return httpx.Response(200, json={"items": [], "next_cursor": ""})
 
     source = BatteriesUsageSource(
         "https://batteries.test", "t", client=mock_client(httpx.MockTransport(handle))

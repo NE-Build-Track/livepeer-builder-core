@@ -27,7 +27,7 @@ curl -sS -D headers.txt -o result.bin "$ENGINE/v1/jobs" \
   or ask the runner for inline output where it offers one
   ([provider-hosted assets](../contracts/engine.md#provider-hosted-assets)).
 - **Send an `operation_ref`** so a retry after a lost response cannot run the job twice
-  ([idempotency](../contracts/engine.md#idempotency)).
+  ([idempotency](../contracts/engine.md#idempotency)). Send a real one or leave it out: `""` is a 422.
 
 Streaming (`?stream=true` or `Accept: text/event-stream`) is the same job delivered as it arrives
 ([REST streaming](../contracts/engine.md#rest-d37)).
@@ -46,9 +46,30 @@ you received). To check a saved copy, compare its hash:
 sha256sum result.bin    # equals the job's result.sha256
 ```
 
-`GET /v1/jobs/{id}/result` answers 501 until stored results arrive in M4 (ISS-26). Another actor's
-job is 404 ([access.md](../contracts/access.md#answers)). The job's network cost is
+The engine does not keep an immediate job's answer: `GET /v1/jobs/{id}/result` answers 410 for it.
+Another actor's job is 404 ([access.md](../contracts/access.md#answers)). The job's network cost is
 `GET /v1/jobs/{id}/cost` ([payments.md](../contracts/payments.md#cost-classification)).
+
+**A job the engine keeps the answer of** is an async job ([engine.md](../contracts/engine.md#async-jobs)):
+submit it, poll it, then read its result, which the engine stores for `LPB_RETENTION_RESULTS_DAYS`
+(7 by default).
+
+```sh
+curl -sS -D headers.txt "$ENGINE/v1/jobs" -H "Authorization: Bearer $KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"app": "example/echo", "path": "/run", "payload": {"x": 1}, "mode": "async",
+       "operation_ref": "order-1235"}'     # 202 and the queued job; Location names it
+JOB=$(grep -i '^livepeer-job-id:' headers.txt | cut -d' ' -f2 | tr -d '\r')
+curl -sS -i "$ENGINE/v1/jobs/$JOB" -H "Authorization: Bearer $KEY"   # Retry-After: 1 until it ends
+curl -sS -o result.bin "$ENGINE/v1/jobs/$JOB/result" -H "Authorization: Bearer $KEY"
+curl -sS -X POST "$ENGINE/v1/jobs/$JOB/cancel" -H "Authorization: Bearer $KEY"   # while queued
+```
+
+A repeat of the submit with the same `operation_ref` answers 200 with the same job and
+`Idempotent-Replayed: true`, so a submit whose answer was lost is safe to send again. The result route
+answers 409 with `Retry-After` until the job has ended, the job's failure once it failed, and 410 once
+the stored result has expired. It answers the key of the actor the job belongs to and no other: an
+admin's or an auditor's key reads the job (`GET /v1/jobs/{id}`) and gets 404 for its result.
 
 ## 3. Page through your history
 
@@ -59,7 +80,7 @@ curl -sS -G "$ENGINE/v1/jobs" -H "Authorization: Bearer $KEY" \
   --data-urlencode "limit=50" --data-urlencode "before=2026-10-30T12:00:00.123456Z"
 ```
 
-Newest first, your own jobs only; an admin or auditor key lists the application's
+Newest first, your own jobs only; an admin or auditor key lists the tenant's
 ([job history](../contracts/engine.md#job-history)). An empty page is the end.
 
 ## 4. When a job fails

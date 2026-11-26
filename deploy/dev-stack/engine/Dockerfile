@@ -1,6 +1,6 @@
 # Builds the engine from this checkout (context: repository root; see /.dockerignore).
 # CI builds this image and runs `lpb smoke` and a /readyz check in it (job `container`).
-FROM python:3.12.7-slim
+FROM python:3.12.16-slim-bookworm
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .

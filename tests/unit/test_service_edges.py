@@ -10,11 +10,11 @@ import pytest
 from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply, generate_secret_key
 from livepeer_builder.contracts import (
     ActorContext,
-    FundRequest,
+    AllotRequest,
     JobRequest,
     Money,
-    ProvisionRequest,
     SyncCheckpoint,
+    TopUpRequest,
     UsagePage,
 )
 from livepeer_builder.errors import (
@@ -23,7 +23,7 @@ from livepeer_builder.errors import (
     InvalidRequest,
     JobFailed,
     NotFound,
-    NotImplementedInMilestone,
+    ProviderError,
     ProviderUnavailable,
     RunnerCallError,
 )
@@ -47,13 +47,12 @@ def usd(amount: str) -> Money:
     return Money(amount=Decimal(amount), currency="USD")
 
 
-def provision(actor_id: str = "alice", amount: str = "5", grant_id: str = "grant_1") -> ProvisionRequest:
-    return ProvisionRequest(
-        operation_ref=f"provision:default:{actor_id}",
-        application_id="default",
+def allot(actor_id: str = "alice", amount: str = "5") -> AllotRequest:
+    return AllotRequest(
+        operation_ref=f"allot:default:{actor_id}",
+        tenant_id="default",
         actor_id=actor_id,
         amount=usd(amount),
-        grant_id=grant_id,
     )
 
 
@@ -65,21 +64,23 @@ async def test_payments_guard_clauses(
 ) -> None:
     engine = await make_engine()
     with pytest.raises(InvalidRequest, match="must be in USD"):
-        await engine.payments.provision(
+        await engine.payments.allot(
             admin,
-            ProvisionRequest(
-                operation_ref="provision:default:a",
-                application_id="default",
+            AllotRequest(
+                operation_ref="allot:default:a",
+                tenant_id="default",
                 actor_id="a",
                 amount=Money(amount=Decimal(1), currency="ETH"),
             ),
         )
     with pytest.raises(NotFound):
-        await engine.payments.fund(admin, "default", "ghost", FundRequest(amount=usd("1"), operation_ref="x"))
+        await engine.payments.top_up(
+            admin, "default", "ghost", TopUpRequest(amount=usd("1"), operation_ref="x")
+        )
     with pytest.raises(NotFound, match="no allocation"):
         await engine.payments.allowance(alice)
 
-    await engine.payments.provision(admin, provision())
+    await engine.payments.allot(admin, allot())
     paused = await engine.payments.set_status(admin, "default", "alice", "paused")
     assert paused.status == "paused" and manager.allocations[paused.allocation_id].status == "paused"
     with pytest.raises(InvalidRequest, match="use revoke"):
@@ -88,44 +89,37 @@ async def test_payments_guard_clauses(
         await engine.payments.set_status(alice, "default", "alice", "active")
 
 
-async def test_reprovisioning_after_revoke_is_a_new_operation(
+async def test_allotting_again_after_revoke_is_a_new_operation(
     make_engine: EngineFactory, admin: ActorContext, manager: FakeAllocationManager, clock: FixedClock
 ) -> None:
     engine = await make_engine()
-    first = await engine.payments.provision(admin, provision())
+    first = await engine.payments.allot(admin, allot())
     await engine.payments.revoke(admin, "default", "alice")
     clock.advance(1)
-    again = provision().model_copy(update={"operation_ref": "provision:default:alice:again"})  # a new command
-    second = await engine.payments.provision(admin, again)
+    again = allot().model_copy(update={"operation_ref": "allot:default:alice:again"})  # a new command
+    second = await engine.payments.allot(admin, again)
     assert second.allocation_id != first.allocation_id  # not a replay of the revoked allocation
     assert len(manager.allocations) == 2
 
 
-async def test_provisioning_needs_a_provider_and_a_grant(
+async def test_allotment_needs_a_provider_and_the_tenants_grant(
     store: SqlStore, clock: FixedClock, admin: ActorContext
 ) -> None:
     secret_key = generate_secret_key()
-    no_provider = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False, discovery_url="http://127.0.0.1:9/discovery"), supply=EngineSupply(store=store, clock=clock))  # fmt: skip
+    no_provider = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False), supply=EngineSupply(store=store, clock=clock))  # fmt: skip
     with pytest.raises(ProviderUnavailable, match="management API"):
-        await no_provider.payments.provision(admin, provision())
-    no_grant = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False, discovery_url="http://127.0.0.1:9/discovery"), supply=EngineSupply(store=store, clock=clock, allocation_manager=FakeAllocationManager(), grants_manager=FakeAllocationManager()))  # fmt: skip
-    with pytest.raises(InvalidRequest, match="choose a grant"):
-        await no_grant.payments.provision(admin, provision(grant_id=""))
+        await no_provider.payments.allot(admin, allot())
+    no_grant = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", secret_key=secret_key, log_json=False), supply=EngineSupply(store=store, clock=clock, allocation_manager=FakeAllocationManager(), grants_manager=FakeAllocationManager()))  # fmt: skip
+    with pytest.raises(NotFound, match="tenant 'default' has no grant"):  # the provider holds no such grant
+        await no_grant.payments.allot(admin, allot())
     with pytest.raises(ProviderUnavailable, match="management API"):
-        await no_provider.payments.fund_grant(
-            admin, FundRequest(amount=usd("1"), operation_ref="g", grant_id="grant_1")
+        await no_provider.payments.top_up_grant(
+            admin, "default", TopUpRequest(amount=usd("1"), operation_ref="g")
         )
-    with pytest.raises(InvalidRequest, match="choose a grant"):
-        await no_grant.payments.fund_grant(admin, FundRequest(amount=usd("1"), operation_ref="g"))
-
-
-async def test_per_application_without_a_key_is_unpaid(
-    make_engine: EngineFactory, alice: ActorContext
-) -> None:
-    engine = await make_engine(allocation_mode="per_application", shared_allocation_id="alloc_shared")
-    unpaid = await engine.payments.credential(alice)  # off-chain: calls go unpaid
-    assert unpaid.token is None and unpaid.allocation_id is None
-    assert await engine.payments.allocation_for("default", "alice") == "alloc_shared"
+    with pytest.raises(ProviderError, match="404"):
+        await no_grant.payments.top_up_grant(
+            admin, "default", TopUpRequest(amount=usd("1"), operation_ref="g")
+        )
 
 
 # -- costs ---------------------------------------------------------------------------------------------
@@ -149,7 +143,7 @@ async def test_cost_service_guard_clauses(
     with pytest.raises(NotFound, match="no allocation"):
         await engine.costs.reconcile(admin, "default", "nobody")
 
-    await engine.payments.provision(admin, provision())
+    await engine.payments.allot(admin, allot())
     transport.steps = [ScriptedTransport.ok()]
     job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
     with pytest.raises(NotFound):
@@ -157,7 +151,7 @@ async def test_cost_service_guard_clauses(
 
 
 async def test_costs_without_a_provider(store: SqlStore, clock: FixedClock, admin: ActorContext) -> None:
-    engine = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False, discovery_url="http://127.0.0.1:9/discovery"), supply=EngineSupply(store=store, clock=clock))  # fmt: skip
+    engine = await BuilderEngine.create(EngineSettings(database_url="sqlite+aiosqlite:///:memory:", log_json=False), supply=EngineSupply(store=store, clock=clock))  # fmt: skip
     with pytest.raises(ProviderUnavailable, match="no usage source"):
         await engine.costs.sync_once()
     await engine.stop()
@@ -174,7 +168,7 @@ async def test_reconciliation_survives_an_unavailable_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = await make_engine()
-    await engine.payments.provision(admin, provision())
+    await engine.payments.allot(admin, allot())
 
     async def unavailable(_: str) -> object:
         raise ProviderUnavailable("down")
@@ -225,7 +219,7 @@ async def test_discovery_keeps_the_last_good_snapshot(clock: FixedClock) -> None
     await discovery.refresh()
     source.fail = True
     snapshot = await discovery.refresh()
-    assert snapshot.last_error == "signer down" and len(snapshot.runners) == 1
+    assert snapshot.last_error == "unavailable" and len(snapshot.runners) == 1  # a code, not the text (C7)
     (offering,) = discovery.offerings()
     assert offering.runner_count == 1  # still served from the last good snapshot
 
@@ -245,12 +239,12 @@ async def test_job_guard_clauses(
     engine = await make_engine()
     with pytest.raises(InvalidRequest, match="must start with"):
         await engine.jobs.run(alice, JobRequest(app=APP, path="no-slash"))
-    with pytest.raises(NotImplementedInMilestone):
+    with pytest.raises(InvalidRequest, match="async"):  # submit queues an async job (ISS-26); was a 501
         await engine.jobs.submit(alice, JobRequest(app=APP))
     with pytest.raises(NotFound):
         await engine.jobs.get(alice, uuid4())
 
-    await engine.payments.provision(admin, provision())
+    await engine.payments.allot(admin, allot())
     transport.steps = [RunnerCallError("http", "boom", payment_sent=False, status_code=500)]
     with pytest.raises(JobFailed) as failed:
         await engine.jobs.run(alice, JobRequest(app=APP))
@@ -262,7 +256,7 @@ async def test_usage_needs_a_quantity(
     make_engine: EngineFactory, admin: ActorContext, alice: ActorContext, transport: ScriptedStreamTransport
 ) -> None:
     engine = await make_engine()
-    await engine.payments.provision(admin, provision())
+    await engine.payments.allot(admin, allot())
     transport.steps = [ScriptedTransport.ok()]
     job = (await engine.jobs.run(alice, JobRequest(app=APP))).job
     with pytest.raises(InvalidRequest, match="non-negative"):
@@ -277,7 +271,7 @@ async def test_engine_error_mid_call_leaves_the_job_uncertain(
             raise KeyError("bug in a transport")
 
     engine = await make_engine(supply=EngineSupply(transport=Crashing()))
-    await engine.payments.provision(admin, provision())
+    await engine.payments.allot(admin, allot())
     with pytest.raises(KeyError):
         await engine.jobs.run(alice, JobRequest(app=APP))
     (job,) = await store.list_jobs("default", "alice")
@@ -300,7 +294,7 @@ async def test_failure_to_close_a_job_is_logged(
             raise RuntimeError("database gone")
 
     engine = await make_engine(supply=EngineSupply(transport=Crashing(), store=FinishFails(store.engine)))
-    await engine.payments.provision(admin, provision())
+    await engine.payments.allot(admin, allot())
     with caplog.at_level(logging.ERROR), pytest.raises(KeyError):
         await engine.jobs.run(alice, JobRequest(app=APP))
     assert any(getattr(r, "event", "") == "jobs.close_failed" for r in caplog.records)
@@ -312,7 +306,7 @@ async def test_payment_refused_after_signing_is_a_payment_failure(
     engine = await make_engine(
         runners=(runner(url="https://orch.example/r1"), runner(url="https://orch.example/r2"))
     )
-    await engine.payments.provision(admin, provision())
+    await engine.payments.allot(admin, allot())
     transport.steps = [
         RunnerCallError("payment_refused", "late refusal", payment_sent=True, manifest_ids=("m1",))
     ]

@@ -16,10 +16,10 @@ class Superseded(Exception):
     """Another retry superseded the failed job first; the transaction rolls back."""
 
 
-def holder(application_id: str, actor_id: str, operation_ref: str) -> Select[Any]:
+def holder(tenant_id: str, actor_id: str, operation_ref: str) -> Select[Any]:
     """The job holding the reference: the one no retry superseded."""
     return select(t.jobs).where(
-        t.jobs.c.application_id == application_id,
+        t.jobs.c.tenant_id == tenant_id,
         t.jobs.c.actor_id == actor_id,
         t.jobs.c.operation_ref == operation_ref,
         t.jobs.c.superseded_by.is_(None),
@@ -33,7 +33,7 @@ async def supersede(conn: AsyncConnection, failed_id: UUID, retry: Job) -> None:
         update(t.jobs)
         .where(
             t.jobs.c.id == str(failed_id),
-            t.jobs.c.application_id == retry.application_id,
+            t.jobs.c.tenant_id == retry.tenant_id,
             t.jobs.c.actor_id == retry.actor_id,
             t.jobs.c.operation_ref == retry.operation_ref,
             t.jobs.c.state == "failed",
@@ -45,7 +45,9 @@ async def supersede(conn: AsyncConnection, failed_id: UUID, retry: Job) -> None:
         raise Superseded
 
 
-def taken(found: Job, found_fingerprint: str | None, fingerprint: str | None) -> Exception:
+def taken(
+    found: Job, found_fingerprint: str | None, fingerprint: str | None
+) -> OperationConflict | OperationExists:
     """The answer when the reference is held: a conflict for a different request (B2), else a repeat."""
     if found_fingerprint is not None and found_fingerprint != fingerprint:
         return OperationConflict(found)

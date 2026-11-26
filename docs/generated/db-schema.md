@@ -12,31 +12,32 @@ erDiagram
         string token_hash
         string kind
         string actor_id
-        string application_id
+        string tenant_id
         json permissions
         string label
         datetime created_at
         datetime revoked_at
     }
     lpb_actor_sightings {
-        string application_id PK
+        string tenant_id PK
         string actor_id PK
         string name
         datetime first_seen_at
         datetime last_seen_at
     }
     lpb_actors {
-        string application_id PK
+        string tenant_id PK
         string actor_id PK
         string grant_id
         string allocation_id
         string api_key_id
-        string secret_ref
+        text secret_ref
         string currency
         string status
         datetime created_at
         datetime updated_at
         string label
+        string credential_custody
     }
     lpb_attempts {
         string job_id PK
@@ -69,9 +70,23 @@ erDiagram
         datetime updated_at
         integer evidence_version
     }
+    lpb_job_requests {
+        string job_id PK
+        json request
+        largebinary raw_body
+        json actor
+    }
+    lpb_job_results {
+        string job_id PK
+        largebinary content
+        text content_type
+        integer size_bytes
+        string sha256
+        datetime expires_at
+    }
     lpb_jobs {
         string id PK
-        string application_id
+        string tenant_id
         string actor_id
         string operation_ref
         string request_fingerprint
@@ -88,9 +103,12 @@ erDiagram
         integer evidence_version
         string retry_of
         string superseded_by
+        datetime started_at
+        integer claims
+        integer claims_given_back
     }
     lpb_operations {
-        string application_id PK
+        string tenant_id PK
         string actor_id PK
         string operation_ref PK
         string command
@@ -131,10 +149,19 @@ erDiagram
         datetime created_at
         datetime synced_at
     }
+    lpb_usage_set_aside {
+        string id PK
+        string reason
+        string computed_fee_eth
+        string computed_fee_usd
+        datetime set_aside_at
+    }
     lpb_attempts ||--o{ lpb_payment_sessions : "attempt_number, job_id"
     lpb_jobs ||--o{ lpb_attempts : "job_id"
     lpb_jobs ||--o| lpb_cost_projections : "job_id"
-    lpb_actors ||--o{ lpb_jobs : "owns (application_id, actor_id)"
+    lpb_jobs ||--o| lpb_job_requests : "job_id"
+    lpb_jobs ||--o| lpb_job_results : "job_id"
+    lpb_actors ||--o{ lpb_jobs : "owns (tenant_id, actor_id)"
     lpb_actors ||--o| lpb_secrets : "secret_ref"
     lpb_payment_sessions }o--o| lpb_usage_rows : "matched payment_session_id"
     lpb_actors ||--o{ lpb_usage_rows : "allocation_id"
@@ -149,9 +176,9 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | --- | --- | --- | --- |
 | `key_id` | VARCHAR(64) | no | PK |
 | `token_hash` | VARCHAR(64) | no | unique |
-| `kind` | VARCHAR(16) | no |  |
+| `kind` | VARCHAR(32) | no |  |
 | `actor_id` | VARCHAR(200) | no |  |
-| `application_id` | VARCHAR(200) | no |  |
+| `tenant_id` | VARCHAR(200) | no |  |
 | `permissions` | JSON | no |  |
 | `label` | VARCHAR(200) | no |  |
 | `created_at` | DATETIME | no |  |
@@ -161,7 +188,7 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 
 | Column | Type | Null | Key |
 | --- | --- | --- | --- |
-| `application_id` | VARCHAR(200) | no | PK |
+| `tenant_id` | VARCHAR(200) | no | PK |
 | `actor_id` | VARCHAR(200) | no | PK |
 | `name` | VARCHAR(200) | no |  |
 | `first_seen_at` | DATETIME | no |  |
@@ -171,17 +198,18 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 
 | Column | Type | Null | Key |
 | --- | --- | --- | --- |
-| `application_id` | VARCHAR(200) | no | PK |
+| `tenant_id` | VARCHAR(200) | no | PK |
 | `actor_id` | VARCHAR(200) | no | PK |
 | `grant_id` | VARCHAR(200) | no |  |
 | `allocation_id` | VARCHAR(200) | no | unique |
 | `api_key_id` | VARCHAR(200) | no |  |
-| `secret_ref` | VARCHAR(200) | no |  |
+| `secret_ref` | TEXT | no |  |
 | `currency` | VARCHAR(3) | no |  |
 | `status` | VARCHAR(16) | no |  |
 | `created_at` | DATETIME | no |  |
 | `updated_at` | DATETIME | no |  |
 | `label` | VARCHAR(200) | no |  |
+| `credential_custody` | VARCHAR(16) | no |  |
 
 ## `lpb_attempts`
 
@@ -223,12 +251,36 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `updated_at` | DATETIME | no |  |
 | `evidence_version` | INTEGER | no |  |
 
+## `lpb_job_requests`
+
+| Column | Type | Null | Key |
+| --- | --- | --- | --- |
+| `job_id` | VARCHAR(36) | no | PK |
+| `request` | JSON | no |  |
+| `raw_body` | BLOB | yes |  |
+| `actor` | JSON | no |  |
+
+## `lpb_job_results`
+
+| Column | Type | Null | Key |
+| --- | --- | --- | --- |
+| `job_id` | VARCHAR(36) | no | PK |
+| `content` | BLOB | no |  |
+| `content_type` | TEXT | no |  |
+| `size_bytes` | INTEGER | no |  |
+| `sha256` | VARCHAR(64) | no |  |
+| `expires_at` | DATETIME | yes |  |
+
+Indexes:
+
+- `lpb_job_results_expires` (expires_at)
+
 ## `lpb_jobs`
 
 | Column | Type | Null | Key |
 | --- | --- | --- | --- |
 | `id` | VARCHAR(36) | no | PK |
-| `application_id` | VARCHAR(200) | no |  |
+| `tenant_id` | VARCHAR(200) | no |  |
 | `actor_id` | VARCHAR(200) | no |  |
 | `operation_ref` | VARCHAR(200) | yes |  |
 | `request_fingerprint` | VARCHAR(64) | yes |  |
@@ -245,18 +297,21 @@ the cost service (a matched `payment_session_id` joins a session-log entry to us
 | `evidence_version` | INTEGER | no |  |
 | `retry_of` | VARCHAR(36) | yes |  |
 | `superseded_by` | VARCHAR(36) | yes |  |
+| `started_at` | DATETIME | yes |  |
+| `claims` | INTEGER | no |  |
+| `claims_given_back` | INTEGER | no |  |
 
 Indexes:
 
-- `lpb_jobs_operation_ref` (application_id, actor_id, operation_ref) unique
-- `lpb_jobs_owner_created` (application_id, actor_id, created_at)
+- `lpb_jobs_operation_ref` (tenant_id, actor_id, operation_ref) unique
+- `lpb_jobs_owner_created` (tenant_id, actor_id, created_at)
 - `lpb_jobs_state` (state)
 
 ## `lpb_operations`
 
 | Column | Type | Null | Key |
 | --- | --- | --- | --- |
-| `application_id` | VARCHAR(200) | no | PK |
+| `tenant_id` | VARCHAR(200) | no | PK |
 | `actor_id` | VARCHAR(200) | no | PK |
 | `operation_ref` | VARCHAR(200) | no | PK |
 | `command` | VARCHAR(32) | no |  |
@@ -315,3 +370,13 @@ Indexes:
 
 - `lpb_usage_rows_allocation` (allocation_id)
 - `lpb_usage_rows_session` (payment_session_id)
+
+## `lpb_usage_set_aside`
+
+| Column | Type | Null | Key |
+| --- | --- | --- | --- |
+| `id` | VARCHAR(200) | no | PK |
+| `reason` | VARCHAR(64) | no |  |
+| `computed_fee_eth` | VARCHAR(64) | yes |  |
+| `computed_fee_usd` | VARCHAR(64) | yes |  |
+| `set_aside_at` | DATETIME | no |  |

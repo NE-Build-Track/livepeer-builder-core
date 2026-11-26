@@ -15,9 +15,10 @@ from livepeer_builder.contracts import (
     Operation,
     Runner,
 )
-from livepeer_builder.contracts.discovery import ObservedBy
+from livepeer_builder.contracts.discovery import ObservedBy, has_storable_text
 from livepeer_builder.contracts.payments import is_payable, payable_rate, signable
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
+from livepeer_builder.services.failure_codes import source_failure
 
 _LOG = logging.getLogger(__name__)
 # livepeer-node's collectors reject a stamp this far ahead (discovery/shared/inventory.go, ClockSkew).
@@ -26,7 +27,8 @@ _CLOCK_SKEW = timedelta(seconds=30)
 
 
 class MostCapacityFirst:
-    """Default SelectionPolicy: most free capacity first; unknown capacity counts as ready."""
+    """Default SelectionPolicy: most free capacity first; unknown capacity counts as one free slot. A
+    runner advertising zero stays, tried last: the hint can lag, so the engine still asks (#114, C17)."""
 
     def order(self, candidates: Sequence[Runner], request: JobRequest) -> Sequence[Runner]:
         del request
@@ -36,6 +38,29 @@ class MostCapacityFirst:
 def capped_first(runners: tuple[Runner, ...]) -> tuple[Runner, ...]:
     """The policy's order, free runners and those the signer takes a ceiling for first; the rest last."""
     return tuple(sorted(runners, key=lambda runner: not _paid_ready(runner)))  # stable: the policy's order
+
+
+def paid_candidates(runners: Sequence[Runner]) -> list[Runner]:
+    """The runners a job that pays may try (#114, C17): all of them, unless every one advertises zero
+    capacity. livepeer/node before v1.0.7 asks for payment before it looks at capacity, so a full runner's
+    refusal comes after the signer signed and the ticket is charged. From v1.0.7 it looks first, but it
+    reserves no slot, and the engine cannot tell the versions apart. Then only the runners an attempt
+    signs nothing for are left, and none left is the job's ``no_capacity``.
+
+    With any runner that has room, a full one the job would pay stays, on purpose: the hint can lag, and
+    it is the last resort when the others failed. Failover can then reach it and pay for its refusal,
+    and ``capped_first`` can put it ahead of a runner with room whose price the signer does not take."""
+    if any(_is_ready(runner) for runner in runners):
+        return list(runners)
+    return [runner for runner in runners if not _signs_for(runner)]
+
+
+def _signs_for(runner: Runner) -> bool:
+    """A paid attempt on this runner signs a payment: it advertises a price the signer takes a ceiling for.
+    The engine signs for no other runner: a free one is never asked to pay, and a 402 from a runner with
+    any other price, or none, is refused unsigned (D62)."""
+    rate = payable_rate(runner.price_info)
+    return rate is not None and signable(rate.amount, rate.currency, rate.unit)
 
 
 def _paid_ready(runner: Runner) -> bool:
@@ -77,13 +102,31 @@ class DiscoveryService:
         try:
             runners = await self._source.fetch()
         except Exception as exc:  # any source failure keeps the last good snapshot
-            _LOG.warning("discovery failed", extra={"event": "discovery.failed", "error": str(exc)})
-            self._snapshot = self._snapshot.model_copy(
-                update={"last_attempt_at": attempted, "last_error": str(exc)}
+            code = source_failure(exc)  # /readyz shows the code; the text is logged (#113, C7)
+            _LOG.warning(
+                "discovery failed", extra={"event": "discovery.failed", "code": code, "error": str(exc)}
+            )
+            self._snapshot = DiscoverySnapshot(  # built, not copied: a copy would not check the code
+                runners=self._snapshot.runners,
+                observed_at=self._snapshot.observed_at,
+                last_attempt_at=attempted,
+                last_error=code,
             )
             return self._snapshot
+        # The default reader has skipped such a runner already. A supplied source's runner is held to the
+        # same text rule here: one in the snapshot fails the catalog for every application (#114, C12).
+        kept = tuple(runner for runner in runners if has_storable_text(runner))
+        if len(kept) != len(runners):
+            _LOG.warning(
+                "discovery source returned runners whose text cannot be stored",
+                extra={
+                    "event": "discovery.inventory_skipped",
+                    "entries": 0,
+                    "runners": len(runners) - len(kept),
+                },
+            )
         self._snapshot = DiscoverySnapshot(
-            runners=runners, observed_at=attempted, last_attempt_at=attempted, last_error=None
+            runners=kept, observed_at=attempted, last_attempt_at=attempted, last_error=None
         )
         return self._snapshot
 

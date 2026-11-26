@@ -34,7 +34,8 @@ allow = ["grants.fund", "allocations.create", "allocations.fund", "allocations.r
 id = "grant-desk"
 secret = "{grant_desk}"
 [credentials.management]
-allow = ["grants.read", "grants.create"]
+allow = ["grants.read", "grants.create", "grants.fund", "grants.status", "allocations.read",
+         "escrow.read"]
 
 [[credentials]]
 id = "signer"

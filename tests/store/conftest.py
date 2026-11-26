@@ -10,8 +10,9 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import Table, column, table, text
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.sql.expression import TableClause
 
 from livepeer_builder.contracts import Attempt, Job, SignedSession
 from livepeer_builder.testing import FixedClock
@@ -33,11 +34,29 @@ async def database_url(request: pytest.FixtureRequest, tmp_path: Path) -> AsyncI
     yield url
 
 
+# Columns a revision after 0014 added, which neither 0014 nor any revision before it has: 0015 records an
+# actor's credential custody (#186 review), and 0016 an async job's claim (ISS-26).
+ADDED_SINCE_0014 = {
+    "lpb_actors": {"credential_custody"},
+    "lpb_jobs": {"started_at", "claims", "claims_given_back"},
+}
+
+
+def as_before_0014(current: Table) -> TableClause:
+    """``current`` under the column names it had at every revision before 0014, where a tenant was an
+    application (#163), and without the columns added since: for a row a test writes while the database
+    is at one of those revisions."""
+    old = {"tenant_id": "application_id"}
+    added = ADDED_SINCE_0014.get(current.name, set())
+    kept = [c for c in current.columns if c.name not in added]
+    return table(current.name, *(column(old.get(c.name, c.name), c.type) for c in kept))
+
+
 def make_job(
     clock: FixedClock, *, actor: str = "alice", ref: str | None = None, state: str = "succeeded"
 ) -> Job:
     return Job(
-        id=uuid4(), actor_id=actor, application_id="default", operation_ref=ref, mode="immediate", app="a/b",
+        id=uuid4(), actor_id=actor, tenant_id="default", operation_ref=ref, mode="immediate", app="a/b",
         capability="cap", model=None, state=state, attempts=(), failure=None, result=None, usage=None,  # type: ignore[arg-type]
         created_at=clock.now(), completed_at=clock.now() if state != "running" else None,
     )  # fmt: skip

@@ -207,6 +207,19 @@ names it. The enterprise desk is not involved.
 - **Hand the reviewer the team's payer keystore.** Rejected: a secret would leave its custody, and the
   builder-holds-no-crypto outcome would be muddied.
 
+## Amended on 18 November 2026
+
+ISS-31 was replaced on 18 November (D82 to D86 in [m4-decisions.md](../m4-decisions.md)). It changes the
+payment arrangement of the proof.
+
+- **The payment arrangement (Q2).** The reviewer installs an engine in its `work` role and pays through
+  Mike's payment clearinghouse with a tenant admin key. The reviewer is given the clearinghouse's address
+  and its signer's address, and no Batteries management credential: allotment hands the reviewer's engine
+  each actor's payment key, and that engine signs at the signer itself (D85 point 1, as amended on 19
+  November 2026).
+- **Self-hosted payments** are rechecked up to readiness, as before.
+- **The bundle check** also rejects payment keys.
+
 ## Open questions to lock
 
 - **Q1.** Who is the reviewer? Recommended: a person outside the delivery team, named by the H6

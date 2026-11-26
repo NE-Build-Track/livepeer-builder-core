@@ -26,10 +26,10 @@ def started(
     clock: FixedClock, *, ref: str = "op-1", actor: str = "operator", fingerprint: str = "f1"
 ) -> OperationRecord:
     return OperationRecord(
-        application_id="default",
+        tenant_id="default",
         actor_id=actor,
         operation_ref=ref,
-        command="fund",
+        command="top_up",
         fingerprint=fingerprint,
         state="started",
         context={"previous_api_key_id": "key_1"},
@@ -122,7 +122,7 @@ async def test_a_reference_freed_between_the_insert_and_the_read_is_taken_again(
 
 def access_key(clock: FixedClock, key_id: str) -> AccessKey:
     return AccessKey(
-        key_id=key_id, kind="actor", actor_id="alice", application_id="default", permissions=("jobs.run",),
+        key_id=key_id, kind="actor", actor_id="alice", tenant_id="default", permissions=("jobs.run",),
         label="", created_at=clock.now(), revoked_at=None,
     )  # fmt: skip
 

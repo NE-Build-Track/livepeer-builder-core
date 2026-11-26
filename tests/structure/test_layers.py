@@ -54,10 +54,18 @@ CONFINED: dict[str, tuple[str, ...]] = {
     # adapters/signer_failures.py is runner_call's reading of the SDK's signer errors (D58)
     "livepeer_gateway": ("adapters/sdk.py", "adapters/runner_call.py", "adapters/signer_failures.py"),
     "aiohttp": ("adapters/runner_call.py", "adapters/signer_failures.py"),
-    # The discovery reader keeps a runner URL only when aiohttp's parser connects to the host it names.
-    "yarl": ("adapters/discovery_inventory.py",),
+    # The discovery reader keeps a runner URL only when aiohttp's parser connects to the host it names, and
+    # a runner call's address is handed to aiohttp as built, so yarl cannot re-normalize it (#113, C3).
+    "yarl": ("adapters/discovery_inventory.py", "adapters/runner_address.py"),
     # sdk.py fetches /discovery itself so price_usd stays a Decimal (livepeer-python-gateway#88).
-    "httpx": ("adapters/batteries.py", "adapters/jwt.py", "adapters/sdk.py"),
+    # adapters/clearinghouse_wire.py is the one module that calls a payment clearinghouse's routes (#168).
+    "httpx": (
+        "adapters/batteries.py",
+        "adapters/jwt.py",
+        "adapters/sdk.py",
+        "adapters/clearinghouse_wire.py",
+        "adapters/payment_probes.py",  # `lpb payments check`: GET requests only
+    ),
     "jwt": ("adapters/jwt.py",),
     "cryptography": ("adapters/secrets.py",),
     "sqlalchemy": ("store/",),
@@ -138,7 +146,7 @@ def test_layer_edges(path: Path) -> None:
 
 @pytest.mark.parametrize("path", module_files(), ids=lambda p: str(p.relative_to(SRC)))
 def test_third_party_packages_are_confined(path: Path) -> None:
-    relative = str(path.relative_to(SRC))
+    relative = path.relative_to(SRC).as_posix()
     for module, line in imports_of(path):
         package = module.split(".")[0]
         homes = CONFINED.get(package)

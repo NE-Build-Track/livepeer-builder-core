@@ -12,6 +12,10 @@ from livepeer_builder.protocols import Authenticator, KeyRepo
 from livepeer_builder.utils import token_hash
 
 API_KEY_PREFIX = "lpk_"
+# The longest bearer any authenticator is shown (#113, C22). A fixed constant, not a setting: an engine key
+# is 47 characters and an identity provider's access token a few kilobytes, while parsing a longer one
+# only costs the engine (a deeply nested JWT segment made json.loads raise RecursionError).
+MAX_BEARER_LENGTH = 16 * 1024
 
 
 class ApiKeyAuthenticator:
@@ -30,7 +34,7 @@ class ApiKeyAuthenticator:
             raise NotAuthenticated("unknown or revoked key")
         return ActorContext(
             actor_id=key.actor_id,
-            application_id=key.application_id,
+            tenant_id=key.tenant_id,
             permissions=frozenset(key.permissions),
             credential_kind=key.kind,
             auth=AuthProvenance(method="api_key", credential_id=key.key_id),
@@ -41,12 +45,21 @@ class ApiKeyAuthenticator:
 
 
 class AuthenticatorChain:
-    """Runs authenticators in order. The first ActorContext wins; NotAuthenticated stops the chain."""
+    """Runs authenticators in order. The first ActorContext wins; NotAuthenticated stops the chain.
+
+    A bearer longer than ``MAX_BEARER_LENGTH`` is refused first, so no authenticator sees it: the API-key
+    path and a deployment's own authenticators included. The cap is on the whole ``Authorization`` header
+    (the credential and ``Bearer ``), whatever its scheme and however it is spelled: a supplied
+    authenticator may read as a bearer what the engine's own ``bearer_token`` does not.
+    """
 
     def __init__(self, authenticators: Sequence[Authenticator]) -> None:
         self._authenticators = tuple(authenticators)
 
     async def authenticate(self, request: AuthRequest) -> ActorContext | None:
+        header = request.header("authorization")
+        if header is not None and len(header) > MAX_BEARER_LENGTH + len("Bearer "):
+            raise NotAuthenticated("the Authorization header's credential is longer than 16 KiB")
         for authenticator in self._authenticators:
             actor = await authenticator.authenticate(request)
             if actor is not None:

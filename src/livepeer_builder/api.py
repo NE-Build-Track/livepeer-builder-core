@@ -1,18 +1,26 @@
-"""What the engine offers: the consumer-facing surface, as Protocols split by role.
+"""What the engine offers: the consumer-facing surface, as Protocols.
 
 ``protocols`` holds what the engine *needs* (ports it calls). This module holds what it *offers*
 (what applications and the HTTP layer call). ``BuilderEngine`` satisfies these structurally, and so
 does ``livepeer_builder.testing.FakeEngine`` for the actor API.
 
+The engine has two halves (D84), and the facade follows them:
+
 - ``ActorApi``: what an application calls on behalf of its actors (its users), plus the engine's
   lifecycle. Type against this when you only run jobs.
-- ``AdminApi``: operator work (provisioning, grants, keys, reconciliation).
-- ``EngineApi``: both, plus authentication and the M4 placeholders. ``http/`` is typed against it.
+- ``WorkApi``: the work half. The actor API, and what an admin of the engine does there: its own
+  access keys, reconciliation and cost sync. The work routes are typed against it.
+- ``ClearinghouseApi``: the clearinghouse half: tenants and their grants, allotment and top-ups, and
+  a tenant's access keys. The routes under ``/v1/clearinghouse`` are typed against it.
+- ``EngineApi``: both halves, and the role that says which of them a deployment serves (``LPB_ROLE``).
+  ``create_app`` is typed against it.
 
 Optional capabilities are ``X | None`` members, decided once at construction: ``jobs.streaming``
-(the transport can stream), ``keys`` (engine API keys are on), ``payments.grants`` (the grant desk is
-on). Check for ``None`` before use; never probe with ``hasattr``. Members are read-only properties so
-``EngineApi`` can narrow a member it combines.
+(the transport can stream), ``keys`` (engine API keys are on), ``payments.tenants`` (the tenant desk
+is on), ``payments.usage`` (the usage source reads one tenant's records), ``payments.wallet`` (the grants
+manager reports the escrow and the transport can ask the signer), ``runner_list`` (the discovery source
+holds the document it read). Check for ``None`` before use; never probe with ``hasattr``. Members
+are read-only properties so a wider protocol can narrow a member it combines.
 """
 
 from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
@@ -23,14 +31,16 @@ from uuid import UUID
 
 from livepeer_builder.contracts import (
     AccessKey,
+    ActorAllocation,
     ActorContext,
+    AllocationRead,
     AllocationStatus,
+    AllotRequest,
     Allowance,
     CostSummary,
     CredentialKind,
+    DeliveredAllocation,
     EngineHealth,
-    FundRequest,
-    GrantRecord,
     IssuedKey,
     Job,
     JobCost,
@@ -39,11 +49,17 @@ from livepeer_builder.contracts import (
     KnownActor,
     Money,
     Offering,
-    ProvisionedActor,
-    ProvisionRequest,
+    OnboardedTenant,
     Reconciliation,
+    Role,
     Runner,
     SyncReport,
+    TenantGrant,
+    TenantState,
+    TenantStatus,
+    TopUpRequest,
+    UsagePage,
+    WalletReport,
 )
 from livepeer_builder.protocols import Authenticator, EventFeed, SessionManager
 
@@ -90,11 +106,13 @@ class StreamingApi(Protocol):
 
 class JobsApi(Protocol):
     async def run(self, actor: ActorContext, request: JobRequest) -> JobResult: ...
+    async def submit(self, actor: ActorContext, request: JobRequest) -> Job: ...
     async def get(self, actor: ActorContext, job_id: UUID) -> Job: ...
     async def list_jobs(
         self, actor: ActorContext, *, limit: int = 50, before: datetime | None = None
     ) -> Sequence[Job]: ...
     async def result(self, actor: ActorContext, job_id: UUID) -> JobResult: ...
+    async def cancel(self, actor: ActorContext, job_id: UUID) -> Job: ...
     async def report_usage(self, actor: ActorContext, job_id: UUID, quantities: Mapping[str, int]) -> Job: ...
     @property
     def streaming(self) -> StreamingApi | None: ...
@@ -137,49 +155,13 @@ class ActorApi(Protocol):
     async def stop(self) -> None: ...
 
 
-# -- administration --------------------------------------------------------------------------------
-
-
-class GrantsApi(Protocol):
-    """The grant desk: present only with a grants manager (``LPB_BATTERIES_OPERATOR_TOKEN``)."""
-
-    async def list_grants(self, admin: ActorContext) -> list[GrantRecord]: ...
-    async def create_grant(
-        self, admin: ActorContext, name: str, amount: Money, *, operation_ref: str
-    ) -> GrantRecord: ...
-
-
-class PaymentsAdminApi(Protocol):
-    async def provision(self, admin: ActorContext, request: ProvisionRequest) -> ProvisionedActor: ...
-    async def fund(
-        self, admin: ActorContext, application_id: str, actor_id: str, request: FundRequest
-    ) -> ProvisionedActor: ...
-    async def set_status(
-        self, admin: ActorContext, application_id: str, actor_id: str, status: AllocationStatus
-    ) -> ProvisionedActor: ...
-    async def rotate_key(
-        self, admin: ActorContext, application_id: str, actor_id: str, operation_ref: str
-    ) -> ProvisionedActor: ...
-    async def revoke(self, admin: ActorContext, application_id: str, actor_id: str) -> ProvisionedActor: ...
-    async def fund_grant(self, admin: ActorContext, request: FundRequest) -> None: ...
-    async def list_actors(
-        self,
-        admin: ActorContext,
-        *,
-        application_id: str | None = None,
-        status: AllocationStatus | None = None,
-        provisioned: bool | None = None,
-        limit: int = 500,
-    ) -> list[KnownActor]: ...
-    async def get_actor(
-        self, admin: ActorContext, application_id: str, actor_id: str
-    ) -> ProvisionedActor: ...
-    @property
-    def grants(self) -> GrantsApi | None: ...
+# -- the work half ---------------------------------------------------------------------------------
 
 
 class KeysApi(Protocol):
-    """Engine API keys: present only when they are on (``api_keys`` is not ``None``)."""
+    """Engine API keys: present only when they are on (``api_keys`` is not ``None``). ``tenant_id`` on
+    ``get``, ``rotate`` and ``revoke`` is the tenant a route named: a key of another tenant is then
+    missing. Without it the key is found by its id alone, as the engine's own ``/v1/keys`` does."""
 
     async def issue(
         self,
@@ -187,37 +169,154 @@ class KeysApi(Protocol):
         *,
         kind: CredentialKind,
         actor_id: str,
-        application_id: str = "default",
+        tenant_id: str = "default",
         permissions: Iterable[str] | None = None,
         label: str = "",
         operation_ref: str,
     ) -> IssuedKey: ...
-    async def list_keys(self, admin: ActorContext, application_id: str | None = None) -> list[AccessKey]: ...
-    async def get(self, admin: ActorContext, key_id: str) -> AccessKey: ...
+    async def list_keys(self, admin: ActorContext, tenant_id: str | None = None) -> list[AccessKey]: ...
+    async def get(self, admin: ActorContext, key_id: str, tenant_id: str | None = None) -> AccessKey: ...
     async def rotate(
-        self, admin: ActorContext, key_id: str, *, label: str | None = None, operation_ref: str
+        self,
+        admin: ActorContext,
+        key_id: str,
+        *,
+        label: str | None = None,
+        operation_ref: str,
+        tenant_id: str | None = None,
     ) -> IssuedKey: ...
-    async def revoke(self, admin: ActorContext, key_id: str) -> None: ...
+    async def revoke(self, admin: ActorContext, key_id: str, tenant_id: str | None = None) -> None: ...
     async def bootstrap_admin(self, label: str = "bootstrap") -> IssuedKey: ...
 
 
 class CostsAdminApi(Protocol):
     async def recent(self, actor: ActorContext, limit: int = 25) -> list[JobCost]: ...
     async def reconcile(
-        self, admin: ActorContext, application_id: str, actor_id: str | None
+        self, admin: ActorContext, tenant_id: str, actor_id: str | None, allocation_id: str | None = None
     ) -> Reconciliation: ...
     async def sync_now(self, admin: ActorContext) -> SyncReport: ...
 
 
-class AdminApi(Protocol):
-    """Operator work: provisioning and funding, the grant desk, keys, reconciliation."""
+class EngineCostsApi(CostsApi, CostsAdminApi, Protocol):
+    pass
+
+
+class WorkApi(ActorApi, Protocol):
+    """The work half: jobs, runners, streaming and the cost of each job, with the engine's own access
+    keys, reconciliation and cost sync. Of payments it offers the allowance read alone."""
+
+    @property
+    def costs(self) -> EngineCostsApi: ...
+    @property
+    def keys(self) -> KeysApi | None: ...
+    @property
+    def authenticator(self) -> Authenticator: ...
+    @property
+    def events(self) -> EventFeed: ...
+    @property
+    def sessions(self) -> SessionManager: ...
+
+
+# -- the clearinghouse half ------------------------------------------------------------------------
+
+
+class TenantsApi(Protocol):
+    """The tenant desk: present only with a grants manager (``LPB_BATTERIES_GRANTS_TOKEN``). A tenant's
+    id is its grant's id (D83)."""
+
+    async def onboard(
+        self,
+        admin: ActorContext,
+        name: str,
+        amount: Money,
+        *,
+        operation_ref: str,
+        admin_actor_id: str = "tenant-admin",
+    ) -> OnboardedTenant: ...
+    async def list_tenants(self, admin: ActorContext) -> list[TenantGrant]: ...
+    async def grant(self, admin: ActorContext, tenant_id: str) -> TenantGrant: ...
+    async def set_status(
+        self, admin: ActorContext, tenant_id: str, status: TenantStatus, *, operation_ref: str
+    ) -> TenantState: ...
+
+
+class TenantUsageApi(Protocol):
+    """A tenant's payment records: present only with a usage source that reads one tenant's
+    (``TenantUsageSource``, as the Batteries source does)."""
+
+    async def page(
+        self, reader: ActorContext, tenant_id: str, cursor: str | None = None, limit: int = 1000
+    ) -> UsagePage: ...
+
+
+class WalletApi(Protocol):
+    """The wallet report: present only when the grants manager reports the escrow (``EscrowSource``) and
+    the runner transport can ask the signer (``SignerProbe``), as the packaged ones do."""
+
+    async def report(self, admin: ActorContext) -> WalletReport: ...
+
+
+class PaymentsAdminApi(Protocol):
+    async def allot_for_delivery(self, admin: ActorContext, request: AllotRequest) -> DeliveredAllocation: ...
+
+    async def rotate_for_delivery(
+        self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str
+    ) -> DeliveredAllocation: ...
+
+    async def allot(self, admin: ActorContext, request: AllotRequest) -> ActorAllocation: ...
+    async def top_up(
+        self, admin: ActorContext, tenant_id: str, actor_id: str, request: TopUpRequest
+    ) -> ActorAllocation: ...
+    async def set_status(
+        self, admin: ActorContext, tenant_id: str, actor_id: str, status: AllocationStatus
+    ) -> ActorAllocation: ...
+    async def rotate_payment_key(
+        self, admin: ActorContext, tenant_id: str, actor_id: str, operation_ref: str
+    ) -> ActorAllocation: ...
+    async def revoke(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ActorAllocation: ...
+    async def top_up_grant(self, admin: ActorContext, tenant_id: str, request: TopUpRequest) -> None: ...
+    async def list_actors(
+        self,
+        admin: ActorContext,
+        *,
+        tenant_id: str | None = None,
+        status: AllocationStatus | None = None,
+        allotted: bool | None = None,
+        limit: int = 500,
+    ) -> list[KnownActor]: ...
+    async def get_actor(self, admin: ActorContext, tenant_id: str, actor_id: str) -> ActorAllocation: ...
+    async def get_allocation(self, admin: ActorContext, tenant_id: str, actor_id: str) -> AllocationRead: ...
+    @property
+    def tenants(self) -> TenantsApi | None: ...
+    @property
+    def usage(self) -> TenantUsageApi | None: ...
+    @property
+    def wallet(self) -> WalletApi | None: ...
+
+
+class RunnerListApi(Protocol):
+    """The clearinghouse's runner list: present only when the discovery source holds the livepeer/node
+    document it read (``DiscoveryDocumentSource``, as the HTTP reader does)."""
+
+    def document(self, reader: ActorContext) -> bytes | None: ...
+
+
+class ClearinghouseApi(Protocol):
+    """The clearinghouse half: tenants and their grants, allotment and top-ups, a tenant's access keys
+    and usage, and the runner list it publishes. It runs no job. Like the work half, it authenticates
+    its callers, reports health and has the engine's lifecycle."""
 
     @property
     def payments(self) -> PaymentsAdminApi: ...
     @property
     def keys(self) -> KeysApi | None: ...
     @property
-    def costs(self) -> CostsAdminApi: ...
+    def runner_list(self) -> RunnerListApi | None: ...
+    @property
+    def authenticator(self) -> Authenticator: ...
+    def health(self) -> EngineHealth: ...
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
 
 
 # -- the whole engine ------------------------------------------------------------------------------
@@ -227,39 +326,35 @@ class PaymentsApi(AllowanceApi, PaymentsAdminApi, Protocol):
     pass
 
 
-class EngineCostsApi(CostsApi, CostsAdminApi, Protocol):
-    pass
+class EngineApi(WorkApi, ClearinghouseApi, Protocol):
+    """The whole engine, both halves, as ``create_app`` uses it. ``role`` says which half a deployment
+    serves (``LPB_ROLE``, #169): ``create_app`` mounts the routes of that role and no other. Every member
+    is there in every role; an engine in its ``clearinghouse`` role refuses to run a job."""
 
-
-class EngineApi(ActorApi, AdminApi, Protocol):
-    """The whole engine, as the HTTP layer uses it."""
-
+    @property
+    def role(self) -> Role: ...
     @property
     def payments(self) -> PaymentsApi: ...
-    @property
-    def costs(self) -> EngineCostsApi: ...
-    @property
-    def authenticator(self) -> Authenticator: ...
-    @property
-    def events(self) -> EventFeed: ...
-    @property
-    def sessions(self) -> SessionManager: ...
 
 
 __all__ = [
     "ActorApi",
-    "AdminApi",
     "AllowanceApi",
+    "ClearinghouseApi",
     "CostsAdminApi",
     "CostsApi",
     "DiscoveryApi",
     "EngineApi",
     "EngineCostsApi",
-    "GrantsApi",
     "JobStreamApi",
     "JobsApi",
     "KeysApi",
     "PaymentsAdminApi",
     "PaymentsApi",
+    "RunnerListApi",
     "StreamingApi",
+    "TenantUsageApi",
+    "TenantsApi",
+    "WalletApi",
+    "WorkApi",
 ]

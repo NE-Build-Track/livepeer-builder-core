@@ -14,12 +14,18 @@ from pydantic import BaseModel
 from livepeer_builder import protocols
 from livepeer_builder.adapters.auth import ApiKeyAuthenticator, AuthenticatorChain
 from livepeer_builder.adapters.batteries import BatteriesClient, BatteriesUsageSource
+from livepeer_builder.adapters.clearinghouse import (
+    ClearinghouseAllocations,
+    ClearinghouseAllowances,
+    ClearinghouseUsage,
+)
 from livepeer_builder.adapters.clock import SystemClock
 from livepeer_builder.adapters.jwt import JwtBearerAuthenticator
 from livepeer_builder.adapters.runner_call import SdkRunnerStream
 from livepeer_builder.adapters.sdk import HttpDiscoverySource, SdkRunnerTransport
-from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore, SettingsSecretStore
+from livepeer_builder.adapters.secrets import EncryptedDbSecretStore, RoutingSecretStore
 from livepeer_builder.contracts import (
+    ActorAllocation,
     ActorContext,
     Allowance,
     Attempt,
@@ -38,7 +44,6 @@ from livepeer_builder.contracts import (
     ObservedRate,
     Offering,
     PriceInfo,
-    ProvisionedActor,
     ResourceRef,
     ResultRef,
     Runner,
@@ -57,19 +62,32 @@ from livepeer_builder.store.maintenance import SqlMaintenance
 DEFAULTS: dict[str, tuple[type, ...]] = {
     "Authenticator": (ApiKeyAuthenticator, AuthenticatorChain, JwtBearerAuthenticator),
     "AccessPolicy": (DefaultPolicy,),
-    "SecretStore": (RoutingSecretStore, SettingsSecretStore, EncryptedDbSecretStore),
+    "SecretStore": (RoutingSecretStore, EncryptedDbSecretStore),
+    "WritableSecretStore": (RoutingSecretStore,),
     "DiscoverySource": (HttpDiscoverySource,),
+    "DiscoveryDocumentSource": (HttpDiscoverySource,),
     "SelectionPolicy": (MostCapacityFirst,),
     "RunnerTransport": (SdkRunnerTransport,),
     "StreamingRunnerTransport": (SdkRunnerTransport,),
+    "BoundedRunnerTransport": (SdkRunnerTransport,),
     "RunnerStream": (SdkRunnerStream,),
     "CredentialResolver": (PaymentsService,),
-    "AllocationManager": (BatteriesClient,),
-    "UsageSource": (BatteriesUsageSource,),
-    "AllowanceReader": (PaymentsService,),
+    "AllocationManager": (BatteriesClient, ClearinghouseAllocations),
+    "AllocationsByActor": (ClearinghouseAllocations,),
+    "OneKeyPerAllocation": (ClearinghouseAllocations,),
+    "ReadyBeforeCommands": (ClearinghouseAllocations,),
+    "UsageSource": (BatteriesUsageSource, ClearinghouseUsage),
+    "TenantUsageSource": (BatteriesUsageSource,),
+    "EscrowSource": (BatteriesClient,),
+    "SignerProbe": (SdkRunnerTransport,),
+    "AllowanceReader": (PaymentsService, ClearinghouseAllowances),
     "EngineStore": (SqlStore,),
     "StoreMaintenance": (SqlMaintenance,),
+    "ActorCommandRepo": (SqlStore,),
+    "UsageOnceRepo": (SqlStore,),
+    "UsageSetAsideRepo": (SqlStore,),
     "CostSnapshot": (SqlCostSnapshot,),
+    "AllocationCostSnapshot": (SqlCostSnapshot,),
     "Clock": (SystemClock,),
     "EventFeed": (ReservedEventFeed,),
     "SessionManager": (ReservedSessions,),
@@ -82,7 +100,7 @@ CONTRACTS: tuple[type[BaseModel], ...] = (
     JobRequest, Job, Attempt, Failure, ResultRef, MeasuredUsage, JobResult,
     Runner, RunnerGPU, PriceInfo, NetworkRate, ObservedRate, Offering,
     JobCost, AttemptCost, Fees,
-    ProvisionedActor, SecretRef, Allowance, Money,
+    ActorAllocation, SecretRef, Allowance, Money,
 )  # fmt: skip
 
 
@@ -92,7 +110,7 @@ def protocol_classes() -> dict[str, type]:
         for name, obj in vars(protocols).items()
         if inspect.isclass(obj)
         and getattr(obj, "_is_protocol", False)
-        and obj.__module__ == protocols.__name__
+        and obj.__module__.startswith(protocols.__name__)  # the package: its submodules re-export here
     }
 
 

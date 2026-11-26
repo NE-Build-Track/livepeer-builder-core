@@ -17,7 +17,6 @@ from livepeer_builder.services.discovery import DiscoveryService
 from livepeer_builder.services.policy import DefaultPolicy
 from livepeer_builder.testing import FixedClock, make_engine
 
-_URL = "http://127.0.0.1:9/discovery"
 _STAMP = "2026-10-22T18:05:00.123+01:00"
 
 
@@ -409,10 +408,8 @@ async def test_an_offering_is_available_only_in_a_currency_and_unit_the_signer_t
 
 
 async def test_lpb_rate_max_age_s_sets_the_max_age(clock: FixedClock) -> None:
-    assert EngineSettings.from_env({"LPB_DISCOVERY_URL": _URL}).rate_max_age_s == 600
-    assert (
-        EngineSettings.from_env({"LPB_DISCOVERY_URL": _URL, "LPB_RATE_MAX_AGE_S": "60"}).rate_max_age_s == 60
-    )
+    assert EngineSettings.from_env({}).rate_max_age_s == 600
+    assert EngineSettings.from_env({"LPB_RATE_MAX_AGE_S": "60"}).rate_max_age_s == 60
     stamped = priced("10", clock.now() - timedelta(seconds=61))
     async with make_engine(runners=[stamped], supply=EngineSupply(clock=clock), rate_max_age_s=60) as engine:
         (offering,) = engine.discovery.offerings()

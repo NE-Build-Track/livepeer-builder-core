@@ -20,7 +20,10 @@ class Operation(StrEnum):
     ADMIN_KEYS = "admin.keys"
     ADMIN_ALLOCATIONS = "admin.allocations"
     ADMIN_COSTS = "admin.costs"
-    ADMIN_READ = "admin.read"  # admin reads of one application: keys, actors, reconciliation (D46)
+    ADMIN_READ = "admin.read"  # admin reads of one tenant: keys, actors, reconciliation (D46)
+    # What only a clearinghouse admin does to a tenant: onboard it, list every tenant, top up its grant,
+    # pause or resume it (D83, #165). A tenant admin divides its grant and never enlarges it.
+    ADMIN_TENANTS = "admin.tenants"
     ACTORS_ASSERT = "actors.assert"
 
 
@@ -28,7 +31,23 @@ DEFAULT_ACTOR_PERMISSIONS: frozenset[str] = frozenset(
     {Operation.DISCOVER, Operation.JOBS_RUN, Operation.JOBS_READ, Operation.COSTS_READ}
 )
 
-CredentialKind = Literal["actor", "admin", "auditor", "service"]  # auditor: a read-only admin (D46)
+# Scopes an ordinary token carries: an admin scope must be none of these, or every user is an admin (D47).
+RESERVED_SCOPES = frozenset(
+    {"openid", "profile", "email", "address", "phone", "offline_access"}
+    | {operation.value for operation in Operation}
+)
+
+
+def reserved_scope(scope: str, prefix: str) -> bool:
+    """A scope ordinary tokens carry, as written or once the scope prefix is removed (#50 review):
+    with LPB_JWT_SCOPE_PREFIX=api:, api:jobs.run is the jobs.run every builder holds. The settings
+    refuse one as an admin scope (``config.py``)."""
+    return scope in RESERVED_SCOPES or (bool(prefix) and scope.removeprefix(prefix) in RESERVED_SCOPES)
+
+
+# clearinghouse_admin: an admin of every tenant. tenant_admin: an admin of one tenant, its own (D83, #165).
+# auditor: a read-only admin of one tenant (D46)
+CredentialKind = Literal["actor", "clearinghouse_admin", "tenant_admin", "auditor", "service"]
 
 
 class AuthProvenance(Contract):
@@ -43,7 +62,7 @@ class ActorContext(Contract):
     """The only identity the core sees. Built by an Authenticator, or in-process by an importing app."""
 
     actor_id: str = Field(min_length=1)
-    application_id: str = Field(default="default", min_length=1)
+    tenant_id: str = Field(default="default", min_length=1)
     permissions: frozenset[str] = frozenset()
     credential_kind: CredentialKind = "actor"
     attributes: dict[str, str] = Field(default_factory=dict)  # copied onto records; never secrets
@@ -68,10 +87,13 @@ class AuthRequest(Contract):
 class ResourceRef(Contract):
     """What an operation touches, so a policy can check ownership."""
 
-    kind: Literal["job", "actor", "allocation", "key", "costs"]
-    application_id: str
+    kind: Literal["job", "actor", "allocation", "key", "costs", "tenant"]
+    tenant_id: str
     owner_actor_id: str | None = None
     id: str | None = None
+    # For a key: the kind of the key being issued, rotated or revoked, so a policy can refuse a tenant
+    # admin an admin key (#165). ``None`` when the operation names a tenant's keys and no one key.
+    credential_kind: CredentialKind | None = None
 
 
 class AccessKey(Contract):
@@ -80,7 +102,7 @@ class AccessKey(Contract):
     key_id: str
     kind: CredentialKind
     actor_id: str
-    application_id: str
+    tenant_id: str
     permissions: tuple[str, ...]
     label: str
     created_at: datetime

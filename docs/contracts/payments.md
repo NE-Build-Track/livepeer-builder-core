@@ -792,7 +792,17 @@ left unfinished; a replay of a finished command is not a resume.
   answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
   be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
   `null` there was recorded as the text `"None"` in a finished command (allotment answered 201 with
-  `allocation_id: "None"`), and an answer that lacked the key answered 500. An allocation's `allocated`,
+  `allocation_id: "None"`), and an answer that lacked the key answered 500. Each of those values must
+  also be Unicode text: one with a lone surrogate is the same `ProviderError` (#158), so no such id is
+  put in the path of a later call, the read-back of a new grant included.
+  **An id the engine keeps** has to fit its records as well: a new key's `allocation_id` and `id`, and
+  the `id` of a tenant's grant, are each at most 200 characters, with no NUL. A key or a grant with any
+  other id is the same `ProviderError` ("an allocation id the engine cannot store"), whoever answered it:
+  Batteries, a payment clearinghouse or a supplied `AllocationManager`. It is raised before anything is
+  stored, on SQLite and on PostgreSQL alike: no secret, nothing noted in the command's record, no actor
+  and no tenant admin key. The provider has applied the command by then (a key funded, a grant
+  created), so this is an unknown outcome, never a refusal: 502, the reference stays held, and a resume
+  that is answered the same id is refused the same way. The id is not quoted. An allocation's `allocated`,
   `spent` and `available` amounts are each `null` in the `Allowance` where the answer states none
   (`null`, `""`, `"[error]"`) or the engine reads none: unknown, never zero. One stated as `NaN` or
   `Infinity` is the same `ProviderError` ("no usable `available_usd`"), as a grant's total is (#158):
@@ -1371,6 +1381,7 @@ What the engine does depends on what the answer carries:
 | No key, `replayed: true`, and the engine's own record of the actor names the allocation and the key of the answer, with the secret in its store | The manager returns the engine's own copy: the engine was handed that key before. The engine's own rotation does not come this far, since its resume asks for no key (below); a caller of the port alone does |
 | No key, `replayed: true`, otherwise | Refused, `InvalidRequest` (400). Nothing is stored, and no actor record is saved or changed. The message says what replaces the key (below) |
 | No key and no `replayed`: the clearinghouse's routes are mounted to keep each key with its own engine | `ProviderError`, an answer the engine cannot use and no refusal: the allocation exists there, and the reference stays held |
+| A key whose `allocation_id` or `api_key_id` the engine's records cannot keep (more than 200 characters, a NUL) | The same `ProviderError`, before the key is stored: nothing reaches the engine's secret store or its record of the actor, and the reference stays held ([repeat-safe commands](#repeat-safe-commands), #158) |
 
 **A key that never arrived.** A clearinghouse that finished a command answers its repeat without the
 key, so a lost answer loses the key: nobody holds it. A lost key is replaced by a rotation (D87 point 1).

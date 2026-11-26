@@ -43,6 +43,7 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.allocation_delivery import DeliverySecrets
+from livepeer_builder.services.grants import stored_id
 from livepeer_builder.services.ledger import RunningOperation, TakenOver
 
 BEGAN_ON = "allocation_id"  # in a rotation's record: the allocation the actor held when it began
@@ -118,7 +119,12 @@ class PaymentKeys:
 
         A resume is the kind of command that began the record (``resumes``), so the custody recorded with
         the reference is its own. A resume that delivers holds the secret the provider replayed under
-        the recorded receipt, so its answer carries the key the first run never answered with."""
+        the recorded receipt, so its answer carries the key the first run never answered with.
+
+        A key whose allocation id or key id the engine's records cannot keep is refused first
+        (``stored_id``): no secret is stored, the record notes nothing and no actor is written."""
+        stored_id(key.allocation_id, "an allocation id")
+        stored_id(key.api_key_id, "a key id")
         if "new_secret_ref" in run.context and run.context.get("new_secret_key_id") == key.api_key_id:
             recorded = recorded_secret(run)
             self._redeliver(recorded, key)

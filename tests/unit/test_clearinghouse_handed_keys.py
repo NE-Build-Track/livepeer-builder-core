@@ -27,6 +27,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
 
+import httpx
 import pytest
 from sqlalchemy import select
 
@@ -942,3 +943,40 @@ async def test_a_clearinghouse_that_keeps_the_keys_itself_is_an_answer_the_engin
         assert await ports.engine.store.get_actor(ports.tenant_id, "alice") is None
         held = await record_of(ports, "allot-alice")
         assert held is not None and held.state == "started"
+
+
+# -- a clearinghouse that hands over a key with an id the engine cannot keep -------------------------------
+
+
+@pytest.mark.parametrize("field", ["allocation_id", "api_key_id"])
+@pytest.mark.parametrize("unkept", ["x" * 201, "a\x00b"], ids=["201 characters", "a NUL"])
+async def test_a_handed_key_with_an_id_the_engine_cannot_keep_is_an_answer_it_cannot_use(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch, field: str, unkept: str
+) -> None:
+    """#158: the allotment's answer names the allocation or its key by an id the engine's 200-character
+    columns cannot keep: more than 200 characters, or with a NUL. PostgreSQL refused the actor's row
+    after the key was handed over and stored, and SQLite kept the id. The engine now takes no such key:
+    nothing reaches its secret store or its record of the actor. The allotment happened at the
+    clearinghouse, so this is no refusal and frees no reference."""
+    assert ports.transport is not None and ports.secrets is not None
+    carried = ports.transport.handle_async_request
+
+    async def naming_it_otherwise(request: httpx.Request) -> httpx.Response:
+        response = await carried(request)
+        if request.method != "POST" or not request.url.path.endswith(ALLOCATION):
+            return response
+        said = json.loads(await response.aread()) | {field: unkept}
+        return httpx.Response(response.status_code, content=json.dumps(said).encode(), request=request)
+
+    monkeypatch.setattr(ports.transport, "handle_async_request", naming_it_otherwise)
+    with pytest.raises(ProviderError) as unusable:
+        await allot(ports)
+
+    assert not definite_refusal(unusable.value) and unkept not in str(unusable.value)
+    assert "the engine cannot store" in unusable.value.message
+    assert ports.secrets.values == {}
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") is None
+    held = await record_of(ports, "allot-alice")
+    assert held is not None and held.state == "started"
+    assert not [name for name in held.context if name.startswith("new_secret")]  # nothing noted
+    assert len(ports.provider.allocations) == 1  # allotted there, and its key is live there

@@ -1,6 +1,7 @@
 """Grants at the payment provider: the idempotency keys the engine sends Batteries, the tag that finds
-a grant the engine created (D57), the provider call that allots an allocation from a grant, and the
-allocation manager a command about one actor is sent to.
+a grant the engine created (D57), the provider call that allots an allocation from a grant, the
+allocation manager a command about one actor is sent to, and the check of an id the provider answered
+with before the engine keeps it.
 
 A grant is a tenant's prepaid budget, and its id is the tenant's id (D83). ``tenants.py`` holds what an
 admin does to a tenant; ``payments.py`` allots and tops up one actor's allocation from the grant.
@@ -10,6 +11,7 @@ import base64
 import hashlib
 
 from livepeer_builder.contracts import AllotRequest, GrantRecord, NewAllocationKey
+from livepeer_builder.contracts.costs import storable_text
 from livepeer_builder.errors import NotFound, ProviderError
 from livepeer_builder.protocols import AllocationManager, AllocationsByActor, ReadyBeforeCommands
 from livepeer_builder.services.ledger import RunningOperation
@@ -22,6 +24,26 @@ def idempotency_key(engine_id: str, operation: str, step: str) -> str:
     """base64url(sha256(engine_id:operation:step)): 43 chars, inside Batteries' 256-char limit."""
     digest = hashlib.sha256(f"{engine_id}:{operation}:{step}".encode()).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+def stored_id(value: str, what: str) -> str:
+    """An id the payment provider answered with, when the engine's records keep it: at most 200
+    characters (``store.schema.ID``), with no NUL and no lone surrogate. PostgreSQL refuses any other
+    when the row is written, and SQLite takes all but the surrogate. So it is refused here, before
+    anything is stored, on both, whatever the ``AllocationManager``: Batteries, a payment clearinghouse
+    or a supplied one.
+
+    The provider has applied the command by then (a key funded, a grant created), so this is no
+    refusal. It is a ``ProviderError`` with a 2xx, as for any answer the engine cannot use: HTTP 502,
+    and an unknown outcome to the operation ledger, which keeps the reference. ``what`` names the id,
+    and the id itself is not quoted."""
+    if not storable_text(value):
+        raise ProviderError(
+            200,
+            f"the payment provider answered with {what} the engine cannot store: more than 200 "
+            "characters, or with a NUL or a lone surrogate",
+        )
+    return value
 
 
 async def manager_for_command(

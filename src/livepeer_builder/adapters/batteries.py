@@ -402,9 +402,10 @@ def _amount(item: dict[str, Any], name: str) -> Decimal:
 def _required(body: dict[str, Any], key: str) -> str:
     """A value the answer has to carry: a non-empty string, as Batteries serves every id and a new key's
     secret. Anything else, a missing key included, is an answer the engine cannot read (#114, C21): a
-    ``ProviderError`` that is no refusal and quotes no value."""
+    ``ProviderError`` that is no refusal and quotes no value. So is a string with a lone surrogate
+    (#158): it is no Unicode text, and no URL path, secret store or database takes it."""
     value = body.get(key)
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value or value.encode("utf-8", "ignore").decode() != value:
         raise ProviderError(200, f"Batteries answered with no usable {key}")
     return value
 

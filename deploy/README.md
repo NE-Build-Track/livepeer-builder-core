@@ -176,7 +176,14 @@ LIVE_JOB='{"app":"<live app from offerings>","path":"<path>","payload":{},"timeo
 ch()  { docker compose -f "$D/clearinghouse/compose.yaml" "$@"; }   # the clearinghouse project
 ent() { docker compose -f "$D/enterprise/compose.yaml" "$@"; }      # the enterprise project
 CS=$D/clearinghouse/secrets ES=$D/enterprise/secrets
-PUBLIC=http://127.0.0.1:8180 SIGNER=http://127.0.0.1:8137 WORK=http://127.0.0.1:8280
+ES2=$ES/two                           # the second enterprise's keys: git-ignored, as secrets/ is
+ent2() {  # the enterprise project again, as tenant two (step 3): another name, so its own volume
+  LPB_CLEARINGHOUSE_TOKEN=$(cat $CS/tenant-two-key 2>/dev/null) \
+  LPB_CLEARINGHOUSE_TENANT_ID=$(cat $CS/tenant-two-id 2>/dev/null) \
+  LPB_SECRET_KEY=$(cat $ES2/secret-key 2>/dev/null) ENTERPRISE_PORT=8281 \
+    docker compose -p lpb-enterprise-two -f "$D/enterprise/compose.yaml" "$@"
+}
+PUBLIC=http://127.0.0.1:8180 SIGNER=http://127.0.0.1:8137 WORK=http://127.0.0.1:8280 WORK2=http://127.0.0.1:8281
 OWN=/v1/clearinghouse                 # a tenant's own routes, on the public listener: they name no tenant
 TENANTS=/v1/clearinghouse/tenants     # the clearinghouse admin's, on the private listener: they name one
 
@@ -208,14 +215,15 @@ ledger from that run would also list its old grants as tenants. Remove them, whi
 touches nothing on-chain:
 
 ```sh
-ent down -v 2>/dev/null; ch down -v 2>/dev/null     # stops both projects and removes their volumes
-docker volume rm lpb-enterprise_engine-data lpb-clearinghouse_engine-data lpb-clearinghouse_paid-state 2>/dev/null
-docker volume ls --format '{{.Name}}' | grep -E '^lpb-(clearinghouse|enterprise)_' || echo "no volumes left"
+ent2 down -v 2>/dev/null; ent down -v 2>/dev/null; ch down -v 2>/dev/null   # stops the projects and removes their volumes
+docker volume rm lpb-enterprise-two_engine-data lpb-enterprise_engine-data \
+  lpb-clearinghouse_engine-data lpb-clearinghouse_paid-state 2>/dev/null
+docker volume ls --format '{{.Name}}' | grep -E '^lpb-(clearinghouse|enterprise(-two)?)_' || echo "no volumes left"
 ```
 
 Check: the last line prints `no volumes left`. The second line is for a project whose `.env` is gone,
-which `down` cannot read; it removes the same three volumes by name, and says nothing when they are
-already gone. If a volume is still listed, a container of an earlier run still holds it:
+which `down` cannot read, and for the second enterprise, whose settings are files of an earlier run;
+it removes the same four volumes by name, and says nothing when they are already gone. If a volume is still listed, a container of an earlier run still holds it:
 `docker ps -a --filter name=lpb-` shows it, and `docker rm -f` removes it.
 
 Then the files `clearinghouse/` needs. If `clearinghouse/.env`, `clearinghouse/secrets/` and
@@ -351,17 +359,14 @@ Costs nothing. Check:
   says `work_engine`. The read of the allocation carries no key.
 
 **A second enterprise, as tenant two.** The same project runs once more under another name, with
-tenant two's key and id, a secret key of its own and another port. Compose reads a variable set in the
-shell before the one in `.env`, so nothing of tenant one's project changes:
+tenant two's key and id, a secret key of its own and another port: `ent2`, defined in step 0, which
+reads the three from files. Compose reads a variable set in the shell before the one in `.env`, so
+nothing of tenant one's project changes:
 
 ```sh
-ES2=$D/enterprise/secrets/two WORK2=http://127.0.0.1:8281   # git-ignored, as secrets/ is
-mkdir -p $ES2 && python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())' > $ES2/secret-key
-ent2() {  # the enterprise project again, as tenant two, with its own volume
-  LPB_CLEARINGHOUSE_TOKEN=$(cat $CS/tenant-two-key) LPB_CLEARINGHOUSE_TENANT_ID=$TWO \
-  LPB_SECRET_KEY=$(cat $ES2/secret-key) ENTERPRISE_PORT=8281 \
-    docker compose -p lpb-enterprise-two -f "$D/enterprise/compose.yaml" "$@"
-}
+mkdir -p $ES2
+[ -s $ES2/secret-key ] ||   # a key from an earlier start stays: the engine's stored keys are under it
+  python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())' > $ES2/secret-key
 ent2 up -d
 ent2 exec -T engine lpb payments check                      # role work; exit 0; its tenant is tenant two's grant
 ent2 exec -T engine lpb bootstrap-admin | jq -r '.token // empty' | keep $ES2/admin-key
@@ -521,6 +526,6 @@ ch down
 ```
 
 `down` keeps the named volumes: the clearinghouse's ledger and both engines' records, which are the
-evidence. To remove them as well, once the evidence is written down: `ent down -v` and `ch down -v`,
-then delete each project's `.env` and `secrets/`. Start the stacks that were stopped in step 0 again
+evidence. To remove them as well, once the evidence is written down: `ent2 down -v`, `ent down -v` and
+`ch down -v`, then delete each project's `.env` and `secrets/`. Start the stacks that were stopped in step 0 again
 only after the clearinghouse's signer is down.

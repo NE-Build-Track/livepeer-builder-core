@@ -85,7 +85,7 @@ them.
 | Reconciliation for each actor on its own engine | pass | `balanced` on both |
 | Tenant two's other actor, allotted by the direct call | pass | `spent` 0 of $0.25 |
 | The tenant list, on the private listener | pass | tenant one `spent` $0.000555, tenant two `spent` $0.000277 |
-| The wallet report after the jobs | pass | unspent grants $1.099167 over 2 grants: $1.10 granted, less what the two tenants spent |
+| The wallet report after the jobs | pass | `signer.ready` true; unspent grants $1.099167 over 2 grants, which is each grant's unallocated balance and what its allocations still hold. The two spends above are rounded: unrounded they are $0.00055546 and $0.00027723, and $1.10 less both is that figure |
 | All three engines' `lpb payments check` after the jobs | pass | exit 0 on each |
 
 ## One tenant cannot reach another
@@ -147,9 +147,10 @@ into its signer.
   tenant's own grant.
 - **An engine in its `work` role issues an access key that names any tenant id.** Engine two's admin
   issued a key for an actor under tenant one's id. That key's job was refused with 402,
-  `not_provisioned`, and no payment: the engine has no allocation for it, and an allotment by that
-  engine is made with its own tenant admin key, so the clearinghouse allots in tenant two whatever id
-  the engine's record names. Nothing of tenant one was read or charged.
+  `not_provisioned`, and no payment, because the engine holds no allocation for that actor. The key
+  gives no reach into tenant one. The clearinghouse takes the tenant from the engine's tenant admin
+  key, and `enterprise/allot.py` sends the engine's own tenant id, `LPB_CLEARINGHOUSE_TENANT_ID`, and
+  not the id an access key names. Nothing of tenant one was read or charged.
 - **The dev stack's discovery could not read the clearinghouse project's orchestrator list.** The run
   gave the dev stack the same git-ignored list the clearinghouse project uses, bound from that project's
   folder. The file's mode is 0600 and the dev stack's discovery does not run as root, so it stopped at

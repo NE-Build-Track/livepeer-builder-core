@@ -251,6 +251,51 @@ async def test_a_paying_job_tries_a_priced_zero_capacity_runner_after_a_priced_r
     assert [attempt.payment_sent for attempt in result.job.attempts] == [False, True]
 
 
+# One runner the job pays has room, so every runner stays a candidate (#158; Mike, 26 November 2026).
+ROOM_AND_NONE = (
+    runner_record("unpayable", capacity_available=5, price_info=USD_PER_HOUR),
+    full_and_priced("zero"),
+    runner_record("roomy", capacity_available=1, price_info=PRICED),
+)
+
+
+async def test_a_paying_job_tries_a_priced_zero_capacity_runner_before_one_whose_price_the_signer_refuses() -> (
+    None
+):
+    """The order when any runner has room: the runners the job pays, most room first and the one that
+    advertises zero last, then a runner whose price the signer does not take, however much room it
+    advertises. The
+    attempt on the runner advertising zero goes out with the job's payment key and is a paid one."""
+    transport = ScriptedTransport(steps=[refusal(), ScriptedTransport.ok()])
+    async with engine_offering(answer(*ROOM_AND_NONE), transport) as engine:
+        result = await engine.jobs.run(ALICE, REQUEST)
+    assert (result.job.state, called(transport)) == ("succeeded", ["roomy", "zero"])
+    assert [attempt.payment_sent for attempt in result.job.attempts] == [False, True]
+    assert all(key is not None for _, key in transport.calls)  # each call carried the payment key
+
+    every_refusal = ScriptedTransport(steps=[refusal(), refusal(), refusal()])
+    async with engine_offering(answer(*ROOM_AND_NONE), every_refusal) as engine:
+        with pytest.raises(JobFailed):
+            await engine.jobs.run(ALICE, REQUEST)
+    assert called(every_refusal) == ["roomy", "zero", "unpayable"]
+
+
+async def test_a_paying_job_tries_a_free_runner_with_room_before_a_priced_one_that_advertises_zero() -> None:
+    """A free runner is asked for no payment and is ordered with the runners the job pays, so its room
+    puts it ahead of the priced runner that advertises zero. Only a runner whose price the signer does
+    not take, here one that advertises none, goes behind that runner, whatever room it advertises."""
+    every_refusal = ScriptedTransport(steps=[refusal(), refusal(), refusal()])
+    inventory = answer(
+        runner_record("unpriced", capacity_available=5),
+        full_and_priced("zero"),
+        runner_record("free", capacity_available=1, price_info=FREE),
+    )
+    async with engine_offering(inventory, every_refusal) as engine:
+        with pytest.raises(JobFailed):
+            await engine.jobs.run(ALICE, REQUEST)
+    assert called(every_refusal) == ["free", "zero", "unpriced"]
+
+
 class RoomOnly:
     """An operator's SelectionPolicy that drops runners advertising no room."""
 

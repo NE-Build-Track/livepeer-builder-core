@@ -138,7 +138,7 @@ Each third-party package is confined to one module so a dependency change has on
 | --- | --- |
 | `livepeer_gateway` | `adapters/sdk.py`, `adapters/runner_call.py`, `adapters/signer_failures.py` |
 | `aiohttp` | `adapters/runner_call.py`, `adapters/signer_failures.py` |
-| `yarl` | `adapters/discovery_inventory.py`, `adapters/runner_address.py` |
+| `yarl` | `contracts/discovery.py` (the one rule for a URL the engine can call, which the discovery reader and the discovery service both ask, #158), `adapters/runner_address.py` |
 | `httpx` | `adapters/batteries.py`, `adapters/jwt.py`, `adapters/sdk.py`, `adapters/clearinghouse_wire.py` (the one module that calls a payment clearinghouse's routes, #168) and `adapters/payment_probes.py` (`lpb payments check`, GET requests only). `adapters/batteries_usage_rows.py`, which reads one Batteries usage item, and `adapters/clearinghouse.py`, the remote adapters, with `adapters/clearinghouse_tenant.py`, which holds them to the engine's own tenant (#165), hold no client |
 | `jwt` (PyJWT) | `adapters/jwt.py` |
 | `cryptography` | `adapters/secrets.py` |

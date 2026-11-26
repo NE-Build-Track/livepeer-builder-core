@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime, timedelta
 
 from livepeer_builder.contracts import (
@@ -15,7 +15,7 @@ from livepeer_builder.contracts import (
     Operation,
     Runner,
 )
-from livepeer_builder.contracts.discovery import ObservedBy, has_storable_text
+from livepeer_builder.contracts.discovery import ObservedBy, UnreadableInventory, is_kept
 from livepeer_builder.contracts.payments import is_payable, payable_rate, signable
 from livepeer_builder.protocols import AccessPolicy, Clock, DiscoverySource
 from livepeer_builder.services.failure_codes import source_failure
@@ -69,6 +69,52 @@ def _paid_ready(runner: Runner) -> bool:
     return rate is not None and (rate.amount == 0 or signable(rate.amount, rate.currency, rate.unit))
 
 
+class NotRunners(TypeError):
+    """What a source returned is not runners (#158): no collection of ``Runner`` objects. A supplied
+    source builds its answer itself, so the engine checks it where it takes it. The refresh fails as
+    it does when the source raises, and the last good snapshot stays. The text names the type that
+    came and quotes nothing of it."""
+
+
+def _runners(answer: object) -> tuple[Runner, ...]:
+    """A source's answer as the runners it holds, or ``NotRunners``. A tuple or a list is what a source
+    returns; any other sized collection of runners reads the same. Text, bytes and a mapping are none,
+    empty ones included: they would read as an empty inventory and replace the snapshot."""
+    if isinstance(answer, str | bytes | bytearray | Mapping) or not isinstance(answer, Collection):
+        raise NotRunners(f"discovery source returned {_kind(answer)}, not a list of runners")
+    items = tuple(answer)
+    strangers = [item for item in items if not isinstance(item, Runner)]
+    if strangers:
+        raise NotRunners(
+            f"discovery source returned {len(strangers)} of {len(items)} items that are not runners; "
+            f"the first is {_kind(strangers[0])}"
+        )
+    return items
+
+
+def _kind(value: object) -> str:
+    return "None" if value is None else f"a {type(value).__name__}"
+
+
+def _kept(runners: tuple[Runner, ...]) -> tuple[Runner, ...]:
+    """The runners of a source's answer that the engine keeps (``is_kept``, #158): the reader's rules
+    for a runner's text, URLs and ``app``, asked of every source. The built-in reader has skipped such a
+    runner already; one a supplied source built is skipped here, and counted as the reader counts its
+    own. With runners in the answer and none kept, it is an answer the engine could not read, as the
+    reader's is (#114, C28): ``UnreadableInventory``, so the refresh fails and the snapshot stays. An
+    answer with no runner in it is an empty inventory."""
+    kept = tuple(runner for runner in runners if is_kept(runner))
+    skipped = len(runners) - len(kept)
+    if skipped:
+        _LOG.warning(
+            "discovery source returned runners the engine does not keep",
+            extra={"event": "discovery.inventory_skipped", "entries": 0, "runners": skipped},
+        )
+        if not kept:
+            raise UnreadableInventory(0, skipped)
+    return kept
+
+
 class DiscoveryService:
     def __init__(
         self,
@@ -100,8 +146,9 @@ class DiscoveryService:
     async def refresh(self) -> DiscoverySnapshot:
         attempted = self._clock.now()
         try:
-            runners = await self._source.fetch()
-        except Exception as exc:  # any source failure keeps the last good snapshot
+            kept = _kept(_runners(await self._source.fetch()))
+        except Exception as exc:  # any failure keeps the last good snapshot: an answer that is not
+            # runners (NotRunners), or one whose runners were all skipped (UnreadableInventory), too
             code = source_failure(exc)  # /readyz shows the code; the text is logged (#113, C7)
             _LOG.warning(
                 "discovery failed", extra={"event": "discovery.failed", "code": code, "error": str(exc)}
@@ -113,18 +160,6 @@ class DiscoveryService:
                 last_error=code,
             )
             return self._snapshot
-        # The default reader has skipped such a runner already. A supplied source's runner is held to the
-        # same text rule here: one in the snapshot fails the catalog for every application (#114, C12).
-        kept = tuple(runner for runner in runners if has_storable_text(runner))
-        if len(kept) != len(runners):
-            _LOG.warning(
-                "discovery source returned runners whose text cannot be stored",
-                extra={
-                    "event": "discovery.inventory_skipped",
-                    "entries": 0,
-                    "runners": len(runners) - len(kept),
-                },
-            )
         self._snapshot = DiscoverySnapshot(
             runners=kept, observed_at=attempted, last_attempt_at=attempted, last_error=None
         )

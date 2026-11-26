@@ -824,7 +824,11 @@ left unfinished; a replay of a finished command is not a resume.
   holds the provider key its earlier run recorded: that allocation is this command's (the provider key
   is derived from the actor, so another reference may have had the same key replayed). Otherwise, a
   resume that never got that far or an actor revoked and allotted again under another reference,
-  it is refused the same way and the reference is freed. A second allotment after a revoke is a new
+  it is refused the same way and the reference is freed. A secret its earlier run stored is deleted
+  before that refusal (#158): the actor points at another command's copy, and once the reference is
+  freed no record names this one. A reference the actor itself holds is kept, as a supplied store may
+  issue one reference for an actor's name. When the delete fails the command is not refused yet: the
+  record stays `started`, and a repeat deletes it. A second allotment after a revoke is a new
   command: it needs a new reference.
 - **Onboarding a tenant** is two steps on one record: create the grant, then issue the tenant's first
   admin key.

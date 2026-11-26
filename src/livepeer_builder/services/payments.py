@@ -210,6 +210,7 @@ class PaymentsService:
             # Otherwise it is another reference's, or a second allotment after a revoke under a new key, and
             # this amount would be silently dropped.
             if run.context.get("new_secret_key_id") != existing.api_key_id:
+                await keys.refused(run, existing)
                 raise AlreadyAllotted(existing)
             # An earlier run wrote the actor and its answer was lost. A delivering resume sends that run's
             # provider call again, under the idempotency key it recorded: Batteries replays the original

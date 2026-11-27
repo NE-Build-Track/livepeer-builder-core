@@ -23,7 +23,7 @@ from uuid import UUID
 import pytest
 from livepeer_gateway import remote_signer
 
-from livepeer_builder.contracts import AllotRequest, JobCost, JobRequest, TopUpRequest, UsageRow
+from livepeer_builder.contracts import AllotRequest, Allowance, JobCost, JobRequest, TopUpRequest, UsageRow
 from livepeer_builder.errors import (
     AccessDenied,
     AlreadyAllotted,
@@ -191,6 +191,58 @@ async def test_two_status_commands_at_the_same_moment_leave_the_records_agreeing
         held = await ports.clearinghouse.store.get_actor(ports.tenant_id, "alice")
         assert held is not None and held.status == overtaking
     assert (second.status, late.status) == (overtaking, overtaking)
+
+
+@pytest.mark.parametrize("other", ["revoke", "active"])
+async def test_a_command_that_finished_while_a_status_read_back_was_on_its_way_is_in_the_answer(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch, other: str
+) -> None:
+    """#158: a pause has stored ``paused`` and reads the provider back. The provider answers ``paused``,
+    and before the engine sees that answer a revoke, or an activate, runs to its end. The pause
+    answered with its own write: 200 and the paused actor, for a row that said ``revoked`` or
+    ``active``. It answers from the row as stored when it ends: 404 after the revoke, ``active`` after
+    the activate. The read that is on its way is the engine's own: the provider's answer to it directly,
+    and through a clearinghouse the second read of the provider after the status was set (the first is
+    the clearinghouse's own read-back)."""
+    allocation_id = await allotted(ports)
+    payments = ports.engine.payments
+    own_read = 1 if ports.side == "local" else 2
+    set_status, read = ports.provider.set_allocation_status, ports.provider.read_allocation
+    reads: list[str] = []
+    watching = False
+
+    async def finishes() -> None:
+        if other == "revoke":
+            await payments.revoke(ports.admin, ports.tenant_id, "alice")
+        else:
+            await payments.set_status(ports.admin, ports.tenant_id, "alice", "active")
+
+    async def taken(allocation: str, status: str) -> None:
+        nonlocal watching
+        await set_status(allocation, status)
+        watching = watching or status == "paused"
+
+    async def answered(allocation: str) -> Allowance:
+        allowance = await read(allocation)
+        if watching and len(reads) < own_read:
+            reads.append(allowance.status)
+            if len(reads) == own_read:
+                await finishes()
+        return allowance
+
+    monkeypatch.setattr(ports.provider, "set_allocation_status", taken)
+    monkeypatch.setattr(ports.provider, "read_allocation", answered)
+
+    if other == "revoke":
+        with pytest.raises(NotFound):
+            await payments.set_status(ports.admin, ports.tenant_id, "alice", "paused")
+    else:
+        answer = await payments.set_status(ports.admin, ports.tenant_id, "alice", "paused")
+        assert answer == await ports.engine.store.get_actor(ports.tenant_id, "alice")
+    assert reads == ["paused"] * own_read
+    stored = await ports.engine.store.get_actor(ports.tenant_id, "alice")
+    assert stored is not None and stored.status == ("revoked" if other == "revoke" else "active")
+    assert ports.provider.allocations[allocation_id].status == stored.status
 
 
 async def test_revoking_returns_what_was_not_spent_and_ends_the_payment_key(ports: Ports) -> None:

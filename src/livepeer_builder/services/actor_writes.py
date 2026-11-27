@@ -80,23 +80,32 @@ class ActorWrites:
         status: AllocationStatus,
         read: Callable[[str], Awaitable[Allowance]],
     ) -> ActorAllocation | None:
-        """Write ``status``, which the provider has just taken, then store what the provider reports.
+        """Write ``status``, which the provider has just taken, then store what the provider reports, and
+        answer with the actor as stored when that is done.
 
         ``read`` reads the allocation at the provider. When it reports the other status a command sets,
         another status command reached the provider after this one: that status is stored and the
         provider read again, ``_READ_BACKS`` times at most. The write comes before the read, so the
         command that writes the record last has read the provider after that write and found what it
         wrote: whichever command the provider took last, the record ends on its status. A read that
-        fails, or reports a status no status command sets, leaves the record as written."""
+        fails, or reports a status no status command sets, leaves the record as written.
+
+        The answer is never one of this command's own writes. Another command can finish while a read of
+        the provider is on its way back, and what that read reports is never written over it: so the row
+        is read once more at the end, and that row is the answer, with the status, the key and the secret
+        reference it holds then. ``None`` when the actor was revoked, or revoked and allotted again, at
+        any point since the command read it."""
         written = await self.status(actor, status)
-        for _ in range(_READ_BACKS):
-            if written is None:
-                break
+        reads = 0
+        while written is not None and reads < _READ_BACKS:
             reported = await _reported(actor, read)
+            reads += 1
             if reported is None or reported == written.status:
                 break
             written = await self.status(actor, reported)
-        return written
+        if written is None:
+            return None
+        return await self._held(actor)
 
     async def key(
         self,
@@ -148,8 +157,9 @@ class ActorWrites:
         return activated or await self._store.get_actor(actor.tenant_id, actor.actor_id) or actor
 
     async def _held(self, actor: ActorAllocation) -> ActorAllocation | None:
-        """Without the store's conditional write: the actor as stored now, when it still holds the
-        allocation the command acted on and is not revoked."""
+        """The actor as stored now, when it still holds the allocation the command acted on and is not
+        revoked: what a write is checked against without the store's conditional write, and what a status
+        command answers with."""
         current = await self._store.get_actor(actor.tenant_id, actor.actor_id)
         if current is None or current.allocation_id != actor.allocation_id or current.status == "revoked":
             return None

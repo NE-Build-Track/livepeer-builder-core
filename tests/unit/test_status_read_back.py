@@ -6,6 +6,10 @@ ended the opposite of the provider's. After its write, a status command now read
 the provider, and when the provider reports the other of the two statuses, it stores that and reads again.
 The command that writes last has therefore read the provider after its write, and found what it wrote.
 
+The command answers with the actor's row as it is stored when the command ends, read once more after the
+last read of the provider: a command that finished while that read was on its way back (a revoke, a
+rotation, another status command) is in the answer, or is the 404 of an actor with no allocation.
+
 ``tests/unit/test_payment_port_suite.py`` plays the two commands against the provider itself and through
 a clearinghouse. Here: what the read-back does with each thing a provider can answer.
 """
@@ -15,16 +19,30 @@ import logging
 
 import pytest
 
+from livepeer_builder import EngineSupply
 from livepeer_builder.contracts import ActorAllocation, ActorContext, Allowance
 from livepeer_builder.errors import NotFound, ProviderError, ProviderUnavailable
+from livepeer_builder.store import SqlStore
 from livepeer_builder.testing import FakeAllocationManager
 from tests.conftest import EngineFactory
-from tests.unit.test_actor_writes import Desk, allot_request, during
+from tests.unit.test_actor_writes import Command, Desk, _WholeRowStore, allot_request, during
 
 
 @pytest.fixture
 async def desk(make_engine: EngineFactory, admin: ActorContext) -> Desk:
     return Desk(await make_engine(), admin)
+
+
+@pytest.fixture(params=["the SQL store", "a store without the column writes"])
+async def either_desk(
+    request: pytest.FixtureRequest, make_engine: EngineFactory, store: SqlStore, admin: ActorContext
+) -> Desk:
+    """The same commands over the packaged store, whose writes carry their condition, and over a supplied
+    store that has only ``save_actor``, where the engine checks the condition itself."""
+    if request.param == "the SQL store":
+        return Desk(await make_engine(), admin)
+    supplied = _WholeRowStore(store)
+    return Desk(await make_engine(supply=EngineSupply(store=supplied)), admin)  # type: ignore[arg-type]
 
 
 async def allotted(desk: Desk) -> ActorAllocation:
@@ -60,13 +78,14 @@ async def test_a_read_that_went_stale_before_the_command_ended_does_not_put_the_
 ) -> None:
     """A read of the provider is only good until the next command. A pause that read ``paused`` and was
     then held up, while an activate ran to its end, must not store what it read: the write comes
-    before the read, so the pause has nothing left to write, and the activate's status stays."""
+    before the read, so the pause has nothing left to write, and the activate's status stays. The
+    pause answers with the row as it is stored by then, ``active``, and not with what it wrote."""
     await allotted(desk)
     during(manager, "read_allocation", desk.activate)
-    paused = await desk.pause()
-    assert paused.status == "paused"  # what the provider reported when the pause read it
-    assert manager.allocations[paused.allocation_id].status == "active"
+    answer = await desk.pause()
+    assert manager.allocations[answer.allocation_id].status == "active"
     assert (await stored(desk)).status == "active"
+    assert answer == await stored(desk)
 
 
 @pytest.mark.parametrize(
@@ -180,3 +199,85 @@ async def test_three_status_commands_at_the_same_moment_still_end_on_the_provide
     await activate
     assert manager.allocations[allocation.allocation_id].status == "paused"
     assert (await stored(desk)).status == "paused"
+
+
+# -- a command that finishes while the last read of the provider is on its way back ----------------------
+
+# What the provider answers a pause's reads with, in turn, for each way the command stops reading. A
+# status is reported in place of the allocation's own, and an error is raised.
+EXITS: dict[str, list[str | Exception]] = {
+    "settled at once": ["paused"],
+    "the read failed": [ProviderUnavailable("Batteries unreachable")],
+    "the provider reported another status": ["exhausted"],
+    "overtaken, then settled": ["active", "active"],
+    "three reads used up": ["active", "paused", "active"],
+}
+
+
+def meanwhile(
+    manager: FakeAllocationManager, monkeypatch: pytest.MonkeyPatch, exit_: str, other: Command
+) -> None:
+    """The provider answers the next command's reads as ``EXITS[exit_]`` says, and ``other`` runs to its
+    end after the provider answered the last of them and before the command sees that answer."""
+    read, left = manager.read_allocation, list(EXITS[exit_])
+
+    async def answered(allocation_id: str) -> Allowance:
+        allowance = await read(allocation_id)
+        if not left:  # a read ``other`` makes for itself
+            return allowance
+        answer = left.pop(0)
+        if not left:
+            await other()
+        if isinstance(answer, Exception):
+            raise answer
+        return allowance.model_copy(update={"status": answer})
+
+    monkeypatch.setattr(manager, "read_allocation", answered)
+
+
+@pytest.mark.parametrize("exit_", list(EXITS))
+async def test_a_revoke_that_finished_during_the_last_read_is_the_404_of_a_revoked_actor(
+    either_desk: Desk, manager: FakeAllocationManager, monkeypatch: pytest.MonkeyPatch, exit_: str
+) -> None:
+    """The command had written ``paused`` and answered with that write: 200, the paused actor and the
+    reference of a secret the revoke had deleted, for a row that says ``revoked``."""
+    desk = either_desk
+    await allotted(desk)
+    meanwhile(manager, monkeypatch, exit_, desk.revoke)
+    with pytest.raises(NotFound):
+        await desk.pause()
+    assert (await stored(desk)).status == "revoked"
+
+
+async def test_an_actor_revoked_and_allotted_again_during_the_last_read_is_the_404_too(
+    either_desk: Desk, manager: FakeAllocationManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row is another allocation's by the end, and live: it is not this command's answer."""
+    desk = either_desk
+    before = await allotted(desk)
+
+    async def revoked_and_allotted_again() -> None:
+        await desk.revoke()
+        await desk.payments.allot(desk.admin, allot_request().model_copy(update={"operation_ref": "again"}))
+
+    meanwhile(manager, monkeypatch, "settled at once", revoked_and_allotted_again)
+    with pytest.raises(NotFound):
+        await desk.pause()
+    row = await stored(desk)
+    assert (row.status, row.allocation_id != before.allocation_id) == ("active", True)
+
+
+@pytest.mark.parametrize("other", ["rotate", "activate"])
+@pytest.mark.parametrize("exit_", list(EXITS))
+async def test_the_answer_is_the_row_as_stored_when_the_command_ends(
+    either_desk: Desk, manager: FakeAllocationManager, monkeypatch: pytest.MonkeyPatch, exit_: str, other: str
+) -> None:
+    """A rotation or an activate that finished during the last read is in the answer: the key and the
+    secret reference the row holds, and its status, never the ones this command wrote before it."""
+    desk = either_desk
+    before = await allotted(desk)
+    meanwhile(manager, monkeypatch, exit_, getattr(desk, other))
+    answer = await desk.pause()
+    row = await stored(desk)
+    assert answer == row
+    assert (row.api_key_id != before.api_key_id) == (other == "rotate")

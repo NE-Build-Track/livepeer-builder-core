@@ -556,17 +556,25 @@ checks stop that:
   reached it later: the command stores the provider's status and reads again. Its write always comes
   before its read, so the command that writes the record last has read the provider after that write
   and found what it wrote. Whichever command the provider took last, the stored status ends as the
-  provider's: in the engine's record and, through a clearinghouse, in the clearinghouse's own. The
-  command answers with the actor as it stored it last, so a pause that an activate overtook at the
-  provider answers `active`.
+  provider's: in the engine's record and, through a clearinghouse, in the clearinghouse's own.
 
-  | The read-back | Stored, and answered |
+  | The read-back | The command stores |
   | --- | --- |
-  | reports the status the command set | That status. This is the ordinary command: one read |
-  | reports the other of `active` and `paused` | The provider's status, and the provider is read again: three reads at most, and after the third the command answers with what it stored last |
-  | reports `exhausted`, `revoked` or anything else | The status the command set. `revoked` is a revoke's to store, with the key it deletes, and the engine's record does not follow an allocation that the provider calls `exhausted` because it has nothing left |
-  | fails: the provider is down or answers an error, or a clearinghouse could not read its own provider | The status the command set. The provider took it, so the command is done and is not failed for the read. The failure is logged (`payments.status_read_back_failed`) and the read is not tried again, so after that one command the two statuses can still end opposite: send the status again |
-  | is not made, because the actor was revoked meanwhile | Nothing: 404, as above |
+  | reports the status the command set | Nothing more. This is the ordinary command: one read |
+  | reports the other of `active` and `paused` | The provider's status, and the provider is read again: three reads at most |
+  | reports `exhausted`, `revoked` or anything else | Nothing more: the report is not stored. `revoked` is a revoke's to store, with the key it deletes, and the engine's record does not follow an allocation that the provider calls `exhausted` because it has nothing left |
+  | fails: the provider is down or answers an error, or a clearinghouse could not read its own provider | Nothing more. The provider took the status, so the command is done and is not failed for the read. The failure is logged (`payments.status_read_back_failed`) and the read is not tried again, so after that one command the two statuses can still end opposite: send the status again |
+  | is not made, because the actor was revoked before the command's write | Nothing |
+
+  **The answer is the actor's row as it is stored when the command ends,** on every row of the table:
+  the command reads the row once more after its last read of the provider and answers with that,
+  never with one of its own writes. Another command can finish while a read of the provider is on
+  its way back, and what that read reports is never written over it. So a pause that an activate
+  overtook answers `active`, wherever the activate landed; a rotation that finished meanwhile is in
+  the answer with its key and its secret reference; and a revoke that finished at any point after
+  the command read the actor is 404, as for an actor that has no allocation, and so is an actor
+  revoked and allotted again by then. The same holds for a supplied store without the conditional
+  writes: the answer is the row it returns at the end.
 
   A status command takes no reference and is not on the ledger: a repeat sets the status at the
   provider, stores it and reads it back again. Only status commands sent through the engine are

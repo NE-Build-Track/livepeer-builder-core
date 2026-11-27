@@ -364,7 +364,7 @@ class PaymentsService:
         manager = await self._manager_for(tenant_id, actor_id)
         await manager.set_allocation_status(actor.allocation_id, status)
         written = await self._writes.status_read_back(actor, status, manager.read_allocation)
-        if written is None:  # revoked while this command was at the provider: it stays revoked (#115, C4)
+        if written is None:  # revoked since this command read it: it stays revoked (#115, C4; #158)
             raise NotFound(f"actor {actor_id!r} has no allocation")
         return written
 

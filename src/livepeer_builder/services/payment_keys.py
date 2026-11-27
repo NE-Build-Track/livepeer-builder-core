@@ -34,6 +34,7 @@ from livepeer_builder.contracts import (
     OperationRecord,
     SecretRef,
 )
+from livepeer_builder.contracts.costs import storable_text
 from livepeer_builder.errors import AlreadyAllotted, InvalidRequest, NotFound, OperationConflict
 from livepeer_builder.protocols import (
     AllocationManager,
@@ -122,7 +123,11 @@ class PaymentKeys:
         the recorded receipt, so its answer carries the key the first run never answered with.
 
         A key whose allocation id or key id the engine's records cannot keep is refused first
-        (``stored_id``): no secret is stored, the record notes nothing and no actor is written."""
+        (``stored_id``): no secret is stored, the record notes nothing and no actor is written.
+
+        The reference the store returns is checked before it is noted (#158): one with a NUL or a lone
+        surrogate is kept by no record on every database, so its copy is deleted from the store again
+        and the command fails (``_reference_no_database_keeps``), with nothing noted."""
         stored_id(key.allocation_id, "an allocation id")
         stored_id(key.api_key_id, "a key id")
         if "new_secret_ref" in run.context and run.context.get("new_secret_key_id") == key.api_key_id:
@@ -135,6 +140,9 @@ class PaymentKeys:
         else:
             ref = await self._retiring.put(_secret_name(tenant_id, actor_id), secret)
         held = HeldSecret(ref, self.custody)
+        if not storable_text(ref.ref, limit=len(ref.ref)):  # any length (#115), but text every database keeps
+            await self._drop(held)  # if the store fails this too, its error is the answer and the copy stays
+            raise _reference_no_database_keeps()
         try:
             await run.remember(
                 new_secret_ref=ref.ref,
@@ -417,3 +425,16 @@ def _lost_rotation(actor_id: str, held: str) -> InvalidRequest:
 
 def _secret_name(tenant_id: str, actor_id: str) -> str:
     return f"lpg/{tenant_id}/{actor_id}"
+
+
+def _reference_no_database_keeps() -> ValueError:
+    """What a supplied ``SecretStore`` whose ``put`` returned a reference with a NUL or a lone surrogate
+    comes to. No engine error, as when a supplied store raises one of its own or a stored record cannot
+    be read (``_custody``): HTTP 500, and to the ledger an unknown outcome, never a refusal, since the
+    provider has minted the key. The reference is not quoted."""
+    return ValueError(
+        "the secret store returned a reference the engine's records cannot keep: it has a NUL or a lone "
+        "surrogate, and no such text is stored on every database. The copy stored under it was deleted "
+        "again and nothing is noted. The payment provider has minted the key: repeat this request, under "
+        "the same operation_ref, once the store returns a reference that is text"
+    )

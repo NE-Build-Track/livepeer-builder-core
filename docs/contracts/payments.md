@@ -571,7 +571,17 @@ checks stop that:
   18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
   the ledger is read, so it can no longer be replayed or resumed through that request.
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`,
-  which is opaque text of any length (#115): a supplied secret store may return a long path. A key
+  which is opaque text of any length (#115): a supplied secret store may return a long path. It has
+  to be text every database keeps, so the engine checks the reference the store returns before it
+  notes it (#158): one with a NUL, which PostgreSQL stores in no text, or with a lone surrogate, which
+  no database stores, is deleted from the store again, and the allotment or the rotation fails with
+  nothing noted and no actor written. That is no refusal: the provider has minted the key, so the
+  command's reference stays held, and the answer is HTTP 500, as when a supplied store raises an
+  error of its own. The repeat finishes once the store returns text: Batteries replays the key. A
+  payment clearinghouse handed it over once, so there the repeat is answered as
+  [a key that never arrived](#the-key-an-enterprises-engine-is-handed), with the same way out. When
+  the store fails the delete too, its error is the command's answer and the copy stays in the store,
+  under a reference nothing names. A key
   handed to an enterprise's engine goes into no store: the actor then holds a receipt in place of a
   store handle, and `credential_custody` says which it is ([payment keys](#payment-keys)).
 - **Which grant.** The tenant's: a tenant's id is its grant's id ([Tenants](#tenants)), and no request

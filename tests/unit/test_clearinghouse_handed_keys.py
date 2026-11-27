@@ -33,7 +33,7 @@ from sqlalchemy import select
 
 from livepeer_builder import BuilderEngine
 from livepeer_builder.adapters.clearinghouse import ClearinghouseAllocations
-from livepeer_builder.contracts import ActorAllocation, AllotRequest, TopUpRequest
+from livepeer_builder.contracts import ActorAllocation, AllotRequest, SecretRef, TopUpRequest
 from livepeer_builder.errors import (
     AlreadyAllotted,
     InvalidRequest,
@@ -1195,3 +1195,33 @@ async def test_an_engine_that_keeps_the_keys_itself_is_told_so_whatever_ids_it_a
             await allot(ports)
         assert "keeps each allocation's key itself" in unusable.value.message
         assert nowhere(UNKEPT["201 characters"], str(unusable.value))
+
+
+async def test_a_handed_key_the_engine_s_own_store_names_by_a_reference_no_database_keeps_is_lost(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#158, at an engine that uses a clearinghouse: its own secret store returns a reference with a NUL
+    for the key it was handed. The engine deletes that copy and fails the command with nothing noted, as
+    with any provider. A clearinghouse hands a key over once, so the repeat cannot finish as it does
+    with Batteries, which replays the key: it is answered as a key that never arrived, with the same
+    way out."""
+    assert ports.secrets is not None
+    stores, values = ports.secrets.put, ports.secrets.values
+
+    async def under_a_nul(name: str, secret: str) -> SecretRef:
+        values["vault:a\x00b"] = values.pop((await stores(name, secret)).ref)
+        return SecretRef(ref="vault:a\x00b")
+
+    monkeypatch.setattr(ports.secrets, "put", under_a_nul)
+    with pytest.raises(ValueError, match="the secret store returned a reference"):
+        await allot(ports)
+    assert values == {} and await ports.engine.store.get_actor(ports.tenant_id, "alice") is None
+    held = await record_of(ports, "allot-alice")
+    assert held is not None and held.state == "started"
+    assert not [name for name in held.context if name.startswith("new_secret")]
+
+    monkeypatch.setattr(ports.secrets, "put", stores)  # the store is put right
+    later(ports)
+    with pytest.raises(InvalidRequest, match="Revoke the allocation at the clearinghouse"):
+        await allot(ports)
+    assert handed(ports, ALLOCATION)[-1]["replayed"] is True and values == {}

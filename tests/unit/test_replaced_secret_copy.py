@@ -412,9 +412,9 @@ async def test_a_refused_resume_deletes_both_copies_its_record_names_before_the_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The record names two copies, and the actor is then allotted under another reference and its
-    key rotated. The resume is refused, ``AlreadyAllotted``, and the refusal deletes the record. It
-    deleted the copy the record named for its key and left the replaced one, which no row named
-    after that."""
+    key rotated. The resume is refused, ``AlreadyAllotted``, and the refusal deletes the record. Both
+    copies are deleted before that: the replaced one, then the one the record names for its key, so
+    no stored secret is left that no row names."""
     vault = Vault()
     engine = await make_engine(supply=EngineSupply(secret_store=vault))
     copy_a, copy_b = await two_copies_noted(engine, admin, store, clock, monkeypatch, vault)
@@ -473,8 +473,8 @@ async def test_a_resume_that_shares_the_actor_deletes_both_copies_its_record_nam
 ) -> None:
     """The record names two copies, and another reference then allots the actor: the provider hands it
     the key the record names, so the actor is this command's result too, saved with the other
-    reference's copy. The resume answers with the actor and its record is done. It deleted its own copy
-    of that key and left the replaced one, named for good by a record that does nothing more."""
+    reference's copy. The resume answers with the actor and its record is done. Before that it deletes
+    its own copy of that key and the replaced one, so a record that does nothing more names neither."""
     vault = Vault()
     engine = await make_engine(supply=EngineSupply(secret_store=vault))
     copy_a, copy_b = await two_copies_noted(engine, admin, store, clock, monkeypatch, vault)

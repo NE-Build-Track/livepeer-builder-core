@@ -214,12 +214,21 @@ class PaymentKeys:
         return (holder.api_key_id, holder.secret_ref.ref) == (run.context.get("new_secret_key_id"), ref)
 
     async def shared(
-        self, actor: ActorAllocation, own: HeldSecret, key: NewAllocationKey | None = None
+        self,
+        actor: ActorAllocation,
+        own: HeldSecret,
+        key: NewAllocationKey | None = None,
+        run: RunningOperation | None = None,
     ) -> ActorAllocation:
         """The actor holding the key this allotment got. Another reference may have saved it with its
         own copy of the secret; this command's copy is then dropped. With the actor's key in hand
         (``key``: the provider gave it to both references, or replayed it to a resume), a delivering
-        command holds it under the actor's receipt, so its answer carries it too."""
+        command holds it under the actor's receipt, so its answer carries it too.
+
+        ``run`` is given by a resume that stores nothing in this run and ends its record here: a
+        replaced copy an earlier run left noted is dropped with its own (``_drop_replaced``)."""
+        if run is not None:
+            await self._drop_replaced(run, actor.secret_ref)
         if own.ref != actor.secret_ref:
             await self._drop(own)
         if key is not None and key.api_key_id == actor.api_key_id:
@@ -227,11 +236,15 @@ class PaymentKeys:
         return actor
 
     async def refused(self, run: RunningOperation, actor: ActorAllocation) -> None:
-        """Before a resumed allotment is refused because ``actor`` holds a key that is not this
-        command's: the secret an earlier run of the command stored, which the record notes, is dropped.
-        The refusal frees the reference, so nothing would name that copy again, and nothing points at it:
-        the actor was written by another command, with a copy of its own. A reference the actor does hold
-        (a supplied store may issue one for an actor's name) is kept."""
+        """Before a resumed command is refused in a way no resume gets past: an allotment whose actor
+        holds a key that is not this command's, or was allotted from another grant, and a rotation whose
+        actor holds another allocation. Every secret the record notes is dropped first, the one it names
+        for its key and a replaced copy still noted: the refusal frees the reference, or every later
+        resume is refused here again, so nothing would drop them afterwards, and nothing points at them,
+        as the actor was written by another command with a copy of its own. A reference ``actor``'s row
+        does hold (a supplied store may issue one for an actor's name) is kept. A drop that fails is
+        raised in place of the refusal: the record stays as it is, and the repeat comes here again."""
+        await self._drop_replaced(run, actor.secret_ref)
         if "new_secret_ref" in run.context and recorded_secret(run).ref != actor.secret_ref:
             await self._drop(recorded_secret(run))
 
@@ -272,13 +285,13 @@ class PaymentKeys:
         """``actor``, when it still holds the allocation the rotation began on. An actor revoked and
         allotted again holds another: the old key the record names is not that allocation's, so a
         rotation resumed there would mint a key on it and leave the key it had live. It is refused
-        before any provider call, and a secret it stored for the revoked allocation's key is dropped. A
-        record written before the allocation was noted is not checked."""
+        before any provider call, and the secrets it stored for the revoked allocation's keys are
+        dropped (``refused``), never the reference the actor holds now. A record written before the
+        allocation was noted is not checked."""
         began_on = run.context.get(BEGAN_ON, actor.allocation_id)
         if began_on == actor.allocation_id:
             return actor
-        if "new_secret_ref" in run.context:
-            await self._drop(recorded_secret(run))
+        await self.refused(run, actor)
         raise NotFound(
             f"this rotation began on allocation {began_on!r}, which actor {actor.actor_id!r} no longer "
             f"holds: it was revoked and allotted again (allocation {actor.allocation_id!r}). Rotate "

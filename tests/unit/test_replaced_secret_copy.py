@@ -13,6 +13,10 @@ never deletes the reference the actor's row holds, or the one it has just stored
 A delete that failed leaves the record naming two copies. A resume that is handed yet another key first
 deletes the replaced copy that is still noted, and only then stores and notes: so every stored secret of
 the command is named by its record or by the actor's row, however often the key changes.
+
+A resume can also end without storing anything: the actor is another command's by then, and the resume is
+refused or answers with the actor it shares. Each of those ends deletes what the record notes, the replaced
+copy included, before it ends the record, and never the reference the actor's row holds.
 """
 
 from typing import Any
@@ -22,7 +26,13 @@ from sqlalchemy import select
 
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.contracts import ActorContext, SecretRef
-from livepeer_builder.errors import InvalidRequest, OperationInProgress, ProviderUnavailable
+from livepeer_builder.errors import (
+    AlreadyAllotted,
+    InvalidRequest,
+    NotFound,
+    OperationInProgress,
+    ProviderUnavailable,
+)
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
 from livepeer_builder.testing import FakeAllocationManager, FixedClock, MemorySecretStore
@@ -77,6 +87,15 @@ async def noted(store: SqlStore, operation_ref: str) -> dict[str, Any]:
     held = t.operations.c.operation_ref == operation_ref
     async with store.engine.connect() as conn:
         return dict((await conn.execute(select(t.operations.c.context).where(held))).scalar_one())
+
+
+async def record_row(store: SqlStore, operation_ref: str) -> tuple[str, dict[str, str]] | None:
+    """The state of the record of ``operation_ref`` and the secrets it names, or ``None`` when the
+    reference is free: its row was deleted."""
+    held = t.operations.c.operation_ref == operation_ref
+    async with store.engine.connect() as conn:
+        row = (await conn.execute(select(t.operations.c.state, t.operations.c.context).where(held))).first()
+    return None if row is None else (row.state, secrets_named(dict(row.context)))
 
 
 def secrets_named(record: dict[str, Any]) -> dict[str, str]:
@@ -359,6 +378,179 @@ async def test_a_store_with_one_reference_for_an_actor_keeps_its_secret_through_
     assert (await other.payments.credential(alice)).token == manager.keys[again.api_key_id][1]
 
 
+# -- an allotment whose resume stores nothing: the actor is another command's by then ---------------------
+
+
+async def two_copies_noted(
+    engine: BuilderEngine,
+    admin: ActorContext,
+    store: SqlStore,
+    clock: FixedClock,
+    monkeypatch: pytest.MonkeyPatch,
+    vault: "Vault",
+) -> tuple[str, str]:
+    """``p-b``'s record names copy B as its key's secret and copy A as the one B replaced: its resume
+    stored B and the delete of A failed. Both are in the store. Answers (A, B)."""
+    copy_a = await cut_short_then_revoked(engine, admin, store, monkeypatch, vault)
+    clock.advance(120)
+    vault.sealed = True
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    copy_b = (await noted(store, "p-b"))["new_secret_ref"]
+    assert await record_row(store, "p-b") == ("started", {"new": copy_b, "replaced": copy_a})
+    assert set(vault.values) == {copy_a, copy_b}
+    return copy_a, copy_b
+
+
+async def test_a_refused_resume_deletes_both_copies_its_record_names_before_the_reference_is_freed(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The record names two copies, and the actor is then allotted under another reference and its
+    key rotated. The resume is refused, ``AlreadyAllotted``, and the refusal deletes the record. It
+    deleted the copy the record named for its key and left the replaced one, which no row named
+    after that."""
+    vault = Vault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    copy_a, copy_b = await two_copies_noted(engine, admin, store, clock, monkeypatch, vault)
+    await engine.payments.allot(admin, allot_request(ref="p-c"))
+    holds = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+    clock.advance(120)
+    with pytest.raises(AlreadyAllotted):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+
+    assert vault.values == {holds.secret_ref.ref: manager.keys[holds.api_key_id][1]}
+    assert {copy_a, copy_b} <= set(vault.deleted)
+    assert await record_row(store, "p-b") is None
+    assert (await engine.payments.credential(alice)).token == manager.keys[holds.api_key_id][1]
+
+
+async def test_a_refusal_whose_delete_of_the_replaced_copy_fails_keeps_the_record_and_the_reference(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The command is not refused while a copy its record names is still stored: it answers with the
+    store's error, the record stays ``started`` naming both copies, and the reference is not freed.
+    The repeat deletes what is left and gives the refusal."""
+    vault = Vault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    copy_a, copy_b = await two_copies_noted(engine, admin, store, clock, monkeypatch, vault)
+    await engine.payments.allot(admin, allot_request(ref="p-c"))
+    holds = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+    clock.advance(120)
+    vault.stuck = {copy_a}
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    assert await record_row(store, "p-b") == ("started", {"new": copy_b, "replaced": copy_a})
+    assert copy_a in vault.values and holds.secret_ref.ref in vault.values
+    with pytest.raises(OperationInProgress):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+
+    vault.stuck = set()
+    clock.advance(120)
+    with pytest.raises(AlreadyAllotted):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    assert set(vault.values) == {holds.secret_ref.ref} and await record_row(store, "p-b") is None
+
+
+async def test_a_resume_that_shares_the_actor_deletes_both_copies_its_record_names(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The record names two copies, and another reference then allots the actor: the provider hands it
+    the key the record names, so the actor is this command's result too, saved with the other
+    reference's copy. The resume answers with the actor and its record is done. It deleted its own copy
+    of that key and left the replaced one, named for good by a record that does nothing more."""
+    vault = Vault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    copy_a, copy_b = await two_copies_noted(engine, admin, store, clock, monkeypatch, vault)
+    shared = await engine.payments.allot(admin, allot_request(ref="p-c"))
+    clock.advance(120)
+    assert await engine.payments.allot(admin, allot_request(ref="p-b")) == shared
+
+    assert vault.values == {shared.secret_ref.ref: manager.keys[shared.api_key_id][1]}
+    assert {copy_a, copy_b} <= set(vault.deleted)
+    assert await record_row(store, "p-b") == ("done", {"new": copy_b, "replaced": copy_a})
+    assert (await engine.payments.credential(alice)).token == manager.keys[shared.api_key_id][1]
+
+
+@pytest.mark.parametrize("ends", ["refused", "sharing the actor"])
+async def test_a_resume_that_stores_nothing_keeps_the_one_path_the_actor_holds(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    ends: str,
+) -> None:
+    """With one path for an actor, both copies the record names have the reference the actor's row
+    holds, which by now names the actor's own key. Neither end of the resume deletes it."""
+    vault = OnePathVault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    await cut_short_then_revoked(engine, admin, store, monkeypatch, vault)
+    clock.advance(120)
+    loses_the_actor_write(store, monkeypatch, "allot_actor")  # the resume notes its copy, then dies
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    [path] = vault.values
+    assert await record_row(store, "p-b") == ("started", {"new": path, "replaced": path})
+    holds = await engine.payments.allot(admin, allot_request(ref="p-c"))
+    clock.advance(120)
+    if ends == "refused":
+        holds = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+        with pytest.raises(AlreadyAllotted):
+            await engine.payments.allot(admin, allot_request(ref="p-b"))
+    else:
+        assert await engine.payments.allot(admin, allot_request(ref="p-b")) == holds
+
+    assert vault.values == {path: manager.keys[holds.api_key_id][1]}
+    assert (await engine.payments.credential(alice)).token == manager.keys[holds.api_key_id][1]
+
+
+async def test_a_resume_refused_for_an_actor_of_another_grant_deletes_the_copy_its_record_names(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A revoked record of the actor names another grant than the tenant's (a record from before a
+    tenant's id was its grant's id): no allotment of that actor goes through, a resumed one included.
+    The refusal is for good and keeps the record, so the copy the first run stored is deleted with it."""
+    vault = Vault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    loses_the_actor_write(store, monkeypatch, "allot_actor")
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    [copy_a] = vault.values
+    earlier = await make_engine(supply=EngineSupply(secret_store=MemorySecretStore()))
+    await earlier.payments.allot(admin, allot_request(ref="p-a"))
+    revoked = await earlier.payments.revoke(admin, "default", "alice")
+    await store.save_actor(revoked.model_copy(update={"grant_id": "an-earlier-grant"}))
+    clock.advance(120)
+    with pytest.raises(InvalidRequest, match="never moved to another grant"):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+
+    assert vault.values == {} and vault.deleted == [copy_a]
+    assert await record_row(store, "p-b") == ("started", {"new": copy_a})
+
+
 async def test_a_delivering_allotment_that_is_handed_another_key_asks_nothing_of_the_secret_store(
     make_engine: EngineFactory,
     admin: ActorContext,
@@ -506,3 +698,78 @@ async def test_a_second_key_change_of_a_rotation_keeps_the_replaced_copy_the_act
     assert await third.payments.get_actor(admin, "default", "alice") == held
     assert set(vault.values) == {held.secret_ref.ref} and held.secret_ref.ref not in vault.deleted
     assert (await third.payments.credential(alice)).token == manager.keys[held.api_key_id][1]
+
+
+# -- a rotation refused because the actor was revoked and allotted again ----------------------------------
+
+
+async def test_a_rotation_refused_on_another_allocation_deletes_both_copies_its_record_names(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The rotation's record names two copies: its resume under another ``LPB_ENGINE_ID`` stored a
+    third key's secret, and the delete of the copy that replaced failed. The actor is then revoked and
+    allotted again, and every resume is refused before it stores anything. The refusal deleted the
+    copy the record named for its key and left the replaced one, named by a record no resume can
+    finish. Both are deleted now; when a delete fails the command answers with the store's error, and
+    the repeat deletes what is left and refuses."""
+    vault = Vault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    before = await engine.payments.allot(admin, allot_request())
+    await rotation_cut_short(engine, admin, store, manager, monkeypatch, pointed=False)
+    [copy_a] = set(vault.values) - {before.secret_ref.ref}
+    other = await make_engine(supply=EngineSupply(secret_store=vault), engine_id=ANOTHER_ENGINE)
+    clock.advance(120)
+    vault.stuck = {copy_a}
+    with pytest.raises(ConnectionError):
+        await other.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+    copy_b = (await noted(store, "rotate-1"))["new_secret_ref"]
+    names = {"previous": before.secret_ref.ref, "new": copy_b, "replaced": copy_a}
+    assert await record_row(store, "rotate-1") == ("started", names)
+    assert set(vault.values) == set(names.values())
+
+    await other.payments.revoke(admin, "default", "alice")
+    again = await other.payments.allot(admin, allot_request(ref="allot-again"))
+    clock.advance(120)
+    with pytest.raises(ConnectionError):
+        await other.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+    assert await record_row(store, "rotate-1") == ("started", names) and copy_a in vault.values
+
+    vault.stuck = set()
+    clock.advance(120)
+    with pytest.raises(NotFound, match="revoked and allotted again"):
+        await other.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+    assert vault.values == {again.secret_ref.ref: manager.keys[again.api_key_id][1]}
+    assert await record_row(store, "rotate-1") == ("started", names)
+    assert (await other.payments.credential(alice)).token == manager.keys[again.api_key_id][1]
+
+
+async def test_a_rotation_refused_on_another_allocation_keeps_the_reference_the_actor_holds(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With one path for an actor, the copy the rotation noted has the reference the actor holds after
+    it was revoked and allotted again: that path now holds the new allocation's key. The refusal
+    deleted it as the rotation's own copy, and the actor could not pay."""
+    vault = OnePathVault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    await engine.payments.allot(admin, allot_request())
+    await rotation_cut_short(engine, admin, store, manager, monkeypatch, pointed=False)
+    await engine.payments.revoke(admin, "default", "alice")
+    again = await engine.payments.allot(admin, allot_request(ref="allot-again"))
+    clock.advance(120)
+    with pytest.raises(NotFound, match="revoked and allotted again"):
+        await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+
+    assert vault.values == {again.secret_ref.ref: manager.keys[again.api_key_id][1]}
+    assert (await engine.payments.credential(alice)).token == manager.keys[again.api_key_id][1]

@@ -223,10 +223,11 @@ class PaymentsService:
             if keys.delivers(existing) and sent_as is not None:
                 sent = request.model_copy(update={"label": run.context.get(_SENT_LABEL, existing.label)})
                 replayed = await allotted_from_grant(manager, sent, sent_as)
-            return await keys.shared(existing, recorded_secret(run), replayed)
+            return await keys.shared(existing, recorded_secret(run), replayed, run)
         if existing is not None and existing.grant_id != request.tenant_id:
             # A record from before a tenant's id was its grant's id (#165). Its allocation was allotted
             # from another grant, and a new one is never allotted from a grant the record does not name.
+            await keys.refused(run, existing)
             raise InvalidRequest(
                 f"actor {request.actor_id!r} was allotted from grant {existing.grant_id!r}, which is not "
                 f"tenant {request.tenant_id!r}'s: a tenant's id is its grant's id, and an allocation is "

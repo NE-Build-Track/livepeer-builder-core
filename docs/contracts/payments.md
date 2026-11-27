@@ -815,7 +815,19 @@ left unfinished; a replay of a finished command is not a resume.
   that is answered the same id is refused the same way. Such an id is quoted nowhere: not by this error,
   not by the error of a new grant that was not read back, which otherwise names the grant by its id,
   and not in a log line or the command's record. What follows when a payment clearinghouse answered it
-  is under [the key an enterprise's engine is handed](#the-key-an-enterprises-engine-is-handed). An
+  is under [the key an enterprise's engine is handed](#the-key-an-enterprises-engine-is-handed).
+  **A grant's id is its tenant's id** (D83), and the routes that act on a tenant's grant (its read, its
+  top-up, its status and its usage) read that id as one path segment ([allotment](#allotment), #113, C10). So a grant the engine onboards a tenant
+  as, a new one or one a resume finds by its tag, must have an id those routes can name it by: no `/`, `\`,
+  `?`, `#`, `%` or control character, not `.` or `..`, not empty, and no white space around it, which
+  a route removes. A grant with any other id is the same `ProviderError`, with the same outcome: 502,
+  nothing noted, no tenant admin key issued, the reference held, the id not quoted (#158). A tenant
+  under such an id could be listed and never topped up, paused or read, and one with white space
+  around its id would be named as another grant. The rule is on the id the engine takes as a new
+  tenant's: a grant made elsewhere under such an id is still listed by `GET /v1/clearinghouse/tenants`,
+  as the provider names it, and no route names that tenant's grant. It is a grant id's rule alone. An
+  allocation's id and a key's id are in no route of the engine, and each goes into the provider's path
+  as one percent-encoded segment, whatever it holds. An
   allocation's `allocated`,
   `spent` and `available` amounts are each `null` in the `Allowance` where the answer states none
   (`null`, `""`, `"[error]"`) or the engine reads none: unknown, never zero. One stated as `NaN` or

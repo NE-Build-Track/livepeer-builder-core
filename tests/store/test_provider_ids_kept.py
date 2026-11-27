@@ -24,12 +24,12 @@ from sqlalchemy import String, select
 from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.batteries import BatteriesClient
 from livepeer_builder.config import generate_secret_key
-from livepeer_builder.contracts import ActorContext, AllotRequest, Money
+from livepeer_builder.contracts import ActorContext, AllotRequest, GrantRecord, Money
 from livepeer_builder.errors import OperationInProgress, ProviderError, ProviderUnavailable
 from livepeer_builder.http import create_app
 from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.store import schema as t
-from livepeer_builder.testing import FixedClock, make_engine
+from livepeer_builder.testing import FakeAllocationManager, FixedClock, make_engine
 
 ADMIN = ActorContext(actor_id="operator", credential_kind="clearinghouse_admin")
 BASE = "https://batteries.test"
@@ -59,6 +59,8 @@ class Batteries:
             return httpx.Response(201, content=json.dumps({"id": self.grant["id"]}).encode())
         if request.url.path == "/v1/grants":
             return httpx.Response(200, content=json.dumps({"items": [self.grant]}).encode())
+        if request.url.path == "/v1/allocations":
+            return httpx.Response(200, content=b'{"items": []}')
         if self.reads_a_grant_with >= 400:
             return httpx.Response(self.reads_a_grant_with, content=b'{"error": "overloaded"}')
         return httpx.Response(200, content=json.dumps(self.grant).encode())
@@ -195,6 +197,93 @@ async def test_a_new_grant_that_is_not_read_back_is_not_named_by_an_id_the_store
         assert desk is not None
         with pytest.raises(ProviderUnavailable, match="grant grant_1 created but not read back"):
             await desk.onboard(ADMIN, "ops", USD, operation_ref="o-2")
+
+
+NO_SEGMENT = {
+    "a slash": "a/b",
+    "a backslash": "a\\b",
+    "a question mark": "a?b",
+    "a hash": "a#b",
+    "a percent sign": "100%",
+    "a line break": "grant\n1",
+    "one dot": ".",
+    "two dots": "..",
+    "white space before it": " grant_1",
+    "white space after it": "grant_1\u00a0",
+}
+
+
+@pytest.mark.parametrize("why", NO_SEGMENT)
+async def test_an_onboarding_whose_grant_has_an_id_no_route_can_name_issues_no_key_and_keeps_its_reference(
+    database_url: str, clock: FixedClock, why: str
+) -> None:
+    """A tenant's id is its grant's id, and the routes that act on a tenant's grant read it as one path
+    segment (``GrantId``): a tenant under any other id could be listed and never topped up, paused or
+    read, and one with white space around its id would be named as another grant, since a route removes
+    it. Such a grant was onboarded, key and all. It is now the answer the engine cannot use that a grant
+    with an id the store cannot keep is: a new one, and one a resume finds by its tag."""
+    grant_id = NO_SEGMENT[why]
+    fake = Batteries(grant=GRANT | {"id": grant_id})
+    async with engine_over(fake, database_url, clock) as engine:
+        desk = engine.payments.tenants
+        assert desk is not None
+        with pytest.raises(ProviderError) as refused:
+            await desk.onboard(ADMIN, "ops", USD, operation_ref="o-1")
+        message = str(refused.value)
+        assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+        assert "a grant id that no route of the engine can name" in message
+        assert repr(grant_id) not in message and (len(grant_id) < 3 or grant_id not in message)
+        nothing = {"records": [("o-1", "started", [])], "actors": [], "secrets": 0, "key_tenants": []}
+        assert await kept(engine) == nothing
+        clock.advance(STALE_S)
+        with pytest.raises(ProviderError):  # the resume finds the grant by its tag, and names no tenant
+            await desk.onboard(ADMIN, "ops", USD, operation_ref="o-1")
+        assert await kept(engine) == nothing
+        assert fake.asked.count("POST /v1/grants") == 1
+
+
+async def test_a_supplied_manager_s_grant_with_no_id_at_all_is_no_tenant(
+    database_url: str, clock: FixedClock
+) -> None:
+    """Batteries' reader takes no empty id; another manager's is refused by the same rule."""
+
+    class NamesNoGrant(FakeAllocationManager):
+        async def create_grant(self, *args: Any, **kwargs: Any) -> GrantRecord:
+            return (await super().create_grant(*args, **kwargs)).model_copy(update={"id": ""})
+
+    manager = NamesNoGrant()
+    supply = EngineSupply(allocation_manager=manager, grants_manager=manager, clock=clock)
+    settings = {"database_url": database_url, "secret_key": generate_secret_key()}
+    async with make_engine(supply=supply, **settings) as engine:
+        desk = engine.payments.tenants
+        assert desk is not None
+        with pytest.raises(ProviderError, match="a grant id that no route of the engine can name"):
+            await desk.onboard(ADMIN, "ops", USD, operation_ref="o-1")
+        assert (await kept(engine))["key_tenants"] == []
+
+
+@pytest.mark.parametrize("grant_id", ["...", ".hidden", "grant.v2", "550e8400-e29b-41d4-a716-446655440000"])
+async def test_a_grant_id_that_is_one_path_segment_is_a_tenant_s_id_as_written(
+    database_url: str, clock: FixedClock, grant_id: str
+) -> None:
+    """No pattern: the provider chooses its ids."""
+    async with engine_over(Batteries(grant=GRANT | {"id": grant_id}), database_url, clock) as engine:
+        desk = engine.payments.tenants
+        assert desk is not None
+        assert (await desk.onboard(ADMIN, "ops", USD, operation_ref="o-1")).tenant_id == grant_id
+        assert (await kept(engine))["key_tenants"] == [grant_id]
+
+
+@pytest.mark.parametrize("grant_id", ["a/b", "..", " grant_1"])
+async def test_a_grant_made_elsewhere_under_such_an_id_is_still_listed(
+    database_url: str, clock: FixedClock, grant_id: str
+) -> None:
+    """The rule is on the id the engine takes as a new tenant's. A grant the provider already holds is
+    listed as the provider names it, and the list answers: no route can then name that tenant."""
+    async with engine_over(Batteries(grant=GRANT | {"id": grant_id}), database_url, clock) as engine:
+        desk = engine.payments.tenants
+        assert desk is not None
+        assert [tenant.tenant_id for tenant in await desk.list_tenants(ADMIN)] == [grant_id]
 
 
 async def test_ids_of_exactly_the_stored_length_are_kept(database_url: str, clock: FixedClock) -> None:

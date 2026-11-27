@@ -16,6 +16,9 @@ payment side, node's discovery and the engine:
 
 Upstream sources are built from the pinned commits
 ([upstream-baseline](../../docs/references/upstream-baseline.md)), so the first build takes a while.
+A daily GitHub Actions check ([upstream-baseline](../../docs/references/upstream-baseline.md#watching-for-updates))
+compares those SHAs with livepeer/node, Batteries and the SDK and opens one `upstream-update` issue
+per dependency that has moved.
 
 ## Prerequisites
 

@@ -99,11 +99,36 @@ USAGE_ROW_LIMITS: dict[str, int] = {
 }
 
 
+def plain_length(fee: Decimal) -> int:
+    """How many characters a finite fee takes written out as Batteries writes one: its digits, a point
+    when it has a fraction, a minus sign when it is negative, and no exponent. Counted, never written:
+    the digits of ``9E+999999`` would be a million characters."""
+    sign, digits, exponent = fee.as_tuple()
+    if not isinstance(exponent, int):
+        raise ValueError("a fee is a finite number")
+    if exponent >= 0:
+        return sign + (1 if fee.is_zero() else len(digits) + exponent)
+    return sign + (len(digits) + 1 if len(digits) > -exponent else 2 - exponent)
+
+
+def storable_fee(fee: Decimal, limit: int = 64) -> bool:
+    """Whether the store's decimal-string column of ``limit`` characters keeps ``fee`` (#158): the fee
+    written out with no exponent fits it, and so does the text the store writes. A fee is measured by its
+    digits, whatever form its source gave it. Python writes ``9E+999999`` in nine characters, and two
+    such fees cannot be added; it writes ``0.000000039`` as ``3.9E-8``, which is the same amount."""
+    return fee.is_finite() and plain_length(fee) <= limit and len(str(fee)) <= limit
+
+
 def unstorable_field(row: UsageRow) -> str | None:
-    """The first field of ``row`` the store cannot keep, or None when it keeps the row."""
+    """The first field of ``row`` the store cannot keep, or None when it keeps the row. A text is held
+    to its column's length; a fee is held to it by its digits (``storable_fee``)."""
     for name, limit in USAGE_ROW_LIMITS.items():
         value = getattr(row, name)
-        if value is not None and not storable_text(str(value), limit):
+        if isinstance(value, Decimal):
+            kept = storable_fee(value, limit)
+        else:
+            kept = value is None or storable_text(str(value), limit)
+        if not kept:
             return name
     return None
 
@@ -138,9 +163,9 @@ def set_aside_record(
 
 
 def _storable_fee(fee: Decimal | None) -> Decimal | None:
-    """The fee when it is finite and its digits fit the store's decimal-string column (64 characters);
+    """The fee when it is finite and its digits fit the store's decimal-string column (``storable_fee``);
     otherwise None. The record takes no ``NaN`` or ``Infinity``, so no fee stops a row being set aside."""
-    return fee if fee is not None and fee.is_finite() and len(str(fee)) <= 64 else None
+    return fee if fee is not None and storable_fee(fee) else None
 
 
 class UsagePage(Contract):

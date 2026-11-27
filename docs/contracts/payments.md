@@ -859,14 +859,29 @@ left unfinished; a replay of a finished command is not a resume.
   when an allotment or a rotation is resumed under another `LPB_ENGINE_ID`, which sends a new provider
   call. The resume stores the new key's secret and notes it in place of the first, and notes the
   replaced copy beside it in the same write (`replaced_secret_ref`). Then it deletes the replaced
-  copy, so the record never names a secret that is gone and no stored secret is left unnamed. Two
-  references are never deleted: the one the actor's row holds, which is the key the actor pays with
-  when a rotation had already pointed it there, and the one the resume has just stored, which a
-  supplied store that keeps one path for an actor issues again. When the delete fails, the command
-  answers with the store's error before the actor is written: the record stays `started`, naming
-  both copies, and the repeat, which is handed the same key again, stores nothing more, deletes the
-  replaced copy and goes on. A command that hands its key over replaces only a receipt of its own,
-  and asks nothing of the store.
+  copy. The secret a record names for its key is therefore never one that is gone, and every secret
+  the command has stored is named by its record, as its key's secret or as the copy that one
+  replaced, or by the actor's row.
+  - **A delete that fails.** The command answers with the store's error before the actor is written.
+    The record stays `started`, naming both copies, and the repeat, which is handed the same key
+    again, stores nothing more, deletes the replaced copy and goes on.
+  - **Another key before that delete is finished.** A record has one field for a replaced copy. A
+    resume that is handed yet another key while a replaced copy is still noted (the actor was
+    allotted and revoked once more, or the engine's id changed again) deletes that copy first,
+    before it stores anything and before the write that would stop naming it. Then it stores the
+    new key's secret, notes it with the copy it replaces, and deletes that one. When the first of
+    those deletes fails, nothing was stored or noted: the record names what it named, and the
+    repeat, handed the same key, begins there again and stores that key's secret once. This holds
+    however often the key changes.
+  - **Two references are never deleted:** the one the actor's row holds, which is the key the actor
+    pays with when a rotation had already pointed it there, and the one the record names for its
+    key, which a supplied store that keeps one path for an actor issues again for the next key.
+  - **The one secret no record names** is the one a command has just stored and has not yet noted,
+    for the first key as for a later one: the reference comes from the store, so the store is
+    written first. A command that dies between the two leaves that copy, and its resume stores the
+    key again.
+  - A command that hands its key over replaces only a receipt of its own, and asks nothing of the
+    store.
 - **Allotting** to an actor that already has an allocation (not revoked) under a new reference is refused:
   409 `code: already_allotted` with the actor, and nothing is applied, the amount included (top it up
   instead). The refusal frees the reference. A resumed run answers with the actor only if the actor

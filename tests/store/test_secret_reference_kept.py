@@ -81,9 +81,14 @@ async def noted(engine: BuilderEngine, operation_ref: str) -> tuple[str, list[st
 
 def is_the_stores_fault(failed: pytest.ExceptionInfo[ValueError], ref: str) -> None:
     """No engine error, so no refusal and HTTP 500, as when a supplied store raises; the reference is
-    not quoted."""
+    not quoted. This provider replays a key to the repeat of the call that minted it, as Batteries
+    does, so the error says to repeat the same reference, and names no way out that is a
+    clearinghouse's."""
+    message = str(failed.value)
     assert not isinstance(failed.value, EngineError) and not definite_refusal(failed.value)
-    assert ref not in str(failed.value) and repr(ref)[1:-1] not in str(failed.value)
+    assert ref not in message and repr(ref)[1:-1] not in message
+    assert "replays it" in message and "repeat this request, under the same operation_ref" in message
+    assert "clearinghouse" not in message and "new operation_ref" not in message
 
 
 @pytest.mark.parametrize("why", NOT_KEPT)

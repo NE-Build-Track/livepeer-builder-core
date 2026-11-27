@@ -577,9 +577,14 @@ checks stop that:
   no database stores, is deleted from the store again, and the allotment or the rotation fails with
   nothing noted and no actor written. That is no refusal: the provider has minted the key, so the
   command's reference stays held, and the answer is HTTP 500, as when a supplied store raises an
-  error of its own. The repeat finishes once the store returns text: Batteries replays the key. A
-  payment clearinghouse handed it over once, so there the repeat is answered as
-  [a key that never arrived](#the-key-an-enterprises-engine-is-handed), with the same way out. When
+  error of its own. What follows depends on the provider, and the error says which. Batteries replays
+  the key to a repeat, so the same `operation_ref` finishes once the store returns text. A payment
+  clearinghouse handed the key over once, so there the key is lost and no repeat of that reference
+  finishes: the error names the way out of
+  [a key that never arrived](#the-key-an-enterprises-engine-is-handed), a revoke at the clearinghouse
+  and a new allotment, or another rotation, each under a new `operation_ref` once the store returns
+  text, and the repeat of the first reference is answered as that lost key is. After such a rotation
+  the actor cannot pay until the next one: the key the engine holds is ended at the clearinghouse. When
   the store fails the delete too, its error is the command's answer and the copy stays in the store,
   under a reference nothing names. A key
   handed to an enterprise's engine goes into no store: the actor then holds a receipt in place of a
@@ -1444,6 +1449,10 @@ key by such an id cannot be used by this engine, and that is the clearinghouse's
 of this repository in its `clearinghouse` role answers no such id: it refuses one from its own provider
 before it stores or hands over anything, so the enterprise's engine is answered an error and no key was
 handed over to be lost.
+
+A handed key is lost the same way when the engine's own secret store names it by a reference no
+database keeps ([allotment](#allotment)): the engine deletes that copy, the error says the key is lost,
+and the same two ways replace it.
 
 **The engine's own resume.** A run of the engine that died before it stored a key repeats the same
 reference at the clearinghouse.

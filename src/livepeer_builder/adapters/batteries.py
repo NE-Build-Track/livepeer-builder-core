@@ -38,6 +38,7 @@ from livepeer_builder.contracts import (
     UsagePage,
     UsageRow,
 )
+from livepeer_builder.contracts.costs import storable_text
 from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnavailable
 from livepeer_builder.utils import BODY_LIMIT, CursorTrail
 
@@ -139,7 +140,8 @@ class BatteriesClient:
         try:
             return grant_from_item(await self._request("GET", f"/v1/grants/{segment(grant_id)}"))
         except ProviderError as exc:
-            raise ProviderUnavailable(f"grant {grant_id} created but not read back: {exc}") from exc
+            named = grant_id if storable_text(grant_id) else "(an id the engine cannot store)"
+            raise ProviderUnavailable(f"grant {named} created but not read back: {exc}") from exc
 
     async def read_grant(self, grant_id: str) -> TenantGrant:
         """The grant, with what is left of it to allot (``tenant_grant``): two reads, the grant first."""
@@ -402,9 +404,10 @@ def _amount(item: dict[str, Any], name: str) -> Decimal:
 def _required(body: dict[str, Any], key: str) -> str:
     """A value the answer has to carry: a non-empty string, as Batteries serves every id and a new key's
     secret. Anything else, a missing key included, is an answer the engine cannot read (#114, C21): a
-    ``ProviderError`` that is no refusal and quotes no value."""
+    ``ProviderError`` that is no refusal and quotes no value. So is a string with a lone surrogate
+    (#158): it is no Unicode text, and no URL path, secret store or database takes it."""
     value = body.get(key)
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str) or not value or value.encode("utf-8", "ignore").decode() != value:
         raise ProviderError(200, f"Batteries answered with no usable {key}")
     return value
 

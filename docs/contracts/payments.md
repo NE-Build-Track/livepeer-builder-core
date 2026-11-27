@@ -571,7 +571,22 @@ checks stop that:
   18 decimal places before moving to this release. Its repeat is refused when it is parsed, before
   the ledger is read, so it can no longer be replayed or resumed through that request.
 - **The new key** goes straight into the `SecretStore`. The database stores only its `SecretRef`,
-  which is opaque text of any length (#115): a supplied secret store may return a long path. A key
+  which is opaque text of any length (#115): a supplied secret store may return a long path. It has
+  to be text every database keeps, so the engine checks the reference the store returns before it
+  notes it (#158): one with a NUL, which PostgreSQL stores in no text, or with a lone surrogate, which
+  no database stores, is deleted from the store again, and the allotment or the rotation fails with
+  nothing noted and no actor written. That is no refusal: the provider has minted the key, so the
+  command's reference stays held, and the answer is HTTP 500, as when a supplied store raises an
+  error of its own. What follows depends on the provider, and the error says which. Batteries replays
+  the key to a repeat, so the same `operation_ref` finishes once the store returns text. A payment
+  clearinghouse handed the key over once, so there the key is lost and no repeat of that reference
+  finishes: the error names the way out of
+  [a key that never arrived](#the-key-an-enterprises-engine-is-handed), a revoke at the clearinghouse
+  and a new allotment, or another rotation, each under a new `operation_ref` once the store returns
+  text, and the repeat of the first reference is answered as that lost key is. After such a rotation
+  the actor cannot pay until the next one: the key the engine holds is ended at the clearinghouse. When
+  the store fails the delete too, its error is the command's answer and the copy stays in the store,
+  under a reference nothing names. A key
   handed to an enterprise's engine goes into no store: the actor then holds a receipt in place of a
   store handle, and `credential_custody` says which it is ([payment keys](#payment-keys)).
 - **Which grant.** The tenant's: a tenant's id is its grant's id ([Tenants](#tenants)), and no request
@@ -792,7 +807,33 @@ left unfinished; a replay of a finished command is not a resume.
   answers with, the `id`, `allocation_id` and `api_key` of a new key, and an allocation's `id` must each
   be a non-empty string, and an allocation's `status` and `currency` strings where present. Before, a
   `null` there was recorded as the text `"None"` in a finished command (allotment answered 201 with
-  `allocation_id: "None"`), and an answer that lacked the key answered 500. An allocation's `allocated`,
+  `allocation_id: "None"`), and an answer that lacked the key answered 500. Each of those values must
+  also be Unicode text: one with a lone surrogate is the same `ProviderError` (#158), so no such id is
+  put in the path of a later call, the read-back of a new grant included.
+  **An id the engine keeps** has to fit its records as well: a new key's `allocation_id` and `id`, and
+  the `id` of a tenant's grant, are each at most 200 characters, with no NUL. A key or a grant with any
+  other id is the same `ProviderError` ("an allocation id the engine cannot store"), whoever answered it:
+  Batteries, a payment clearinghouse or a supplied `AllocationManager`. It is raised before anything is
+  stored, on SQLite and on PostgreSQL alike: no secret, nothing noted in the command's record, no actor
+  and no tenant admin key. The provider has applied the command by then (a key funded, a grant
+  created), so this is an unknown outcome, never a refusal: 502, the reference stays held, and a resume
+  that is answered the same id is refused the same way. Such an id is quoted nowhere: not by this error,
+  not by the error of a new grant that was not read back, which otherwise names the grant by its id,
+  and not in a log line or the command's record. What follows when a payment clearinghouse answered it
+  is under [the key an enterprise's engine is handed](#the-key-an-enterprises-engine-is-handed).
+  **A grant's id is its tenant's id** (D83), and the routes that act on a tenant's grant (its read, its
+  top-up, its status and its usage) read that id as one path segment ([allotment](#allotment), #113, C10). So a grant the engine onboards a tenant
+  as, a new one or one a resume finds by its tag, must have an id those routes can name it by: no `/`, `\`,
+  `?`, `#`, `%` or control character, not `.` or `..`, not empty, and no white space around it, which
+  a route removes. A grant with any other id is the same `ProviderError`, with the same outcome: 502,
+  nothing noted, no tenant admin key issued, the reference held, the id not quoted (#158). A tenant
+  under such an id could be listed and never topped up, paused or read, and one with white space
+  around its id would be named as another grant. The rule is on the id the engine takes as a new
+  tenant's: a grant made elsewhere under such an id is still listed by `GET /v1/clearinghouse/tenants`,
+  as the provider names it, and no route names that tenant's grant. It is a grant id's rule alone. An
+  allocation's id and a key's id are in no route of the engine, and each goes into the provider's path
+  as one percent-encoded segment, whatever it holds. An
+  allocation's `allocated`,
   `spent` and `available` amounts are each `null` in the `Allowance` where the answer states none
   (`null`, `""`, `"[error]"`) or the engine reads none: unknown, never zero. One stated as `NaN` or
   `Infinity` is the same `ProviderError` ("no usable `available_usd`"), as a grant's total is (#158):
@@ -1002,7 +1043,7 @@ records it and moves the cursor:
 | `unreadable_created_at` | has no `created_at_ms`, or one that is not a JSON number (a string of digits and `true` are not) or that no clock holds |
 | `unreadable_fee` | states a `computed_fee_eth` or `computed_fee_usd` that is not a decimal string as Batteries writes one: digits, then a point and digits when the fee has a fraction, after a minus sign when it is negative (`"0.000000039"`, `"7"`, `"-0.25"`). So not `NaN` or `Infinity`, not something that is no number at all (`"abc"`, `"0,5"`, `true`, an object), and not a form only Python's decimal reader takes (#158): an exponent (`"1e999999"`, `"3.9e-8"`), a digit separator (`"1_000"`), digits of another script, padded text, a plus sign, `".5"` or `"5."`. A JSON number (`0.1`, `5`) is no fee either: a fee is text, and the engine turns no number into text. `null`, `""` and `"[error]"` state no fee: Batteries serves them for a fee it has not or could not convert, and such a row is stored with no fee |
 | `unreadable_row` | is one the JSON decoder's own limits refuse: an integer of more than 4300 digits, or a field nested deeper than the decoder reads (#158). Nothing of such a row is read, its id and its fees included: it is recorded under a digest of its text, with no fee, and the log line carries the start of that text. The page's other rows are stored and the cursor moves. Also a row that passes the checks above and is still refused by the usage row's own type (a backstop: no known row reaches it), and the code for another `UsageSource` whose row fits no other reason |
-| `unstorable_<field>` | has in `<field>` a value the store's column cannot keep: one that is not text (a number, `true`, a list or an object in a text field; `null` and `""` are no value), or a text longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), with a NUL, or with a lone surrogate. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
+| `unstorable_<field>` | has in `<field>` a value the store's column cannot keep: one that is not text (a number, `true`, a list or an object in a text field; `null` and `""` are no value), or a text longer than the column (200 characters for an id, 64 for a fee, 8 for `currency`), with a NUL, or with a lone surrogate. A fee is measured by its digits written out with no exponent, as Batteries writes one, whatever form its source gave it (#158): `0.000000039` is eleven characters however it is written, and `9E+999999`, which another `UsageSource` can deliver (a supplied one, or a clearinghouse's usage page read by an engine in its `work` role), is a million and is set aside. So no applied fee has more than 64 digits, or more than 62 decimal places, and two applied fees can always be added. Checked before the store is asked, so SQLite and PostgreSQL do the same, whatever the `UsageSource` |
 
 Each value is judged as it was received, and that value is the one stored: apart from a whole-number
 `id`, the engine turns no number, list or object into text.
@@ -1010,7 +1051,7 @@ Each value is judged as it was received, and that value is the one stored: apart
 The reasons are a closed set (`SetAsideReason` in `contracts`): a record with any other code is refused
 where it is built. The record is one row of `lpb_usage_set_aside`: the provider's row id, the reason, and
 `computed_fee_eth` and `computed_fee_usd` as the provider stated them, whatever the row's status. A fee
-the engine does not read (`unreadable_fee`, above), or longer than the column, is recorded as `null`. A row with no id the
+the engine does not read (`unreadable_fee`, above), or whose digits are longer than the column, is recorded as `null`. A row with no id the
 table can keep is recorded under `sha256:` and a digest of its content, so such a row whose content
 differs on every read (a field the provider fills in as it serves the row) is recorded once per read.
 A row is recorded, counted and logged once, however often its page is read again; the first record of
@@ -1094,7 +1135,8 @@ can run at once (the loop and `POST /v1/costs/sync`). Each job has an evidence v
 usage row on a matched session, a changed match or a late session report increments it in the same
 transaction. A projection records the version it was computed from, read before the job's evidence,
 and stands for the job only while that version is current; a save never replaces a projection computed
-from newer evidence. Reads compute an out-of-date job live, and the next sync stores it again, even
+from newer evidence. Two syncs that store a job's first projection at the same moment both end: one row
+is kept, from the newer evidence of the two (#158). Reads compute an out-of-date job live, and the next sync stores it again, even
 when a sync stopped (a crash, an error) before it reached that job, or a concurrent sync saved an older
 classification. A state between two of sync's commits therefore still counts every row once.
 
@@ -1333,7 +1375,8 @@ they are the tenant's own routes, which act on the tenant of the key (D87 point 
     for any answer the engine cannot use. The reference of a top-up or a rotation stays held, since
     something was applied;
   - the engine's record of the actor is not changed, and a rotation's key is not kept;
-  - the message names both allocations, says nothing is recorded here, and says what to do: for a
+  - the message names both allocations (the one acted on as "an id this engine cannot store" when it
+    is more than 200 characters or has a NUL, #158), says nothing is recorded here, and says what to do: for a
     top-up, where the amount is now; for a status, to set it again there; for a revoke, to repeat it,
     which sends nothing and records that the named allocation has ended; for a rotation, that the other
     allocation's holder rotates its key again.
@@ -1370,6 +1413,7 @@ What the engine does depends on what the answer carries:
 | No key, `replayed: true`, and the engine's own record of the actor names the allocation and the key of the answer, with the secret in its store | The manager returns the engine's own copy: the engine was handed that key before. The engine's own rotation does not come this far, since its resume asks for no key (below); a caller of the port alone does |
 | No key, `replayed: true`, otherwise | Refused, `InvalidRequest` (400). Nothing is stored, and no actor record is saved or changed. The message says what replaces the key (below) |
 | No key and no `replayed`: the clearinghouse's routes are mounted to keep each key with its own engine | `ProviderError`, an answer the engine cannot use and no refusal: the allocation exists there, and the reference stays held |
+| A key whose `allocation_id` or `api_key_id` the engine's records cannot keep (more than 200 characters, a NUL), or no key and `replayed: true` under such an id | `ProviderError`, an answer the engine cannot use and no refusal (502), in the same words both times. The key is not taken: nothing reaches the engine's secret store or its record of the actor, the reference stays held, and neither id is in the error, a log line or the command's record. The message says what replaces the key (below; [repeat-safe commands](#repeat-safe-commands), #158) |
 
 **A key that never arrived.** A clearinghouse that finished a command answers its repeat without the
 key, so a lost answer loses the key: nobody holds it. A lost key is replaced by a rotation (D87 point 1).
@@ -1385,6 +1429,30 @@ key, so a lost answer loses the key: nobody holds it. A lost key is replaced by 
   finishes: its repeat is 409 `already_allotted`, which frees the reference.
 - **Under a new reference without the revoke,** an allotment is the clearinghouse's 409
   `already_allotted`, passed on. Nothing is applied and the amount is not added.
+
+**A key the engine did not keep (#158).** A clearinghouse that names the allocation or its key by an id
+of more than 200 characters, or with a NUL, hands over a key the engine cannot record: the engine takes
+none of it. The clearinghouse has finished the command and hands a key over once, so its answer to the
+repeat carries no key under the same ids, and is the same `ProviderError`: no repeat of that reference
+can finish. The key is replaced as a key that never arrived is, and the message says how, without
+either id:
+
+- **An allotment.** The tenant's admin revokes the allocation at the clearinghouse
+  (`POST .../allocation/revoke` with the tenant admin key; the route names the actor and no allocation
+  id), and the engine allots again under a new `operation_ref`. The first allotment's record then
+  finishes as a lost allotment's does: its repeat is 409 `already_allotted`, which frees the reference.
+- **A rotation.** The clearinghouse rotated, so the key the engine holds is ended. Rotate again under a
+  new `operation_ref`. The first rotation's record never finishes; leave it.
+
+Either works once the clearinghouse answers ids the engine can keep. One that names every allocation or
+key by such an id cannot be used by this engine, and that is the clearinghouse's to put right. An engine
+of this repository in its `clearinghouse` role answers no such id: it refuses one from its own provider
+before it stores or hands over anything, so the enterprise's engine is answered an error and no key was
+handed over to be lost.
+
+A handed key is lost the same way when the engine's own secret store names it by a reference no
+database keeps ([allotment](#allotment)): the engine deletes that copy, the error says the key is lost,
+and the same two ways replace it.
 
 **The engine's own resume.** A run of the engine that died before it stored a key repeats the same
 reference at the clearinghouse.

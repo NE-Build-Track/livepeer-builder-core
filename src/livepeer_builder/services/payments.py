@@ -244,7 +244,7 @@ class PaymentsService:
         sent_as = idempotency_key(self._engine_id, operation, "api-key")
         await keys.require_writable(run, sent_as)
         key = await allotted_from_grant(manager, request, sent_as)
-        new = await keys.stored(run, request.tenant_id, request.actor_id, key, sent_as)
+        new = await keys.stored(run, request.tenant_id, request.actor_id, key, sent_as, manager)
         now = self._clock.now()
         allotted = ActorAllocation(
             tenant_id=request.tenant_id,

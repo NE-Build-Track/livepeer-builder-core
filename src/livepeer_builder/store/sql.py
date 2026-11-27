@@ -216,7 +216,8 @@ class SqlStore(SqlJobs, SqlJobQueue, SqlKeys, SqlOperations, actors.SqlActorComm
 
     async def save_projection(self, cost: JobCost, *, evidence_version: int) -> None:
         """Store the cost computed from ``evidence_version``. Never replaces one computed from newer evidence
-        (a slower concurrent sync)."""
+        (a slower concurrent sync). Two syncs may store a job's first projection at once: one row is kept,
+        from the newer evidence of the two, and neither write fails."""
         values = {
             "status": cost.status,
             "fee_eth": str(cost.fees.fee_eth),
@@ -229,11 +230,14 @@ class SqlStore(SqlJobs, SqlJobQueue, SqlKeys, SqlOperations, actors.SqlActorComm
         }
         key = t.cost_projections.c.job_id == str(cost.job_id)
         not_newer = t.cost_projections.c.evidence_version <= evidence_version
+        over_an_older = update(t.cost_projections).where(key, not_newer).values(values)
         async with self.engine.begin() as conn:
-            if (await conn.execute(update(t.cost_projections).where(key, not_newer).values(values))).rowcount:
+            if (await conn.execute(over_an_older)).rowcount:
                 return
-            if (await conn.execute(select(t.cost_projections.c.job_id).where(key))).first() is None:
-                await conn.execute(insert(t.cost_projections).values(job_id=str(cost.job_id), **values))
+            first = insert_once(conn, t.cost_projections).values(job_id=str(cost.job_id), **values)
+            if not (await conn.execute(first)).rowcount:
+                # A projection is there: a newer one, or one another sync stored since this one looked.
+                await conn.execute(over_an_older)
 
     # -- secrets --------------------------------------------------------------------------------------
 

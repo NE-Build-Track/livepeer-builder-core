@@ -30,7 +30,7 @@ from livepeer_builder.contracts.common import AllotAmount, StoredText
 from livepeer_builder.errors import InvalidRequest
 from livepeer_builder.protocols import AccessPolicy, AllocationManager
 from livepeer_builder.services.arguments import checked
-from livepeer_builder.services.grants import GRANT_TAG, idempotency_key, tagged_grant
+from livepeer_builder.services.grants import GRANT_TAG, idempotency_key, tagged_grant, tenant_id_of
 from livepeer_builder.services.keys import KeyService
 from livepeer_builder.services.ledger import OperationLedger, RunningOperation
 
@@ -75,6 +75,8 @@ class TenantDesk:
         repeat of the reference gets the first tenant back and never creates a second grant or a second
         key: a finished command is answered from its record, and a resumed one finds the grant by the
         tag it carries (the provider takes no idempotency key on a grant) and the key by its noted id.
+        A grant whose id the engine's records cannot keep, or no route can name, is no tenant: it is
+        refused as an answer the engine cannot use (``tenant_id_of``), with nothing noted and no key issued.
 
         The key's token is in the answer of the run that issued the key, and nowhere else: the engine
         keeps its hash. A repeat, or a resume after the key was stored, answers ``token: null``; a
@@ -101,7 +103,7 @@ class TenantDesk:
             if tenant_id is None:
                 found = await tagged_grant(self._manager, run, tag) if run.resumed else None
                 grant = found or await self._manager.create_grant(name, amount, {GRANT_TAG: tag})
-                tenant_id = grant.id
+                tenant_id = tenant_id_of(grant.id)  # before the record or a key names it
                 await run.remember(tenant_id=tenant_id)
             key = await self._first_admin_key(run, admin, tenant_id, admin_actor_id, name, minted)
             return OnboardedTenant(tenant_id=tenant_id, name=name, admin_key=key)

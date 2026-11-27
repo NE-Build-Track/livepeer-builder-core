@@ -1,6 +1,7 @@
 """Grants at the payment provider: the idempotency keys the engine sends Batteries, the tag that finds
-a grant the engine created (D57), the provider call that allots an allocation from a grant, and the
-allocation manager a command about one actor is sent to.
+a grant the engine created (D57), the provider call that allots an allocation from a grant, the
+allocation manager a command about one actor is sent to, and the checks of an id the provider answered
+with before the engine keeps it or takes it as a tenant's.
 
 A grant is a tenant's prepaid budget, and its id is the tenant's id (D83). ``tenants.py`` holds what an
 admin does to a tenant; ``payments.py`` allots and tops up one actor's allocation from the grant.
@@ -9,19 +10,71 @@ admin does to a tenant; ``payments.py`` allots and tops up one actor's allocatio
 import base64
 import hashlib
 
+from pydantic import TypeAdapter, ValidationError
+
 from livepeer_builder.contracts import AllotRequest, GrantRecord, NewAllocationKey
+from livepeer_builder.contracts.common import GrantId
+from livepeer_builder.contracts.costs import storable_text
 from livepeer_builder.errors import NotFound, ProviderError
 from livepeer_builder.protocols import AllocationManager, AllocationsByActor, ReadyBeforeCommands
 from livepeer_builder.services.ledger import RunningOperation
 from livepeer_builder.utils import CursorTrail
 
 GRANT_TAG = "lpb_operation"  # the metadata key that tags a grant the engine created (D57, Q5)
+_GRANT_ID = TypeAdapter(GrantId)  # a tenant's id, as the routes that act on its grant read it
 
 
 def idempotency_key(engine_id: str, operation: str, step: str) -> str:
     """base64url(sha256(engine_id:operation:step)): 43 chars, inside Batteries' 256-char limit."""
     digest = hashlib.sha256(f"{engine_id}:{operation}:{step}".encode()).digest()
     return base64.urlsafe_b64encode(digest).decode().rstrip("=")
+
+
+def stored_id(value: str, what: str) -> str:
+    """An id the payment provider answered with, when the engine's records keep it: at most 200
+    characters (``store.schema.ID``), with no NUL and no lone surrogate. PostgreSQL refuses any other
+    when the row is written, and SQLite takes all but the surrogate. So it is refused here, before
+    anything is stored, on both, whatever the ``AllocationManager``: Batteries, a payment clearinghouse
+    or a supplied one.
+
+    The provider has applied the command by then (a key funded, a grant created), so this is no
+    refusal. It is a ``ProviderError`` with a 2xx, as for any answer the engine cannot use: HTTP 502,
+    and an unknown outcome to the operation ledger, which keeps the reference. ``what`` names the id,
+    and the id itself is not quoted."""
+    if not storable_text(value):
+        raise ProviderError(
+            200,
+            f"the payment provider answered with {what} the engine cannot store: more than 200 "
+            "characters, or with a NUL or a lone surrogate",
+        )
+    return value
+
+
+def tenant_id_of(grant_id: str) -> str:
+    """The id of a grant the provider answered with, as the id of the tenant it is onboarded as (D83).
+    The engine's records have to keep it (``stored_id``), and the routes that act on a tenant's grant
+    (its read, its top-up, its status, its usage) have to name it: it is one path segment, by the rule
+    those routes read a tenant's id with (``GrantId``: no ``/``, ``\\``, ``?``, ``#``, ``%`` or control
+    character, and not ``.`` or ``..``), with no white space around it, which a route removes, and not
+    empty. A tenant under any other id could be listed and never topped up, paused or read; one with
+    white space around its id would be named as another grant.
+
+    The provider has created the grant by then, so this is no refusal, as in ``stored_id``: a
+    ``ProviderError`` with a 2xx, which keeps the reference, and the id is not quoted."""
+    stored_id(grant_id, "a grant id")
+    try:
+        named = bool(grant_id) and _GRANT_ID.validate_python(grant_id) == grant_id
+    except ValidationError:
+        named = False
+    if not named:
+        raise ProviderError(
+            200,
+            "the payment provider answered with a grant id that no route of the engine can name a "
+            "grant by: a tenant's id is its grant's id, and in a path it is one segment, with no slash, "
+            "backslash, question mark, hash, percent sign or control character, not a dot or two dots, "
+            "not empty, and with no white space around it",
+        )
+    return grant_id
 
 
 async def manager_for_command(

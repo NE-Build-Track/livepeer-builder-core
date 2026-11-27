@@ -465,6 +465,10 @@ UNUSABLE_KEYS: dict[str, dict[str, Any]] = {
     "no allocation id": {key: value for key, value in KEY.items() if key != "allocation_id"},
     "a key id that is a number": KEY | {"id": 7},
     "a secret that is null": KEY | {"api_key": None},
+    # no Unicode text: no URL path, secret store or database takes it (#158)
+    "a key id with a lone surrogate": KEY | {"id": "key_\ud800"},
+    "an allocation id with a lone surrogate": KEY | {"allocation_id": "alloc_\ud800"},
+    "a secret with a lone surrogate": KEY | {"api_key": "lpg_\ud800"},
 }
 
 
@@ -519,6 +523,7 @@ NO_GRANT_ID = {
     "empty": {"id": ""},
     "a number": {"id": 7},
     "an object": {"id": {"x": 1}},
+    "a lone surrogate": {"id": "grant_\ud800"},  # the read-back's path could not hold it (#158)
 }
 
 
@@ -530,13 +535,13 @@ async def test_a_grant_create_answer_without_a_usable_id_is_a_provider_error_and
 
     def handle(request: httpx.Request) -> httpx.Response:
         asked.append(f"{request.method} {request.url.path}")
-        return httpx.Response(201, json=created)
+        return httpx.Response(201, content=json.dumps(created).encode())  # as JSON escapes it
 
     client = httpx.AsyncClient(base_url=BASE, transport=httpx.MockTransport(handle))
     with pytest.raises(ProviderError) as refused:
         await BatteriesClient(BASE, "t", client=client).create_grant("ops", USD)
     assert refused.value.status_code == 200 and not definite_refusal(refused.value)
-    assert asked == ["POST /v1/grants"]  # no read-back of a grant named "None" or "7"
+    assert asked == ["POST /v1/grants"]  # no read-back of a grant named "None" or "7", or of no text
 
 
 def stuck(item: dict[str, Any], asked: list[str | None]) -> httpx.AsyncClient:

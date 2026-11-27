@@ -27,11 +27,13 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, cast
 
+import httpx
 import pytest
 from sqlalchemy import select
 
 from livepeer_builder import BuilderEngine
-from livepeer_builder.contracts import ActorAllocation, AllotRequest, TopUpRequest
+from livepeer_builder.adapters.clearinghouse import ClearinghouseAllocations
+from livepeer_builder.contracts import ActorAllocation, AllotRequest, SecretRef, TopUpRequest
 from livepeer_builder.errors import (
     AlreadyAllotted,
     InvalidRequest,
@@ -942,3 +944,362 @@ async def test_a_clearinghouse_that_keeps_the_keys_itself_is_an_answer_the_engin
         assert await ports.engine.store.get_actor(ports.tenant_id, "alice") is None
         held = await record_of(ports, "allot-alice")
         assert held is not None and held.state == "started"
+
+
+# -- a clearinghouse that names an allocation or a key by an id the engine cannot keep (#158) --------------
+
+UNKEPT = {"201 characters": "x" * 201, "a NUL": "a\x00b"}
+
+
+def names_otherwise(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch, ending: str, method: str = "POST", **said: str
+) -> list[bool]:
+    """A clearinghouse whose 2xx answers to the requests whose path ends ``ending`` say ``said`` in place
+    of what it holds. No engine of this repository does: its own clearinghouse refuses such an id from
+    its provider first. Clear the list that is returned, and it answers as it holds again."""
+    assert ports.transport is not None
+    carried, saying = ports.transport.handle_async_request, [True]
+
+    async def otherwise(request: httpx.Request) -> httpx.Response:
+        response = await carried(request)
+        ours = request.method == method and request.url.path.endswith(ending) and response.is_success
+        if not (saying and ours):
+            return response
+        body = json.loads(await response.aread()) | said
+        return httpx.Response(response.status_code, content=json.dumps(body).encode(), request=request)
+
+    monkeypatch.setattr(ports.transport, "handle_async_request", otherwise)
+    return saying
+
+
+def nowhere(unkept: str, *texts: str) -> bool:
+    """Whether ``unkept`` is in none of ``texts``, as itself or as ``repr`` or JSON writes it."""
+    forms = {unkept, repr(unkept)[1:-1], json.dumps(unkept)[1:-1]}
+    return not any(form in text for form in forms for text in texts)
+
+
+def cannot_use(refused: pytest.ExceptionInfo[ProviderError], unkept: str, *way_out: str) -> str:
+    """The error of an answer the engine cannot use: no refusal, so the reference stays held (HTTP 502),
+    the id not quoted, and the way out said."""
+    message = str(refused.value)
+    assert refused.value.status_code == 200 and not definite_refusal(refused.value)
+    assert "this engine cannot store" in message and nowhere(unkept, message)
+    assert all(words in message for words in way_out), message
+    return message
+
+
+@pytest.mark.parametrize("field", ["allocation_id", "api_key_id"])
+@pytest.mark.parametrize("why", UNKEPT)
+async def test_an_allotment_handed_a_key_under_an_id_the_engine_cannot_keep_is_answered_the_same_on_its_resume(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, field: str, why: str
+) -> None:
+    """The allotment's answer names the allocation or its key by an id the engine's 200-character columns
+    cannot keep. The engine takes no such key: nothing reaches its secret store or its record of the
+    actor, and the allotment happened at the clearinghouse, so this is no refusal and frees no reference.
+    The clearinghouse answers the resume with the same ids and no key (``replayed``). That is the same
+    answer the engine cannot use, in the same words: never the lost-answer refusal (a 400), which quoted
+    the allocation's id (review of #201)."""
+    caplog.set_level(logging.DEBUG)
+    unkept = UNKEPT[why]
+    names_otherwise(ports, monkeypatch, ALLOCATION, **{field: unkept})
+    way_out = ("Revoke the allocation at the clearinghouse", "allot again here under a new operation_ref")
+    with pytest.raises(ProviderError) as first:
+        await allot(ports)
+    said = cannot_use(first, unkept, *way_out)
+    with pytest.raises(OperationInProgress):
+        await allot(ports)
+
+    later(ports)
+    with pytest.raises(ProviderError) as resumed:
+        await allot(ports)
+
+    again = handed(ports, ALLOCATION)[-1]  # as the clearinghouse wrote it: its finished command, no key
+    assert again["allocation_api_key"] is None and again["replayed"] is True
+    assert cannot_use(resumed, unkept, *way_out) == said
+    assert ports.secrets is not None and ports.secrets.values == {}
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") is None
+    held = await record_of(ports, "allot-alice")
+    assert held is not None and held.state == "started"
+    assert not [name for name in held.context if name.startswith("new_secret")]  # nothing noted
+    stored = await everything_stored(cast(SqlStore, ports.engine.store))
+    assert nowhere(unkept, stored, caplog.text, *(str(record.args) for record in caplog.records))
+    assert len(ports.provider.allocations) == 1  # allotted there once, and its key is live there
+
+
+@pytest.mark.parametrize("field", ["allocation_id", "api_key_id"])
+async def test_the_way_out_of_such_an_allotment_is_a_revoke_at_the_clearinghouse_and_a_new_reference(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    """What the error says to do, done: the key was handed over once and not kept, so no repeat of the
+    reference can finish. The tenant's admin revokes the allocation at the clearinghouse, whose route
+    names the actor and no allocation id, and the engine allots again under a new reference. The first
+    reference's record then finishes as a lost allotment's does: its repeat is told the actor is allotted."""
+    saying = names_otherwise(ports, monkeypatch, ALLOCATION, **{field: UNKEPT["201 characters"]})
+    with pytest.raises(ProviderError):
+        await allot(ports)
+    assert ports.wire is not None and ports.provider.unallocated(ports.tenant_id) == 95
+    revoke = f"http://clearinghouse.test/v1/clearinghouse{ALLOCATION}/revoke"  # the tenant's own route
+    answer = await ports.wire._client.post(revoke, headers={"Authorization": f"Bearer {ports.token}"})
+    assert answer.status_code == 200 and answer.json()["status"] == "revoked"
+    assert ports.provider.unallocated(ports.tenant_id) == 100 and live_keys(ports) == set()
+
+    saying.clear()  # the next allocation has ids the engine keeps
+    anew = await allot(ports, ref="allot-alice-again", amount="4")
+
+    key = await stored_key(ports)
+    assert await ports.pays_for(key) == anew.allocation_id and live_keys(ports) == {key}
+    later(ports)
+    with pytest.raises(AlreadyAllotted):
+        await allot(ports)
+    assert await record_of(ports, "allot-alice") is None  # the first reference is free
+    assert len(ports.provider.allocations) == 2 and ports.provider.unallocated(ports.tenant_id) == 96
+
+
+@pytest.mark.parametrize("why", UNKEPT)
+async def test_a_rotation_handed_a_key_under_an_id_the_engine_cannot_keep_is_answered_the_same_on_its_resume(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, why: str
+) -> None:
+    """The same for a rotation. The clearinghouse rotated: the key the engine holds is ended, and the new
+    one was handed over once, under an id the engine cannot keep. The way out is the lost rotation's:
+    another rotation, under a new reference, which the engine can begin from its own record."""
+    caplog.set_level(logging.DEBUG)
+    unkept = UNKEPT[why]
+    allotted = await allot(ports)
+    old = await stored_key(ports)
+    saying = names_otherwise(ports, monkeypatch, ROTATE, api_key_id=unkept)
+    way_out = ("rotate the payment key of actor 'alice' again", "under a new operation_ref")
+    with pytest.raises(ProviderError) as first:
+        await rotate(ports, "r-1")
+    said = cannot_use(first, unkept, *way_out)
+    assert await ports.pays_for(old) is None and len(live_keys(ports)) == 1  # rotated there
+
+    later(ports)
+    with pytest.raises(ProviderError) as resumed:
+        await rotate(ports, "r-1")
+
+    assert handed(ports, ROTATE)[-1]["replayed"] is True
+    assert cannot_use(resumed, unkept, *way_out) == said
+    assert await stored_key(ports) == old  # the engine keeps what it has, and one secret
+    assert ports.secrets is not None and list(ports.secrets.values.values()) == [old]
+    held = await record_of(ports, "r-1")
+    assert held is not None and held.state == "started"
+    stored = await everything_stored(cast(SqlStore, ports.engine.store))
+    assert nowhere(unkept, stored, caplog.text, *(str(record.args) for record in caplog.records))
+
+    saying.clear()  # the next key has an id the engine keeps
+    rotated = await rotate(ports, "r-2")
+
+    new = await stored_key(ports)
+    assert rotated.allocation_id == allotted.allocation_id
+    assert await ports.pays_for(new) == allotted.allocation_id and live_keys(ports) == {new}
+    assert list(ports.secrets.values.values()) == [new]
+    # the first rotation's record never finishes, as a lost rotation's: its repeat changes nothing
+    later(ports)
+    with pytest.raises(InvalidRequest, match="never reached this engine"):
+        await rotate(ports, "r-1")
+    held = await record_of(ports, "r-1")
+    assert held is not None and held.state == "started" and await stored_key(ports) == new
+
+
+@pytest.mark.parametrize("why", UNKEPT)
+@pytest.mark.parametrize(
+    ("command", "ending"), [("rotate", ROTATE), ("top_up", "/top-up"), ("status", "/status")]
+)
+async def test_no_error_quotes_another_allocation_s_id_that_the_engine_cannot_keep(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch, command: str, ending: str, why: str
+) -> None:
+    """Each route answers the allocation it acted on, and one that is not the allocation the command
+    named is an answer the engine cannot use, which says which allocation that was. An id the engine
+    cannot keep is not said: it may be of any length and hold anything."""
+    unkept = UNKEPT[why]
+    await allot(ports)
+    names_otherwise(ports, monkeypatch, ending, allocation_id=unkept)
+    commands = {
+        "rotate": lambda: rotate(ports, "r-1"),
+        "top_up": lambda: ports.engine.payments.top_up(
+            ports.admin, ports.tenant_id, "alice", TopUpRequest(amount=usd(1), operation_ref="t-1")
+        ),
+        "status": lambda: ports.engine.payments.set_status(ports.admin, ports.tenant_id, "alice", "paused"),
+    }
+    with pytest.raises(ProviderError) as elsewhere:
+        await commands[command]()
+    message = str(elsewhere.value)
+    assert not definite_refusal(elsewhere.value) and nowhere(unkept, message)
+    assert "an id this engine cannot store" in message and "which actor 'alice' holds there now" in message
+
+
+async def test_the_port_s_revoke_of_a_key_does_not_quote_an_allocation_id_the_engine_cannot_keep(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    allotted = await allot(ports)
+    unkept = UNKEPT["201 characters"]
+    names_otherwise(ports, monkeypatch, ALLOCATION, "GET", allocation_id=unkept)
+    manager = ports.engine.payments._manager
+    assert isinstance(manager, ClearinghouseAllocations)
+    with pytest.raises(InvalidRequest) as refused:
+        await manager.for_actor(ports.tenant_id, "alice").revoke_key(allotted.api_key_id)
+    assert nowhere(unkept, str(refused.value)) and "an id this engine cannot store" in str(refused.value)
+
+
+async def test_an_answer_whose_id_is_no_text_is_no_answer_on_the_first_run_and_on_the_resume(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lone surrogate is no Unicode text, and the wire reads no such body as an allocation: the same
+    error both times, which quotes nothing of the body."""
+    names_otherwise(ports, monkeypatch, ALLOCATION, allocation_id="a\ud800b")
+    with pytest.raises(ProviderError) as first:
+        await allot(ports)
+    later(ports)
+    with pytest.raises(ProviderError) as resumed:
+        await allot(ports)
+    assert str(first.value) == str(resumed.value) and "not DeliveredAllocation" in str(first.value)
+    assert not definite_refusal(resumed.value) and nowhere("a\ud800b", str(resumed.value))
+    held = await record_of(ports, "allot-alice")
+    assert held is not None and held.state == "started"
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") is None
+
+
+async def test_a_clearinghouse_of_this_repository_hands_over_no_key_under_such_an_id(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Why only another clearinghouse answers one: an engine in its ``clearinghouse`` role refuses such
+    an id from its own provider before it stores or hands over anything, so the enterprise's engine is
+    answered an error, and no key was handed over to be lost."""
+    minted = ports.provider.create_key_for_grant
+
+    async def under_a_long_id(*args: Any, **kwargs: Any) -> Any:
+        return (await minted(*args, **kwargs)).model_copy(update={"allocation_id": UNKEPT["201 characters"]})
+
+    monkeypatch.setattr(ports.provider, "create_key_for_grant", under_a_long_id)
+    with pytest.raises(ProviderOutcomeUnknown):  # the clearinghouse's 502: applied or not, it cannot say
+        await allot(ports)
+    assert handed(ports, ALLOCATION) == []  # no 2xx, so no key in any answer
+    assert ports.secrets is not None and ports.clearinghouse_secrets is not None
+    assert ports.secrets.values == {} and ports.clearinghouse_secrets.values == {}
+    assert await house(ports).store.get_actor(ports.tenant_id, "alice") is None
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") is None
+
+
+async def test_an_engine_that_keeps_the_keys_itself_is_told_so_whatever_ids_it_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No key and no ``replayed``: none was handed over, now or before, so none was lost. The answer
+    is the one for an engine in the wrong role, and it quotes no id either."""
+    from livepeer_builder.http import create_app
+
+    async with open_ports(
+        "remote", lambda engine: create_app(engine, manage_lifecycle=False, listener="public"), BOTH_ROLE
+    ) as ports:
+        names_otherwise(ports, monkeypatch, ALLOCATION, allocation_id=UNKEPT["201 characters"])
+        with pytest.raises(ProviderError) as unusable:
+            await allot(ports)
+        assert "keeps each allocation's key itself" in unusable.value.message
+        assert nowhere(UNKEPT["201 characters"], str(unusable.value))
+
+
+def names_a_secret_by_a_nul(ports: Ports, monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
+    """The engine's own secret store returns a reference with a NUL for the next secret it is given,
+    having stored it. Call what is returned, and the store is put right."""
+    assert ports.secrets is not None
+    stores, values = ports.secrets.put, ports.secrets.values
+
+    async def under_a_nul(name: str, secret: str) -> SecretRef:
+        values["vault:a\x00b"] = values.pop((await stores(name, secret)).ref)
+        return SecretRef(ref="vault:a\x00b")
+
+    monkeypatch.setattr(ports.secrets, "put", under_a_nul)
+    return lambda: monkeypatch.setattr(ports.secrets, "put", stores)
+
+
+def says_the_key_is_gone(failed: pytest.ExceptionInfo[ValueError], *way_out: str) -> None:
+    """The store's fault, at an engine whose clearinghouse handed the key over once: the error says the
+    key is lost and names the way out, never a repeat of the same reference, and quotes no reference."""
+    message = str(failed.value)
+    assert "the secret store returned a reference" in message and "vault:" not in message
+    assert "handed that key over once" in message and "no repeat of this operation_ref can finish" in message
+    assert all(words in message for words in way_out), message
+    assert "same operation_ref" not in message and "replays" not in message
+
+
+async def test_a_handed_key_the_engine_s_own_store_names_by_a_reference_no_database_keeps_is_lost(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#158, at an engine that uses a clearinghouse: its own secret store returns a reference with a NUL
+    for the key it was handed. The engine deletes that copy and fails the command with nothing noted, as
+    with any provider. A clearinghouse hands a key over once, so the repeat cannot finish as it does
+    with Batteries, which replays the key, and the error says so: the key is lost, and the way out is
+    a lost allotment's. The repeat is answered as a key that never arrived, with that same way out."""
+    assert ports.secrets is not None
+    values = ports.secrets.values
+    put_right = names_a_secret_by_a_nul(ports, monkeypatch)
+    with pytest.raises(ValueError, match="the secret store returned a reference") as failed:
+        await allot(ports)
+    says_the_key_is_gone(
+        failed, "revoke the allocation at the clearinghouse", "allot again here under a new operation_ref"
+    )
+    assert values == {} and await ports.engine.store.get_actor(ports.tenant_id, "alice") is None
+    held = await record_of(ports, "allot-alice")
+    assert held is not None and held.state == "started"
+    assert not [name for name in held.context if name.startswith("new_secret")]
+
+    put_right()
+    later(ports)
+    with pytest.raises(InvalidRequest, match="Revoke the allocation at the clearinghouse"):
+        await allot(ports)
+    assert handed(ports, ALLOCATION)[-1]["replayed"] is True and values == {}
+
+    # the way out the error names, done: a revoke at the clearinghouse, and a new reference here
+    assert ports.wire is not None
+    revoke = f"http://clearinghouse.test/v1/clearinghouse{ALLOCATION}/revoke"  # the tenant's own route
+    answer = await ports.wire._client.post(revoke, headers={"Authorization": f"Bearer {ports.token}"})
+    assert answer.status_code == 200 and answer.json()["status"] == "revoked"
+    anew = await allot(ports, ref="allot-alice-again")
+    key = await stored_key(ports)
+    assert await ports.pays_for(key) == anew.allocation_id and live_keys(ports) == {key}
+
+
+async def test_a_rotated_key_the_engine_s_own_store_names_by_such_a_reference_is_replaced_by_a_rotation(
+    ports: Ports, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same for a rotation, to its end. The clearinghouse rotated before the engine's store named
+    the new key by a reference no database keeps, so from the failure to the way out:
+
+    - the actor cannot pay: the key the engine still holds, and signs with, is ended at the clearinghouse;
+    - the engine's record of the actor is as it was, so a rotation can begin from it;
+    - no repeat of the first reference brings the new key back: it was handed over once and deleted here.
+
+    The way out is a lost rotation's, and the error says it: another rotation, under a new reference,
+    once the store returns text. The actor then pays again."""
+    assert ports.secrets is not None
+    values = ports.secrets.values
+    allotted = await allot(ports)
+    old = await stored_key(ports)
+    put_right = names_a_secret_by_a_nul(ports, monkeypatch)
+
+    with pytest.raises(ValueError, match="the secret store returned a reference") as failed:
+        await rotate(ports, "r-1")
+
+    says_the_key_is_gone(failed, "rotate the payment key again, under a new operation_ref")
+    assert "ended at the clearinghouse" in str(failed.value)
+    assert list(values.values()) == [old] and await stored_key(ports) == old  # the copy is deleted again
+    assert await ports.pays_for(old) is None and len(live_keys(ports)) == 1  # rotated there: old is ended
+    assert await ports.engine.store.get_actor(ports.tenant_id, "alice") == allotted
+    held = await record_of(ports, "r-1")
+    assert held is not None and held.state == "started"
+    assert not [name for name in held.context if name.startswith("new_secret")]
+
+    put_right()
+    later(ports)
+    with pytest.raises(InvalidRequest, match="A lost key is replaced by a rotation"):
+        await rotate(ports, "r-1")  # the repeat: the clearinghouse answers its finished command, no key
+    assert handed(ports, ROTATE)[-1]["replayed"] is True
+    assert await stored_key(ports) == old and await ports.pays_for(old) is None
+
+    rotated = await rotate(ports, "r-2")  # the way out
+
+    new = await stored_key(ports)
+    assert rotated.allocation_id == allotted.allocation_id and rotated.api_key_id != allotted.api_key_id
+    assert await ports.pays_for(new) == allotted.allocation_id and live_keys(ports) == {new}
+    assert list(values.values()) == [new]
+    held = await record_of(ports, "r-1")  # the first rotation's record never finishes, as a lost one's
+    assert held is not None and held.state == "started"

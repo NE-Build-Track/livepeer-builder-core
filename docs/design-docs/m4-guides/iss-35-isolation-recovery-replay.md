@@ -143,6 +143,7 @@ observed evidence for this ticket.
 | --- | --- |
 | `store/replay.py` (new) | `reset_derived(copy_url)`, `compare(live, rebuilt)` |
 | `cli.py` | `lpb costs verify` |
+| `store/schema.py`, a migration, `store/sql.py` | the content of a set-aside usage row, kept with its record (T29) |
 | `testing/` | `FailingStore` decorator; `RecordedUsageSource` (JSONL feed); integrated fixture builder |
 | `tests/unit/test_isolation_sweep.py` (new) | family 1 |
 | `tests/unit/test_recovery.py` (new) | family 2 |
@@ -253,6 +254,11 @@ Locked by Mike on 13 November 2026.
   is recorded here as an upstream limit. A public issue in livepeer/node is John's to file.
 - **Set-aside usage rows** (#114) are named by `lpb costs verify`, and reconciliation is per allocation
   (#115).
+- **A set-aside row's content is kept by this ticket** (Mike, 26 November 2026, #158). Today its only
+  copy is the WARNING `costs.usage_set_aside`, written after the record commits, so an engine killed
+  between the two has the record and no content (tech debt T29). This ticket adds a column to
+  `lpb_usage_set_aside` for the content (up to 2000 characters of the row as received), written in the
+  transaction that records the row, with its migration: `lpb costs verify` reads it to name each row.
 - **The isolation sweep** runs under API keys and JWT. The trusted-backend authenticator is not built
   (ISS-32), and admin comes from a token claim (ISS-33).
 - **Event retention** has no required relation to job retention (ISS-46), and a restore writes a new event

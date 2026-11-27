@@ -34,6 +34,7 @@ from livepeer_builder.contracts import (
     OperationRecord,
     SecretRef,
 )
+from livepeer_builder.contracts.costs import storable_text
 from livepeer_builder.errors import AlreadyAllotted, InvalidRequest, NotFound, OperationConflict
 from livepeer_builder.protocols import (
     AllocationManager,
@@ -43,6 +44,7 @@ from livepeer_builder.protocols import (
 )
 from livepeer_builder.services.actor_writes import ActorWrites
 from livepeer_builder.services.allocation_delivery import DeliverySecrets
+from livepeer_builder.services.grants import stored_id
 from livepeer_builder.services.ledger import RunningOperation, TakenOver
 
 BEGAN_ON = "allocation_id"  # in a rotation's record: the allocation the actor held when it began
@@ -108,7 +110,13 @@ class PaymentKeys:
             )
 
     async def stored(
-        self, run: RunningOperation, tenant_id: str, actor_id: str, key: NewAllocationKey, sent_as: str
+        self,
+        run: RunningOperation,
+        tenant_id: str,
+        actor_id: str,
+        key: NewAllocationKey,
+        sent_as: str,
+        manager: AllocationManager,
     ) -> HeldSecret:
         """The new key's secret, stored once per key: its reference goes into the ledger's context, with the
         key it belongs to, the provider operation that returned it (``sent_as``, its idempotency key) and
@@ -118,7 +126,18 @@ class PaymentKeys:
 
         A resume is the kind of command that began the record (``resumes``), so the custody recorded with
         the reference is its own. A resume that delivers holds the secret the provider replayed under
-        the recorded receipt, so its answer carries the key the first run never answered with."""
+        the recorded receipt, so its answer carries the key the first run never answered with.
+
+        A key whose allocation id or key id the engine's records cannot keep is refused first
+        (``stored_id``): no secret is stored, the record notes nothing and no actor is written.
+
+        The reference the store returns is checked before it is noted (#158): one with a NUL or a lone
+        surrogate is kept by no record on every database, so its copy is deleted from the store again
+        and the command fails (``_reference_no_database_keeps``), with nothing noted. What the error
+        says to do depends on ``manager``, the provider that minted ``key``: one that replays the key
+        to a repeat, or one that handed it over once (``OneKeyPerAllocation``)."""
+        stored_id(key.allocation_id, "an allocation id")
+        stored_id(key.api_key_id, "a key id")
         if "new_secret_ref" in run.context and run.context.get("new_secret_key_id") == key.api_key_id:
             recorded = recorded_secret(run)
             self._redeliver(recorded, key)
@@ -129,6 +148,9 @@ class PaymentKeys:
         else:
             ref = await self._retiring.put(_secret_name(tenant_id, actor_id), secret)
         held = HeldSecret(ref, self.custody)
+        if not storable_text(ref.ref, limit=len(ref.ref)):  # any length (#115), but text every database keeps
+            await self._drop(held)  # if the store fails this too, its error is the answer and the copy stays
+            raise _reference_no_database_keeps(run.record.command, isinstance(manager, OneKeyPerAllocation))
         try:
             await run.remember(
                 new_secret_ref=ref.ref,
@@ -288,7 +310,7 @@ class PaymentKeys:
         previous_key = run.context["previous_api_key_id"]
         ends_keys_itself = isinstance(manager, OneKeyPerAllocation)
         if actor.api_key_id != key.api_key_id:  # not stored yet
-            new = await self.stored(run, actor.tenant_id, actor.actor_id, key, sent_as)
+            new = await self.stored(run, actor.tenant_id, actor.actor_id, key, sent_as, manager)
             actor = await self._pointed_at(actor, key.api_key_id, new, previous_key)
             if actor.api_key_id != key.api_key_id and isinstance(manager, OneKeyPerAllocation):
                 actor = await self.overtaken_rotation(run, manager, actor, key, new)
@@ -411,3 +433,39 @@ def _lost_rotation(actor_id: str, held: str) -> InvalidRequest:
 
 def _secret_name(tenant_id: str, actor_id: str) -> str:
     return f"lpg/{tenant_id}/{actor_id}"
+
+
+def _reference_no_database_keeps(command: str, handed_once: bool) -> ValueError:
+    """What a supplied ``SecretStore`` whose ``put`` returned a reference with a NUL or a lone surrogate
+    comes to. No engine error, as when a supplied store raises one of its own or a stored record cannot
+    be read (``_custody``): HTTP 500, and to the ledger an unknown outcome, never a refusal, since the
+    provider has minted the key. The reference is not quoted, and no id is.
+
+    The copy is deleted, so what comes next depends on the provider. Batteries replays the key to the
+    repeat of the call that minted it: the same reference finishes once the store returns text. A
+    payment clearinghouse handed the key over once (``handed_once``) and answers that repeat without
+    it, so the key is lost and is replaced as a key that never arrived is (D87 point 1): by a revoke
+    there and a new allotment, or, when ``command`` is a rotation, by another rotation."""
+    failed = (
+        "the secret store returned a reference the engine's records cannot keep: it has a NUL or a lone "
+        "surrogate, and no such text is stored on every database. The copy stored under it was deleted "
+        "again and nothing is noted"
+    )
+    if not handed_once:
+        return ValueError(
+            f"{failed}. The payment provider has minted the key and replays it to a repeat: repeat this "
+            "request, under the same operation_ref, once the store returns a reference that is text"
+        )
+    lost = (
+        f"{failed}. The clearinghouse handed that key over once and keeps none, so the key is lost and "
+        "no repeat of this operation_ref can finish. Once the store returns a reference that is text, "
+    )
+    if command == "rotate_payment_key":
+        return ValueError(
+            f"{lost}rotate the payment key again, under a new operation_ref: the key this engine holds "
+            "is ended at the clearinghouse"
+        )
+    return ValueError(
+        f"{lost}revoke the allocation at the clearinghouse, which returns what it has not spent to the "
+        "grant, then allot again here under a new operation_ref"
+    )

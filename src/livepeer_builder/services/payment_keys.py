@@ -53,6 +53,10 @@ _LOST_TO = "lost_to_api_key_id"  # in a rotation's record: the key another rotat
 # that key's secret and who holds it, so a resume drops it (``PaymentKeys.overtaken_rotation``).
 _SUPERSEDED = "superseded_secret_ref"
 _SUPERSEDED_CUSTODY = "superseded_credential_custody"
+# In a record, noted in the write that notes a new ``new_secret_ref`` over another key's: the copy that
+# write replaced and who holds it, so the run, or a resume, drops it (``PaymentKeys.stored``).
+_REPLACED = "replaced_secret_ref"
+_REPLACED_CUSTODY = "replaced_secret_custody"
 # In a record, from the moment it begins: who the command that began it keeps the key with, which is the
 # kind of command it is. ``secret_store``: ``allot`` or ``rotate_payment_key``. ``work_engine``: their
 # delivering twins.
@@ -108,7 +112,14 @@ class PaymentKeys:
             )
 
     async def stored(
-        self, run: RunningOperation, tenant_id: str, actor_id: str, key: NewAllocationKey, sent_as: str
+        self,
+        run: RunningOperation,
+        tenant_id: str,
+        actor_id: str,
+        key: NewAllocationKey,
+        sent_as: str,
+        *,
+        holds: SecretRef | None = None,
     ) -> HeldSecret:
         """The new key's secret, stored once per key: its reference goes into the ledger's context, with the
         key it belongs to, the provider operation that returned it (``sent_as``, its idempotency key) and
@@ -116,11 +127,18 @@ class PaymentKeys:
         orphaned. A resume that got another key (a second allotment after a revoke) stores that key's
         secret.
 
+        The copy such a resume replaces is noted in that same write and dropped after it, so the record
+        never names a secret that is gone, and a resume finishes a drop that failed (#158). Two references
+        are never dropped: the one just stored, which a store that keeps one path for an actor issues
+        again, and ``holds``, the one the actor's row holds now. A rotation passes it; an allotment
+        stores a key only for an actor with no row or a revoked one, whose secret is already deleted.
+
         A resume is the kind of command that began the record (``resumes``), so the custody recorded with
         the reference is its own. A resume that delivers holds the secret the provider replayed under
         the recorded receipt, so its answer carries the key the first run never answered with."""
         if "new_secret_ref" in run.context and run.context.get("new_secret_key_id") == key.api_key_id:
             recorded = recorded_secret(run)
+            await self._drop_replaced(run, recorded, holds)
             self._redeliver(recorded, key)
             return recorded
         secret = key.secret.get_secret_value()
@@ -135,10 +153,12 @@ class PaymentKeys:
                 new_secret_key_id=key.api_key_id,
                 new_secret_sent_as=sent_as,
                 **{_NEW_CUSTODY: held.custody},
+                **_replacing(run),
             )
         except TakenOver:  # a resume took over: it stores its own copy
             await self._drop(held)
             raise
+        await self._drop_replaced(run, held, holds)
         return held
 
     async def require_writable(
@@ -297,7 +317,9 @@ class PaymentKeys:
         previous_key = run.context["previous_api_key_id"]
         ends_keys_itself = isinstance(manager, OneKeyPerAllocation)
         if actor.api_key_id != key.api_key_id:  # not stored yet
-            new = await self.stored(run, actor.tenant_id, actor.actor_id, key, sent_as)
+            new = await self.stored(
+                run, actor.tenant_id, actor.actor_id, key, sent_as, holds=actor.secret_ref
+            )
             actor = await self._pointed_at(actor, key.api_key_id, new, previous_key)
             if actor.api_key_id != key.api_key_id and isinstance(manager, OneKeyPerAllocation):
                 actor = await self.overtaken_rotation(run, manager, actor, key, new)
@@ -383,6 +405,14 @@ class PaymentKeys:
         elif self._delivery is not None:
             self._delivery.delete(held.ref)
 
+    async def _drop_replaced(self, run: RunningOperation, kept: HeldSecret, holds: SecretRef | None) -> None:
+        """Drop the copy the record notes as replaced, unless its reference is ``kept``'s, the copy the
+        record names now, or ``holds``, the one the actor's row holds. Safe to repeat."""
+        if _REPLACED in run.context:
+            replaced = SecretRef(ref=run.context[_REPLACED])
+            if replaced not in (kept.ref, holds):
+                await self._drop(HeldSecret(replaced, _custody(run.context, _REPLACED_CUSTODY)))
+
     def _redeliver(self, held: HeldSecret, key: NewAllocationKey) -> None:
         """A delivering command holds the key the provider gave it under ``held``'s receipt, when that
         receipt is the work engine's: the answer then carries it. Anything else is left as it is."""
@@ -393,6 +423,14 @@ class PaymentKeys:
 def recorded_secret(run: RunningOperation) -> HeldSecret:
     """The secret a run recorded storing, with the custody recorded beside it."""
     return HeldSecret(SecretRef(ref=run.context["new_secret_ref"]), _custody(run.context, _NEW_CUSTODY))
+
+
+def _replacing(run: RunningOperation) -> dict[str, str]:
+    """What a record notes of the copy a new one replaces: the secret it named until now, and its
+    custody. Nothing for a record that named none."""
+    if "new_secret_ref" not in run.context:
+        return {}
+    return {_REPLACED: run.context["new_secret_ref"], _REPLACED_CUSTODY: _custody(run.context, _NEW_CUSTODY)}
 
 
 def _custody(context: dict[str, Any], name: str) -> CredentialCustody:

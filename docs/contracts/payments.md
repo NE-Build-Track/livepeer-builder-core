@@ -853,6 +853,20 @@ left unfinished; a replay of a finished command is not a resume.
   reference is recorded before the actor points at it, so a resume reuses that copy. A rotation that
   another rotation of the same actor overtook, or that is resumed on an allocation allotted since
   it began, is refused and keeps its reference ([two rotations](#allotment)).
+- **A resume that is handed another key drops the copy it replaces (#158).** A resume reuses the
+  stored secret its record notes only when the provider hands it the key that secret belongs to. It
+  is handed another when an allotment is resumed after its actor was revoked, which allots again, and
+  when an allotment or a rotation is resumed under another `LPB_ENGINE_ID`, which sends a new provider
+  call. The resume stores the new key's secret and notes it in place of the first, and notes the
+  replaced copy beside it in the same write (`replaced_secret_ref`). Then it deletes the replaced
+  copy, so the record never names a secret that is gone and no stored secret is left unnamed. Two
+  references are never deleted: the one the actor's row holds, which is the key the actor pays with
+  when a rotation had already pointed it there, and the one the resume has just stored, which a
+  supplied store that keeps one path for an actor issues again. When the delete fails, the command
+  answers with the store's error before the actor is written: the record stays `started`, naming
+  both copies, and the repeat, which is handed the same key again, stores nothing more, deletes the
+  replaced copy and goes on. A command that hands its key over replaces only a receipt of its own,
+  and asks nothing of the store.
 - **Allotting** to an actor that already has an allocation (not revoked) under a new reference is refused:
   409 `code: already_allotted` with the actor, and nothing is applied, the amount included (top it up
   instead). The refusal frees the reference. A resumed run answers with the actor only if the actor

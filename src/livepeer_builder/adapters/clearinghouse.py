@@ -37,6 +37,8 @@ from livepeer_builder.adapters.clearinghouse_errors import (
     needs_the_actor,
     never_arrived,
     not_held,
+    not_kept,
+    said,
 )
 from livepeer_builder.adapters.clearinghouse_tenant import USAGE_PATH, TenantWire, allocation_path, own_tenant
 from livepeer_builder.adapters.clearinghouse_wire import ClearinghouseWire
@@ -52,6 +54,7 @@ from livepeer_builder.contracts import (
     TenantGrant,
     UsagePage,
 )
+from livepeer_builder.contracts.costs import storable_text
 from livepeer_builder.errors import (
     InvalidRequest,
     ProviderError,
@@ -239,7 +242,7 @@ class _ActorAllocation(ClearinghouseAllocations):
         if held.status == "revoked" or held.api_key_id != api_key_id:
             return
         raise InvalidRequest(
-            f"key {api_key_id!r} is the one allocation {held.allocation_id!r} takes at the clearinghouse "
+            f"key {api_key_id!r} is the one allocation {said(held.allocation_id)} takes at the clearinghouse "
             "now, and a clearinghouse ends a key only by the rotation that replaces it: rotate the "
             f"payment key of actor {self._actor_id!r}"
         )
@@ -336,7 +339,11 @@ class _ActorAllocation(ClearinghouseAllocations):
         hands a key over once. When the engine's record of the actor names the allocation and the key of
         that answer, with the secret in its own store, the engine was handed it then and its run died
         afterwards: the command finishes from that copy. Otherwise the key never reached this engine. It
-        is refused, with what replaces it, and nothing is stored or saved."""
+        is refused, with what replaces it, and nothing is stored or saved.
+
+        A key handed over under an id the engine's records cannot keep is not taken (``not_kept``, #158):
+        the answer that carries it, and the ``replayed`` one that names the same ids afterwards, are the
+        same answer the engine cannot use."""
         allocation_id, api_key_id, key = answer.allocation_id, answer.api_key_id, answer.allocation_api_key
         replayed = answer.replayed
         del answer  # no error raised below has the answer in its frame, and no caller keeps it in one
@@ -352,6 +359,10 @@ class _ActorAllocation(ClearinghouseAllocations):
                 "Its new key is in an answer this engine did not keep, and the key it had is ended: "
                 "whoever holds that allocation rotates its key again",
             )
+        kept = storable_text(allocation_id) and storable_text(api_key_id)
+        if not kept and (key is not None or replayed):  # handed over now, or before: not taken either way
+            del key
+            raise not_kept(self._actor_id, rotation=rotated is not None)
         if key is not None and not replayed:
             return NewAllocationKey(allocation_id=allocation_id, api_key_id=api_key_id, secret=key)
         del key

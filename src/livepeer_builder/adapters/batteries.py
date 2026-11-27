@@ -38,6 +38,7 @@ from livepeer_builder.contracts import (
     UsagePage,
     UsageRow,
 )
+from livepeer_builder.contracts.costs import storable_text
 from livepeer_builder.errors import CursorMismatch, ProviderError, ProviderUnavailable
 from livepeer_builder.utils import BODY_LIMIT, CursorTrail
 
@@ -139,7 +140,8 @@ class BatteriesClient:
         try:
             return grant_from_item(await self._request("GET", f"/v1/grants/{segment(grant_id)}"))
         except ProviderError as exc:
-            raise ProviderUnavailable(f"grant {grant_id} created but not read back: {exc}") from exc
+            named = grant_id if storable_text(grant_id) else "(an id the engine cannot store)"
+            raise ProviderUnavailable(f"grant {named} created but not read back: {exc}") from exc
 
     async def read_grant(self, grant_id: str) -> TenantGrant:
         """The grant, with what is left of it to allot (``tenant_grant``): two reads, the grant first."""

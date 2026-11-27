@@ -25,7 +25,7 @@ from livepeer_builder import BuilderEngine, EngineSupply
 from livepeer_builder.adapters.batteries import BatteriesClient
 from livepeer_builder.config import generate_secret_key
 from livepeer_builder.contracts import ActorContext, AllotRequest, Money
-from livepeer_builder.errors import OperationInProgress, ProviderError
+from livepeer_builder.errors import OperationInProgress, ProviderError, ProviderUnavailable
 from livepeer_builder.http import create_app
 from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.store import schema as t
@@ -48,6 +48,7 @@ class Batteries:
     def __init__(self, key: dict[str, Any] | None = None, grant: dict[str, Any] | None = None) -> None:
         self.key, self.grant = key or KEY, grant or GRANT
         self.asked: list[str] = []
+        self.reads_a_grant_with = 200  # the status of a read of one grant
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.asked.append(f"{request.method} {request.url.path}")
@@ -58,6 +59,8 @@ class Batteries:
             return httpx.Response(201, content=json.dumps({"id": self.grant["id"]}).encode())
         if request.url.path == "/v1/grants":
             return httpx.Response(200, content=json.dumps({"items": [self.grant]}).encode())
+        if self.reads_a_grant_with >= 400:
+            return httpx.Response(self.reads_a_grant_with, content=b'{"error": "overloaded"}')
         return httpx.Response(200, content=json.dumps(self.grant).encode())
 
 
@@ -165,6 +168,33 @@ async def test_an_onboarding_whose_grant_has_an_id_the_store_cannot_keep_issues_
             await desk.onboard(ADMIN, "ops", USD, operation_ref="o-1")
         assert await kept(engine) == nothing
         assert provider.asked.count("POST /v1/grants") == 1  # and creates no second grant
+
+
+@pytest.mark.parametrize("why", ["201 characters", "a NUL"])
+async def test_a_new_grant_that_is_not_read_back_is_not_named_by_an_id_the_store_cannot_keep(
+    database_url: str, clock: FixedClock, why: str
+) -> None:
+    """The create answered the id and the read-back failed: an unknown outcome, whose error names the
+    grant by its id so an operator can find it. An id the engine cannot keep is not repeated there."""
+    provider = Batteries(grant=GRANT | {"id": NOT_KEPT[why]})
+    provider.reads_a_grant_with = 500
+    async with engine_over(provider, database_url, clock) as engine:
+        desk = engine.payments.tenants
+        assert desk is not None
+        with pytest.raises(ProviderUnavailable) as unknown:
+            await desk.onboard(ADMIN, "ops", USD, operation_ref="o-1")
+        assert "created but not read back" in str(unknown.value)
+        assert "an id the engine cannot store" in str(unknown.value)
+        assert NOT_KEPT[why] not in str(unknown.value) and repr(NOT_KEPT[why])[1:-1] not in str(unknown.value)
+        nothing = {"records": [("o-1", "started", [])], "actors": [], "secrets": 0, "key_tenants": []}
+        assert await kept(engine) == nothing
+    kept_id = Batteries()  # and one it keeps is still named
+    kept_id.reads_a_grant_with = 500
+    async with engine_over(kept_id, database_url, clock) as engine:
+        desk = engine.payments.tenants
+        assert desk is not None
+        with pytest.raises(ProviderUnavailable, match="grant grant_1 created but not read back"):
+            await desk.onboard(ADMIN, "ops", USD, operation_ref="o-2")
 
 
 async def test_ids_of_exactly_the_stored_length_are_kept(database_url: str, clock: FixedClock) -> None:

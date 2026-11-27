@@ -802,7 +802,11 @@ left unfinished; a replay of a finished command is not a resume.
   stored, on SQLite and on PostgreSQL alike: no secret, nothing noted in the command's record, no actor
   and no tenant admin key. The provider has applied the command by then (a key funded, a grant
   created), so this is an unknown outcome, never a refusal: 502, the reference stays held, and a resume
-  that is answered the same id is refused the same way. The id is not quoted. An allocation's `allocated`,
+  that is answered the same id is refused the same way. Such an id is quoted nowhere: not by this error,
+  not by the error of a new grant that was not read back, which otherwise names the grant by its id,
+  and not in a log line or the command's record. What follows when a payment clearinghouse answered it
+  is under [the key an enterprise's engine is handed](#the-key-an-enterprises-engine-is-handed). An
+  allocation's `allocated`,
   `spent` and `available` amounts are each `null` in the `Allowance` where the answer states none
   (`null`, `""`, `"[error]"`) or the engine reads none: unknown, never zero. One stated as `NaN` or
   `Infinity` is the same `ProviderError` ("no usable `available_usd`"), as a grant's total is (#158):
@@ -1344,7 +1348,8 @@ they are the tenant's own routes, which act on the tenant of the key (D87 point 
     for any answer the engine cannot use. The reference of a top-up or a rotation stays held, since
     something was applied;
   - the engine's record of the actor is not changed, and a rotation's key is not kept;
-  - the message names both allocations, says nothing is recorded here, and says what to do: for a
+  - the message names both allocations (the one acted on as "an id this engine cannot store" when it
+    is more than 200 characters or has a NUL, #158), says nothing is recorded here, and says what to do: for a
     top-up, where the amount is now; for a status, to set it again there; for a revoke, to repeat it,
     which sends nothing and records that the named allocation has ended; for a rotation, that the other
     allocation's holder rotates its key again.
@@ -1381,7 +1386,7 @@ What the engine does depends on what the answer carries:
 | No key, `replayed: true`, and the engine's own record of the actor names the allocation and the key of the answer, with the secret in its store | The manager returns the engine's own copy: the engine was handed that key before. The engine's own rotation does not come this far, since its resume asks for no key (below); a caller of the port alone does |
 | No key, `replayed: true`, otherwise | Refused, `InvalidRequest` (400). Nothing is stored, and no actor record is saved or changed. The message says what replaces the key (below) |
 | No key and no `replayed`: the clearinghouse's routes are mounted to keep each key with its own engine | `ProviderError`, an answer the engine cannot use and no refusal: the allocation exists there, and the reference stays held |
-| A key whose `allocation_id` or `api_key_id` the engine's records cannot keep (more than 200 characters, a NUL) | The same `ProviderError`, before the key is stored: nothing reaches the engine's secret store or its record of the actor, and the reference stays held ([repeat-safe commands](#repeat-safe-commands), #158) |
+| A key whose `allocation_id` or `api_key_id` the engine's records cannot keep (more than 200 characters, a NUL), or no key and `replayed: true` under such an id | `ProviderError`, an answer the engine cannot use and no refusal (502), in the same words both times. The key is not taken: nothing reaches the engine's secret store or its record of the actor, the reference stays held, and neither id is in the error, a log line or the command's record. The message says what replaces the key (below; [repeat-safe commands](#repeat-safe-commands), #158) |
 
 **A key that never arrived.** A clearinghouse that finished a command answers its repeat without the
 key, so a lost answer loses the key: nobody holds it. A lost key is replaced by a rotation (D87 point 1).
@@ -1397,6 +1402,26 @@ key, so a lost answer loses the key: nobody holds it. A lost key is replaced by 
   finishes: its repeat is 409 `already_allotted`, which frees the reference.
 - **Under a new reference without the revoke,** an allotment is the clearinghouse's 409
   `already_allotted`, passed on. Nothing is applied and the amount is not added.
+
+**A key the engine did not keep (#158).** A clearinghouse that names the allocation or its key by an id
+of more than 200 characters, or with a NUL, hands over a key the engine cannot record: the engine takes
+none of it. The clearinghouse has finished the command and hands a key over once, so its answer to the
+repeat carries no key under the same ids, and is the same `ProviderError`: no repeat of that reference
+can finish. The key is replaced as a key that never arrived is, and the message says how, without
+either id:
+
+- **An allotment.** The tenant's admin revokes the allocation at the clearinghouse
+  (`POST .../allocation/revoke` with the tenant admin key; the route names the actor and no allocation
+  id), and the engine allots again under a new `operation_ref`. The first allotment's record then
+  finishes as a lost allotment's does: its repeat is 409 `already_allotted`, which frees the reference.
+- **A rotation.** The clearinghouse rotated, so the key the engine holds is ended. Rotate again under a
+  new `operation_ref`. The first rotation's record never finishes; leave it.
+
+Either works once the clearinghouse answers ids the engine can keep. One that names every allocation or
+key by such an id cannot be used by this engine, and that is the clearinghouse's to put right. An engine
+of this repository in its `clearinghouse` role answers no such id: it refuses one from its own provider
+before it stores or hands over anything, so the enterprise's engine is answered an error and no key was
+handed over to be lost.
 
 **The engine's own resume.** A run of the engine that died before it stored a key repeats the same
 reference at the clearinghouse.

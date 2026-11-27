@@ -853,18 +853,67 @@ left unfinished; a replay of a finished command is not a resume.
   reference is recorded before the actor points at it, so a resume reuses that copy. A rotation that
   another rotation of the same actor overtook, or that is resumed on an allocation allotted since
   it began, is refused and keeps its reference ([two rotations](#allotment)).
+- **A resume that is handed another key drops the copy it replaces (#158).** A resume reuses the
+  stored secret its record notes only when the provider hands it the key that secret belongs to. It
+  is handed another when an allotment is resumed after its actor was revoked, which allots again, and
+  when an allotment or a rotation is resumed under another `LPB_ENGINE_ID`, which sends a new provider
+  call. The resume stores the new key's secret and notes it in place of the first, and notes the
+  replaced copy beside it in the same write (`replaced_secret_ref`). Then it deletes the replaced
+  copy. The secret a record names for its key is therefore never one that is gone, and every secret
+  the command has stored is named by its record, as its key's secret or as the copy that one
+  replaced, or by the actor's row.
+  - **A delete that fails.** The command answers with the store's error before the actor is written.
+    The record stays `started`, naming both copies, and the repeat, which is handed the same key
+    again, stores nothing more, deletes the replaced copy and goes on.
+  - **Another key before that delete is finished.** A record has one field for a replaced copy. A
+    resume that is handed yet another key while a replaced copy is still noted (the actor was
+    allotted and revoked once more, or the engine's id changed again) deletes that copy first,
+    before it stores anything and before the write that would stop naming it. Then it stores the
+    new key's secret, notes it with the copy it replaces, and deletes that one. When the first of
+    those deletes fails, nothing was stored or noted: the record names what it named, and the
+    repeat, handed the same key, begins there again and stores that key's secret once. This holds
+    however often the key changes.
+  - **Two references are never deleted:** the one the actor's row holds, which is the key the actor
+    pays with when a rotation had already pointed it there, and the one the record names for its
+    key, which a supplied store that keeps one path for an actor issues again for the next key.
+  - **The one secret no record names** is the one a command has just stored and has not yet noted,
+    for the first key as for a later one: the reference comes from the store, so the store is
+    written first. A command that dies between the two leaves that copy, and its resume stores the
+    key again.
+  - A command that hands its key over replaces only a receipt of its own, and asks nothing of the
+    store.
+  - **A resume that stores nothing** ends in one of four ways, and each deletes every secret the
+    record names, the one for its key and a replaced copy still noted, before it ends. The reference
+    the actor's row holds is never deleted. A delete that fails is the command's answer in place of
+    the end: the record stays `started`, keeps its reference and its notes, and the repeat comes to
+    the same end.
+
+    | The resume | Ends | Its record |
+    | --- | --- | --- |
+    | of an allotment whose actor holds another key by now | 409 `already_allotted` | Deleted: the reference is free |
+    | of an allotment whose actor another reference saved with the same key | The actor, as its own result | `done` |
+    | of an allotment whose actor has a revoked record from another grant ([records from before](#records-from-before-a-tenants-id-was-its-grants-id)) | 400, for every resume | Stays `started` |
+    | of a rotation whose actor was revoked and allotted again | 404, for every resume | Stays `started` |
+
+  - **What is not deleted.** A noted secret is deleted only by a run of its own command. A command
+    that is never repeated keeps the copy its record names. So does a rotation whose actor was
+    revoked and not allotted again: its repeat is 404 before the record is read, as for any actor
+    with no allocation, and the copy stays, named by the record, until the actor is allotted again
+    and the rotation is repeated once more.
 - **Allotting** to an actor that already has an allocation (not revoked) under a new reference is refused:
   409 `code: already_allotted` with the actor, and nothing is applied, the amount included (top it up
   instead). The refusal frees the reference. A resumed run answers with the actor only if the actor
   holds the provider key its earlier run recorded: that allocation is this command's (the provider key
   is derived from the actor, so another reference may have had the same key replayed). Otherwise, a
   resume that never got that far or an actor revoked and allotted again under another reference,
-  it is refused the same way and the reference is freed. A secret its earlier run stored is deleted
-  before that refusal (#158): the actor points at another command's copy, and once the reference is
-  freed no record names this one. A reference the actor itself holds is kept, as a supplied store may
-  issue one reference for an actor's name. When the delete fails the command is not refused yet: the
-  record stays `started`, and a repeat deletes it. A second allotment after a revoke is a new
-  command: it needs a new reference.
+  it is refused the same way and the reference is freed. Every secret its record names is deleted
+  before that refusal (#158), the one it names for its key and a replaced copy still noted
+  ([a resume that stores nothing](#repeat-safe-commands)): the actor points at another command's
+  copy, and once the reference is freed no record names these. A reference the actor itself holds is
+  kept, as a supplied store may issue one reference for an actor's name. When a delete fails the
+  command is not refused yet: it answers with the store's error, the record stays `started` and the
+  reference is not freed, and a repeat deletes what is left and refuses. A second allotment after a
+  revoke is a new command: it needs a new reference.
 - **Onboarding a tenant** is two steps on one record: create the grant, then issue the tenant's first
   admin key.
   - **Its scope.** The record is scoped to the caller and the reference, as every command's is, so it

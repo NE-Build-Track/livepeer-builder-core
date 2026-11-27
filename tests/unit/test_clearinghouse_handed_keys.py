@@ -886,13 +886,14 @@ async def test_self_hosted_payments_still_revoke_the_overtaken_rotations_own_key
 # -- how many calls a command makes ------------------------------------------------------------------------
 
 
-async def test_no_command_writes_after_its_second_call_and_only_an_overtaken_rotation_makes_a_third(
+async def test_no_command_writes_after_its_second_call_and_a_third_call_only_reads(
     ports: Ports,
 ) -> None:
     """What ``LPB_OPERATION_STALE_S`` is held to (``config.py``): the ledger cancels a run at half the
-    stale window, and the longest command makes three calls to the clearinghouse, each within
+    stale window, and the longest command on it makes three calls to the clearinghouse, each within
     ``LPB_CLEARINGHOUSE_TIMEOUT_S``. The three are an overtaken rotation's (the test above counts them);
-    every other command makes one or two, and the last write is never later than the second."""
+    every other command on the ledger makes one or two, and the last write is never later than the
+    second. A status command is not on the ledger, and its third call reads the status back (#158)."""
     payments = ports.engine.payments
 
     async def calls_of(command: Callable[[], Awaitable[object]]) -> list[str]:
@@ -909,6 +910,7 @@ async def test_no_command_writes_after_its_second_call_and_only_an_overtaken_rot
     assert await calls_of(lambda: payments.set_status(ports.admin, ports.tenant_id, "alice", "paused")) == [
         "GET",
         "POST",
+        "GET",
     ]
     assert await calls_of(lambda: rotate(ports, "r-1")) == ["GET", "POST"]
     assert await calls_of(lambda: payments.revoke(ports.admin, ports.tenant_id, "alice")) == ["GET", "POST"]

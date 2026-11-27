@@ -210,6 +210,7 @@ class PaymentsService:
             # Otherwise it is another reference's, or a second allotment after a revoke under a new key, and
             # this amount would be silently dropped.
             if run.context.get("new_secret_key_id") != existing.api_key_id:
+                await keys.refused(run, existing)
                 raise AlreadyAllotted(existing)
             # An earlier run wrote the actor and its answer was lost. A delivering resume sends that run's
             # provider call again, under the idempotency key it recorded: Batteries replays the original
@@ -362,8 +363,8 @@ class PaymentsService:
         actor = await self._require_actor(tenant_id, actor_id)
         manager = await self._manager_for(tenant_id, actor_id)
         await manager.set_allocation_status(actor.allocation_id, status)
-        written = await self._writes.status(actor, status)
-        if written is None:  # revoked while this command was at the provider: it stays revoked (#115, C4)
+        written = await self._writes.status_read_back(actor, status, manager.read_allocation)
+        if written is None:  # revoked since this command read it: it stays revoked (#115, C4; #158)
             raise NotFound(f"actor {actor_id!r} has no allocation")
         return written
 

@@ -433,6 +433,14 @@ checks stop that:
     asked when its actor already holds the key and secret the record notes: the provider call is still
     sent and replays that key, nothing is left to store, and the old key is revoked. A record that has
     the note is never judged by what the actor holds.
+  - Such a record cannot show that its resume runs under another `LPB_ENGINE_ID` than the run that
+    wrote it, so the rotation is not asked then either. The provider mints a new key where it would
+    have replayed one, and a store that cannot write fails the command only after that: the new key is
+    live at the provider with its secret kept nowhere, and the actor keeps the key it holds and still
+    pays. Repeat the command once the store can write: the repeat revokes that key and the key the
+    rotation began from, and ends the rotation with the refusal of one that another rotation
+    overtook. Only a record from v0.2.x can be in this state, so finish every interrupted rotation
+    before `LPB_ENGINE_ID` is changed.
   - A resume that still has a key to store is refused, and the message says that an earlier attempt
     may have reached the provider. It does not say that nothing was sent, and the refusal does not
     free the reference ([refused or unknown](#repeat-safe-commands)): the same request resumes once
@@ -446,7 +454,7 @@ checks stop that:
 | `tenants.onboard(name, amount, operation_ref=…)` (the tenant desk, `payments.tenants`) | `POST /v1/grants` with `LPB_BATTERIES_GRANTS_TOKEN`, tagged `metadata.lpb_operation`; then the tenant admin key, an engine record | the ledger; Batteries has no key on grants, so a resume finds the tagged grant (Q5) |
 | `tenants.list_tenants()`, `tenants.grant(tenant)` | `GET /v1/grants`, `GET /v1/grants/{tenant}` and `GET /v1/allocations` with `LPB_BATTERIES_GRANTS_TOKEN` | read |
 | `tenants.set_status(tenant, active / paused, operation_ref=…)` | `PATCH /v1/grants/{tenant}/status` with `LPB_BATTERIES_GRANTS_TOKEN` | the ledger; the call itself sets a state |
-| `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status` | naturally repeatable |
+| `set_status(active / paused)` | `PATCH /v1/allocations/{id}/status`, then `GET /v1/allocations/{id}`, which reads the status back ([two status commands](#allotment)) | naturally repeatable |
 | `revoke` | `POST /v1/allocations/{id}/revoke` (unused funds return to the grant) | repeat-safe upstream |
 | `rotate_payment_key(operation_ref)`, which stores the new key, or `rotate_for_delivery(operation_ref)`, which hands it to the caller | `POST /v1/api-keys` with `allocation_id`, then revoke the old key | the ledger, and `rotate:{allocation}:{operation_ref}` at the provider |
 
@@ -536,15 +544,42 @@ checks stop that:
   stayed live with its secret stored and nothing pointing at it, and a resumed rotation put back a key
   the newer one had revoked, with the reference of a deleted secret, so the actor could not pay.
 
-  **What the guarantee covers, and the known gap.** It covers commands that write different columns,
-  and the cases named above: a revoke, two rotations, an allotment that another command overtook.
-  Two status commands at the same moment (a pause and an activate) write the same column, and the last
-  write wins at the provider and in the store separately. Each sets the status at the provider and
-  then stores it, so when a pause is at the provider while an activate runs to its end, the provider
-  ends `paused` then `active` and the store `active` then `paused`: the stored status is the opposite
-  of the provider's. Closing this needs a version on the row or a read-back of the provider's status,
-  and #115 adds neither. Until then, send the status you want again: a repeated `set_status` sets it
-  at the provider and in the store.
+  **What the guarantee covers.** Commands that write different columns, the cases named above (a
+  revoke, two rotations, an allotment that another command overtook), and two status commands.
+
+  **Two status commands at the same moment (#158).** A pause and an activate write the same column,
+  so no condition orders them: they could reach the provider in one order and the store in the other,
+  and the stored status ended the opposite of the provider's. A status command therefore sets the
+  status at the provider, stores it, and then reads the allocation back at the provider
+  (`read_allocation`: `GET /v1/allocations/{id}` at Batteries, the actor's allocation route through a
+  clearinghouse). When the provider reports the other of the two statuses, another status command
+  reached it later: the command stores the provider's status and reads again. Its write always comes
+  before its read, so the command that writes the record last has read the provider after that write
+  and found what it wrote. Whichever command the provider took last, the stored status ends as the
+  provider's: in the engine's record and, through a clearinghouse, in the clearinghouse's own.
+
+  | The read-back | The command stores |
+  | --- | --- |
+  | reports the status the command set | Nothing more. This is the ordinary command: one read |
+  | reports the other of `active` and `paused` | The provider's status, and the provider is read again: three reads at most |
+  | reports `exhausted`, `revoked` or anything else | Nothing more: the report is not stored. `revoked` is a revoke's to store, with the key it deletes, and the engine's record does not follow an allocation that the provider calls `exhausted` because it has nothing left |
+  | fails: the provider is down or answers an error, or a clearinghouse could not read its own provider | Nothing more. The provider took the status, so the command is done and is not failed for the read. The failure is logged (`payments.status_read_back_failed`) and the read is not tried again, so after that one command the two statuses can still end opposite: send the status again |
+  | is not made, because the actor was revoked before the command's write | Nothing |
+
+  **The answer is the actor's row as it is stored when the command ends,** on every row of the table:
+  the command reads the row once more after its last read of the provider and answers with that,
+  never with one of its own writes. Another command can finish while a read of the provider is on
+  its way back, and what that read reports is never written over it. So a pause that an activate
+  overtook answers `active`, wherever the activate landed; a rotation that finished meanwhile is in
+  the answer with its key and its secret reference; and a revoke that finished at any point after
+  the command read the actor is 404, as for an actor that has no allocation, and so is an actor
+  revoked and allotted again by then. The same holds for a supplied store without the conditional
+  writes: the answer is the row it returns at the end.
+
+  A status command takes no reference and is not on the ledger: a repeat sets the status at the
+  provider, stores it and reads it back again. Only status commands sent through the engine are
+  settled this way. A status the provider changes by itself, or one set at the provider or at the
+  clearinghouse directly, is not followed.
 
   The conditional writes are optional for a store (`ActorCommandRepo` in `protocols`:
   `set_actor_status`, `set_actor_key`, `allot_actor`). The packaged SQL store has them; a supplied
@@ -824,7 +859,11 @@ left unfinished; a replay of a finished command is not a resume.
   holds the provider key its earlier run recorded: that allocation is this command's (the provider key
   is derived from the actor, so another reference may have had the same key replayed). Otherwise, a
   resume that never got that far or an actor revoked and allotted again under another reference,
-  it is refused the same way and the reference is freed. A second allotment after a revoke is a new
+  it is refused the same way and the reference is freed. A secret its earlier run stored is deleted
+  before that refusal (#158): the actor points at another command's copy, and once the reference is
+  freed no record names this one. A reference the actor itself holds is kept, as a supplied store may
+  issue one reference for an actor's name. When the delete fails the command is not refused yet: the
+  record stays `started`, and a repeat deletes it. A second allotment after a revoke is a new
   command: it needs a new reference.
 - **Onboarding a tenant** is two steps on one record: create the grant, then issue the tenant's first
   admin key.
@@ -1248,10 +1287,13 @@ selects the remote adapters (#169), and three settings, set together, say which 
   six times it. The ledger cancels a run at half the stale window
   ([a resume is a lease](#repeat-safe-commands)), and the longest command must fit in that half. Through
   the remote adapters the longest makes three calls: a rotation that another one overtook reads the
-  allocation, sends the rotation, and reads which key the allocation takes. Every other command makes
-  one or two, and none writes after its second call, so a read that is cut short leaves nothing in
-  flight and the resume asks again. Three calls in the half is six timeouts in the window, where
-  Batteries' two calls make four. The defaults, 20 and 120, meet it exactly. The read of the key's
+  allocation, sends the rotation, and reads which key the allocation takes. Every other command on
+  the ledger makes one or two, and none writes after its second call, so a read that is cut short
+  leaves nothing in flight and the resume asks again. Three calls in the half is six timeouts in the
+  window, where Batteries' two calls make four. The defaults, 20 and 120, meet it exactly. A status
+  command is not on the ledger and nothing cuts it short: its third call reads the status back, and
+  it reads up to twice more when another status command was at the clearinghouse at the same moment
+  ([two status commands](#allotment)). The read of the key's
   grant, which the engine makes once in a process
   ([who the engine is at the clearinghouse](#who-the-engine-is-at-the-clearinghouse)), is none of the
   three: a command makes it before its record is begun, so it spends none of that half.

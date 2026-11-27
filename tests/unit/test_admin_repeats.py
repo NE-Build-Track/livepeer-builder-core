@@ -14,7 +14,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select, update
 
-from livepeer_builder import BuilderEngine, EngineSettings
+from livepeer_builder import BuilderEngine, EngineSettings, EngineSupply
 from livepeer_builder.contracts import (
     OPERATION_REPLAYED,
     OPERATION_RESUMED,
@@ -25,6 +25,7 @@ from livepeer_builder.contracts import (
     GrantRecord,
     Money,
     OperationRecord,
+    SecretRef,
     SeenActor,
     TopUpRequest,
 )
@@ -41,7 +42,7 @@ from livepeer_builder.errors import (
 from livepeer_builder.services.ledger import definite_refusal
 from livepeer_builder.store import SqlStore
 from livepeer_builder.store import schema as t
-from livepeer_builder.testing import FakeAllocationManager, FixedClock
+from livepeer_builder.testing import FakeAllocationManager, FixedClock, MemorySecretStore
 from tests.conftest import EngineFactory
 
 
@@ -1123,6 +1124,128 @@ async def test_a_resumed_allotment_does_not_claim_an_actor_re_allotted_under_ano
     assert refused.value.actor == b
     with pytest.raises(AlreadyAllotted):  # freed, so refused again at once, not in progress
         await engine.payments.allot(admin, allot_request(amount="5", ref="p-a"))
+
+
+@pytest.mark.parametrize("moved_on_by", ["a rotation", "a revoke and a new allotment"])
+async def test_a_resumed_allotment_that_is_refused_drops_the_secret_its_first_run_stored(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+    moved_on_by: str,
+) -> None:
+    """#158: B got its key and stored its secret, then died before saving the actor. A allotted the same
+    actor, which then came to hold another key: rotated, or revoked and allotted again. B's resume is
+    refused, ``AlreadyAllotted``, and its reference freed, so nothing would ever name the copy B's first
+    run stored. It is dropped before the refusal: the only secret kept is the one the actor points at."""
+    engine = await make_engine()
+    allot_actor = store.allot_actor
+
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "allot_actor", allot_actor)
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "allot_actor", lost)
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    await engine.payments.allot(admin, allot_request(ref="p-a"))
+    if moved_on_by == "a rotation":
+        holds = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+    else:
+        await engine.payments.revoke(admin, "default", "alice")
+        holds = await engine.payments.allot(admin, allot_request(ref="p-c"))
+    clock.advance(120)
+    with pytest.raises(AlreadyAllotted) as refused:
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    assert refused.value.actor == holds
+    async with store.engine.connect() as conn:
+        refs = set((await conn.execute(select(t.secrets.c.ref))).scalars())
+    assert refs == {holds.secret_ref.ref}
+    assert (await engine.payments.credential(alice)).token == manager.keys[holds.api_key_id][1]
+
+
+class OnePathVault(MemorySecretStore):
+    """A supplied store that keeps an actor's secret at one path: every ``put`` for it has one reference."""
+
+    async def put(self, name: str, secret: str) -> SecretRef:
+        self.values[f"vault:{name}"] = secret
+        return SecretRef(ref=f"vault:{name}")
+
+
+async def test_a_resumed_allotment_that_is_refused_keeps_a_reference_the_actor_holds(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    alice: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reference B's first run noted is the one the actor holds when the store issues one for an
+    actor's name: it names the live key's secret by now, and the refusal leaves it alone."""
+    vault = OnePathVault()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    allot_actor = store.allot_actor
+
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "allot_actor", allot_actor)
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "allot_actor", lost)
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    await engine.payments.allot(admin, allot_request(ref="p-a"))
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+    clock.advance(120)
+    with pytest.raises(AlreadyAllotted):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    assert set(vault.values) == {rotated.secret_ref.ref}
+    assert (await engine.payments.credential(alice)).token == manager.keys[rotated.api_key_id][1]
+
+
+async def test_a_refusal_whose_delete_failed_stays_resumable_and_a_repeat_deletes_the_copy(
+    make_engine: EngineFactory,
+    admin: ActorContext,
+    manager: FakeAllocationManager,
+    clock: FixedClock,
+    store: SqlStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The copy goes before the refusal frees the reference. A store that fails then answers the
+    command with its own error, and the record stays ``started`` for the repeat that deletes it."""
+    vault = MemorySecretStore()
+    engine = await make_engine(supply=EngineSupply(secret_store=vault))
+    allot_actor = store.allot_actor
+
+    async def lost(*_: object, **__: object) -> None:
+        monkeypatch.setattr(store, "allot_actor", allot_actor)
+        raise ConnectionError("the database went away")
+
+    monkeypatch.setattr(store, "allot_actor", lost)
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    await engine.payments.allot(admin, allot_request(ref="p-a"))
+    rotated = await engine.payments.rotate_payment_key(admin, "default", "alice", "rotate-1")
+    assert len(vault.values) == 2
+    delete = vault.delete
+
+    async def sealed(_: SecretRef) -> None:
+        monkeypatch.setattr(vault, "delete", delete)
+        raise ConnectionError("the vault is sealed")
+
+    monkeypatch.setattr(vault, "delete", sealed)
+    clock.advance(120)
+    with pytest.raises(ConnectionError):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    with pytest.raises(OperationInProgress):  # not freed: the copy is still stored
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    clock.advance(120)
+    with pytest.raises(AlreadyAllotted):
+        await engine.payments.allot(admin, allot_request(ref="p-b"))
+    assert set(vault.values) == {rotated.secret_ref.ref}
 
 
 async def test_a_allotment_resumed_after_its_actor_was_saved_returns_that_actor(

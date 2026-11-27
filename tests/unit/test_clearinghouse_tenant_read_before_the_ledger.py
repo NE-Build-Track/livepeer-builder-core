@@ -96,9 +96,10 @@ async def a_new_process(ports: Ports, *, allotted: bool) -> None:
 
 
 # What each command asks of the clearinghouse itself, which #182 pinned for a later command of a process
-# (``test_no_command_writes_after_its_second_call_and_only_an_overtaken_rotation_makes_a_third``): one or
-# two calls, and no write after the second. On the ledger or not: a status change and a revoke take no
-# reference and begin no record (D57), so they run under no budget.
+# (``test_no_command_writes_after_its_second_call_and_a_third_call_only_reads``): one or two calls, and
+# no write after the second. On the ledger or not: a status change and a revoke take no reference and
+# begin no record (D57), so they run under no budget, and a status change reads the status back in a
+# third call (#158).
 COMMANDS: dict[str, tuple[Command, bool, list[tuple[str, str]]]] = {
     "allot": (allot_alice, True, [("POST", ALLOCATION)]),
     "top_up": (top_up, True, [("GET", ALLOCATION), ("POST", ALLOCATION + "/top-up")]),
@@ -107,7 +108,11 @@ COMMANDS: dict[str, tuple[Command, bool, list[tuple[str, str]]]] = {
         True,
         [("GET", ALLOCATION), ("POST", ALLOCATION + "/rotate-payment-key")],
     ),
-    "set_status": (set_status, False, [("GET", ALLOCATION), ("POST", ALLOCATION + "/status")]),
+    "set_status": (
+        set_status,
+        False,
+        [("GET", ALLOCATION), ("POST", ALLOCATION + "/status"), ("GET", ALLOCATION)],
+    ),
     "revoke": (revoke, False, [("GET", ALLOCATION), ("POST", ALLOCATION + "/revoke")]),
 }
 
@@ -128,7 +133,7 @@ async def test_the_first_command_of_a_process_reads_the_keys_grant_before_its_re
     assert crossed(ports) == [("GET", GRANT), *own_calls]
     assert begun == ([(name, 1)] if on_the_ledger else [])  # one request before the record: the grant read
     inside = crossed(ports, since=1)
-    assert ("GET", GRANT) not in inside and len(inside) <= 2
+    assert ("GET", GRANT) not in inside and len(inside) <= (2 if on_the_ledger else 3)
     assert [method for method, _ in inside].index("POST") <= 1  # no write after the second call
 
 

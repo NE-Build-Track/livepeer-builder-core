@@ -88,11 +88,33 @@ like a source checkout. Version table: `lpb_alembic_version`.
   `maintenance` is its own reports revisions of its own schema and is not compared, and neither is one
   with no `maintenance`. A wrapper that keeps the SQL store's `maintenance` is still checked.
 - **Check:** `lpb revision` (exit code 2 when behind).
-- **An interrupted 0013 on SQLite:** SQLite creates the table that migration 0013 copies the actors
-  into (`_alembic_tmp_lpb_actors`) outside the migration's transaction. A run that dies before its
-  commit rolls back to the old revision and leaves that empty copy behind. 0013 drops a leftover copy
-  when it starts, up or down, and only while `lpb_actors` itself exists, so the next `lpb migrate`
-  goes through. Before, it failed with "table _alembic_tmp_lpb_actors already exists" (#115).
+- **A run is one transaction** (#158), on SQLite and on PostgreSQL, up and down: the tables, columns
+  and rows it changes are committed with the revision it reaches, across every revision it goes
+  through, or not at all. A run that dies after any statement leaves the database as it was, at the
+  revision it had, and the next `lpb migrate` starts again from there. PostgreSQL does that by itself.
+  SQLite's driver opens a transaction only at the first row a run writes, so the migration environment
+  opens it (`BEGIN IMMEDIATE`) before it reads the revision
+  (`tests/store/test_interrupted_migrations.py` kills each revision's step, up and down, after each
+  of its statements). That takes SQLite's one write lock for the run: a second migrate at the same
+  moment waits for the first, as long as the 5 s busy timeout, and goes on from the revision it
+  wrote. A database already at the revision asked for is only read, so an engine that starts on a
+  migrated database takes no lock.
+- **A SQLite database that an interrupted run of an earlier release left half-migrated** is not
+  repaired. Those releases committed a migration's `CREATE TABLE` and `ALTER TABLE` statements one by
+  one on SQLite, so a run that died could leave tables or columns of the next revision under the old
+  one: 0011's `challenge_ms`, `signing_ms` and `response_ms` on `lpb_attempts` at revision 0010, or
+  `_alembic_tmp_lpb_attempts`, the copy its step down makes. `lpb migrate` fails on such a database
+  with the name that is in its way ("duplicate column name: challenge_ms", "table
+  _alembic_tmp_lpb_attempts already exists") and changes nothing. Restore the backup taken before the
+  upgrade, or drop what the dead run left and migrate again: `ALTER TABLE lpb_attempts DROP COLUMN
+  challenge_ms` for each column it added (SQLite 3.35 or later), `DROP TABLE
+  _alembic_tmp_lpb_attempts` for the copy. Neither holds anything: the release that writes those
+  columns never started on that database, and the copy's rows were rolled back with the run. Drop a
+  copy only while the table it copies is there.
+- **A copy an interrupted 0013 left** is the one leftover a migration removes itself. 0013 copies the
+  actors into `_alembic_tmp_lpb_actors` on SQLite, and drops a copy an earlier run left when it
+  starts, up or down, and only while `lpb_actors` itself exists, so the next `lpb migrate` goes
+  through (#115).
 - **0014, the domain-language names (#163):** it renames the tenant column to `tenant_id` in the
   five tables that have it, in place; the kind of every stored admin key, to `clearinghouse_admin`,
   with `lpb_access_keys.kind` grown to 32 characters to hold it; three of the ledger's commands; and

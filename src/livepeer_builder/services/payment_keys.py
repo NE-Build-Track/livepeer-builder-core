@@ -196,6 +196,15 @@ class PaymentKeys:
             self._redeliver(HeldSecret(actor.secret_ref, actor.credential_custody), key)
         return actor
 
+    async def refused(self, run: RunningOperation, actor: ActorAllocation) -> None:
+        """Before a resumed allotment is refused because ``actor`` holds a key that is not this
+        command's: the secret an earlier run of the command stored, which the record notes, is dropped.
+        The refusal frees the reference, so nothing would name that copy again, and nothing points at it:
+        the actor was written by another command, with a copy of its own. A reference the actor does hold
+        (a supplied store may issue one for an actor's name) is kept."""
+        if "new_secret_ref" in run.context and recorded_secret(run).ref != actor.secret_ref:
+            await self._drop(recorded_secret(run))
+
     def delivers(self, actor: ActorAllocation) -> bool:
         """Whether this command hands ``actor``'s key over in its answer: it delivers, and the work engine
         holds the actor's key. Only then does a resume ask the provider to replay the key."""

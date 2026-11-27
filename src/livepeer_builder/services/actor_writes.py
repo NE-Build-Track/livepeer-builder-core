@@ -17,12 +17,35 @@ A store that has the conditional writes (``ActorCommandRepo``, as the packaged S
 condition in the write itself. For a supplied store without them, the engine reads the actor again,
 checks the same condition and saves the whole row with ``save_actor``: a command that lands between that
 read and the save is still overwritten, which only the store's own write can prevent.
+
+Two status commands write the same column, so no condition orders them: a pause and an activate at the
+same moment could reach the provider in one order and the store in the other. A status command therefore
+reads the provider's status back after its write and stores that (``status_read_back``, #158).
 """
 
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from livepeer_builder.contracts import ActorAllocation, AllocationStatus, CredentialCustody, SecretRef
+from livepeer_builder.contracts import (
+    ActorAllocation,
+    AllocationStatus,
+    Allowance,
+    CredentialCustody,
+    SecretRef,
+)
+from livepeer_builder.errors import ProviderError, ProviderUnavailable
 from livepeer_builder.protocols import ActorCommandRepo, ActorRepo, Clock
+from livepeer_builder.utils import BODY_LIMIT
+
+_LOG = logging.getLogger(__name__)
+# The statuses a status command sets, and so the only ones it stores from a read of the provider. The
+# provider reports others: ``revoked`` is a revoke's to store, with the key it deletes, and ``exhausted``
+# there is an allocation with nothing left, which the engine's record does not follow.
+_SET_BY_A_COMMAND: tuple[AllocationStatus, ...] = ("active", "paused")
+# How often one status command reads the provider back. One read settles a command alone, and each
+# further one follows another command that was at the provider meanwhile.
+_READ_BACKS = 3
 
 
 class ActorWrites:
@@ -50,6 +73,39 @@ class ActorWrites:
         if current is None or only_from not in (None, current.status):
             return None
         return await self._saved(current, {"status": status})
+
+    async def status_read_back(
+        self,
+        actor: ActorAllocation,
+        status: AllocationStatus,
+        read: Callable[[str], Awaitable[Allowance]],
+    ) -> ActorAllocation | None:
+        """Write ``status``, which the provider has just taken, then store what the provider reports, and
+        answer with the actor as stored when that is done.
+
+        ``read`` reads the allocation at the provider. When it reports the other status a command sets,
+        another status command reached the provider after this one: that status is stored and the
+        provider read again, ``_READ_BACKS`` times at most. The write comes before the read, so the
+        command that writes the record last has read the provider after that write and found what it
+        wrote: whichever command the provider took last, the record ends on its status. A read that
+        fails, or reports a status no status command sets, leaves the record as written.
+
+        The answer is never one of this command's own writes. Another command can finish while a read of
+        the provider is on its way back, and what that read reports is never written over it: so the row
+        is read once more at the end, and that row is the answer, with the status, the key and the secret
+        reference it holds then. ``None`` when the actor was revoked, or revoked and allotted again, at
+        any point since the command read it."""
+        written = await self.status(actor, status)
+        reads = 0
+        while written is not None and reads < _READ_BACKS:
+            reported = await _reported(actor, read)
+            reads += 1
+            if reported is None or reported == written.status:
+                break
+            written = await self.status(actor, reported)
+        if written is None:
+            return None
+        return await self._held(actor)
 
     async def key(
         self,
@@ -101,8 +157,9 @@ class ActorWrites:
         return activated or await self._store.get_actor(actor.tenant_id, actor.actor_id) or actor
 
     async def _held(self, actor: ActorAllocation) -> ActorAllocation | None:
-        """Without the store's conditional write: the actor as stored now, when it still holds the
-        allocation the command acted on and is not revoked."""
+        """The actor as stored now, when it still holds the allocation the command acted on and is not
+        revoked: what a write is checked against without the store's conditional write, and what a status
+        command answers with."""
         current = await self._store.get_actor(actor.tenant_id, actor.actor_id)
         if current is None or current.allocation_id != actor.allocation_id or current.status == "revoked":
             return None
@@ -112,3 +169,27 @@ class ActorWrites:
         updated = current.model_copy(update=changes | {"updated_at": self._clock.now()})
         await self._store.save_actor(updated)
         return updated
+
+
+async def _reported(
+    actor: ActorAllocation, read: Callable[[str], Awaitable[Allowance]]
+) -> AllocationStatus | None:
+    """The status the provider reports for ``actor``'s allocation, when it is one a status command sets.
+    ``None`` otherwise, and when the provider cannot be read: the command it follows is done, so the
+    failure is logged and is not the command's."""
+    try:
+        status = (await read(actor.allocation_id)).status
+    except (ProviderError, ProviderUnavailable) as error:
+        _LOG.warning(
+            "status stored without the provider's read-back",
+            extra={
+                "event": "payments.status_read_back_failed",
+                "tenant_id": actor.tenant_id,
+                "actor_id": actor.actor_id,
+                "allocation_id": actor.allocation_id,
+                "provider_status": error.status_code if isinstance(error, ProviderError) else None,
+                "detail": str(error)[:BODY_LIMIT],
+            },
+        )
+        return None
+    return next((known for known in _SET_BY_A_COMMAND if known == status), None)
